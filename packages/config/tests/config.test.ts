@@ -10,7 +10,6 @@ describe('runtime config', () => {
     expect(getToolGatewayUrl(config)).toBe('http://localhost:3003');
     expect(config.RUNTIME_WORKER_MODE).toBe('mock');
     expect(config.RUNTIME_API_WORKFLOW_STARTER).toBe('mock');
-    expect(config.RUNTIME_WORKER_MOCK_TOOLS).toBe('true');
   });
 
   it('treats empty optional environment values as absent', () => {

@@ -4,7 +4,9 @@ import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
 
-const databaseUrl = process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/dar';
+const databaseUrl =
+  process.env.DATABASE_URL ??
+  'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime';
 const migrationsDir = fileURLToPath(new URL('./migrations', import.meta.url));
 
 async function main(): Promise<void> {

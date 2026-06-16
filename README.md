@@ -32,7 +32,6 @@ cp .env.example .env
 # 真实 Temporal 启动时再改为 temporal
 RUNTIME_API_WORKFLOW_STARTER=mock
 RUNTIME_WORKER_MODE=mock
-RUNTIME_WORKER_MOCK_TOOLS=true
 ```
 
 `RUNTIME_API_WORKFLOW_STARTER=temporal` 会通过 Temporal Client 启动 workflow；`RUNTIME_WORKER_MODE=temporal` 会启动真实 Temporal Worker。默认 mock 模式不要求本地 Temporal 可用。
@@ -65,6 +64,8 @@ scripts/docker-run-local.sh
 
 默认端口：
 
+为避免和本机常见 PostgreSQL / Redis 冲突，Docker Compose 默认将 PostgreSQL 映射到 `15432`、Valkey 映射到 `16380`；可通过 `.env` 中的 `POSTGRES_HOST_PORT`、`VALKEY_HOST_PORT` 等变量调整。
+
 | Service | URL |
 |---|---|
 | control-plane | http://localhost:3100 |
@@ -72,6 +73,8 @@ scripts/docker-run-local.sh
 | tool-gateway | http://localhost:3200 |
 | runtime-worker | http://localhost:3300 |
 | Temporal UI | http://localhost:8233 |
+| PostgreSQL | localhost:15432 |
+| Valkey | localhost:16380 |
 
 ## MVP smoke path
 

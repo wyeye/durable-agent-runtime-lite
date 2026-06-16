@@ -33,14 +33,62 @@ describe('tool-gateway invoke', () => {
       idempotency_key: 'task_2:record.write.mock',
       request_id: 'req_2',
     };
-    const first = await server.inject({ method: 'POST', url: '/v1/tools/record.write.mock/invoke', payload });
-    const second = await server.inject({ method: 'POST', url: '/v1/tools/record.write.mock/invoke', payload });
+    const first = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/record.write.mock/invoke',
+      payload,
+    });
+    const second = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/record.write.mock/invoke',
+      payload,
+    });
     expect(first.json().data.status).toBe('succeeded');
     expect(second.json().data).toEqual(first.json().data);
 
     const audit = await server.inject({ method: 'GET', url: '/v1/audit-events' });
     expect(audit.json().data).toHaveLength(2);
     expect(audit.json().data[1].reason).toBe('idempotency_replay');
+    await server.close();
+  });
+
+  it('rejects reused idempotency key with a different request payload', async () => {
+    const server = buildServer();
+    const payload = {
+      tool_version: '1.0.0',
+      tenant_id: 'tenant_1',
+      user_context: { user_id: 'user_1' },
+      task_context: { task_run_id: 'task_conflict' },
+      arguments: { record: { title: 'demo' } },
+      idempotency_key: 'task_conflict:record.write.mock',
+      request_id: 'req_conflict_1',
+    };
+    const first = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/record.write.mock/invoke',
+      payload,
+    });
+    const second = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/record.write.mock/invoke',
+      payload: {
+        ...payload,
+        arguments: { record: { title: 'changed' } },
+        request_id: 'req_conflict_2',
+      },
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(400);
+    expect(second.json()).toMatchObject({
+      success: false,
+      data: null,
+      error: { code: 'IDEMPOTENCY_CONFLICT' },
+    });
+
+    const audit = await server.inject({ method: 'GET', url: '/v1/audit-events' });
+    expect(audit.json().data).toHaveLength(2);
+    expect(audit.json().data[1].reason).toBe('IDEMPOTENCY_CONFLICT');
     await server.close();
   });
 

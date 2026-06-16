@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: dar
       POSTGRES_PASSWORD: dar_local_password
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-15432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -20,7 +20,7 @@ services:
     image: valkey/valkey:8
     container_name: dar-valkey
     ports:
-      - "6379:6379"
+      - "${VALKEY_HOST_PORT:-16380}:6379"
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
@@ -34,14 +34,14 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DB: postgresql
+      DB: postgres12
       DB_PORT: 5432
       POSTGRES_USER: dar
       POSTGRES_PWD: dar_local_password
       POSTGRES_SEEDS: postgres
-      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/docker.yaml
     ports:
-      - "7233:7233"
+      - "${TEMPORAL_HOST_PORT:-7233}:7233"
 
   temporal-ui:
     image: temporalio/ui:2.34.0
@@ -52,7 +52,7 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_CORS_ORIGINS: http://localhost:3100,http://localhost:3000
     ports:
-      - "8233:8080"
+      - "${TEMPORAL_UI_HOST_PORT:-8233}:8080"
 
   tool-gateway:
     build:
@@ -73,7 +73,7 @@ services:
       VALKEY_URL: redis://valkey:6379
       LOG_LEVEL: info
     ports:
-      - "3200:3200"
+      - "${TOOL_GATEWAY_HOST_PORT:-3200}:3200"
 
   runtime-worker:
     build:
@@ -96,10 +96,9 @@ services:
       TEMPORAL_NAMESPACE: default
       TOOL_GATEWAY_URL: http://tool-gateway:3200
       RUNTIME_WORKER_MODE: mock
-      RUNTIME_WORKER_MOCK_TOOLS: true
       LOG_LEVEL: info
     ports:
-      - "3300:3300"
+      - "${RUNTIME_WORKER_HOST_PORT:-3300}:3300"
 
   runtime-api:
     build:
@@ -128,7 +127,7 @@ services:
       RUNTIME_API_WORKFLOW_STARTER: mock
       LOG_LEVEL: info
     ports:
-      - "3000:3000"
+      - "${RUNTIME_API_HOST_PORT:-3000}:3000"
 
   control-plane:
     build:
@@ -142,7 +141,7 @@ services:
       tool-gateway:
         condition: service_started
     ports:
-      - "3100:8080"
+      - "${CONTROL_PLANE_HOST_PORT:-3100}:8080"
 
 volumes:
   postgres-data:

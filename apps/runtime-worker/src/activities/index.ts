@@ -66,17 +66,6 @@ export async function invokeToolActivity(
   args: Record<string, unknown>,
 ): Promise<ToolInvokeResponse> {
   const config = loadConfig();
-  if (config.RUNTIME_WORKER_MOCK_TOOLS !== 'false') {
-    return {
-      tool_name: toolName,
-      tool_version: '1.0.0',
-      status: 'succeeded',
-      result: { mock: true, tool_name: toolName, args },
-      audit_event_id: `mock_audit_${context.task_run_id}`,
-      idempotency_key: `${context.task_run_id}:${toolName}`,
-    };
-  }
-
   const client = new ToolGatewayClient({ baseUrl: getToolGatewayUrl(config) });
   return client.invoke(
     toolInvokeRequestSchema.parse({
@@ -92,7 +81,9 @@ export async function invokeToolActivity(
   );
 }
 
-export async function createHumanTaskActivity(context: ActivityContext): Promise<HumanTaskPlaceholder> {
+export async function createHumanTaskActivity(
+  context: ActivityContext,
+): Promise<HumanTaskPlaceholder> {
   return {
     human_task_id: `human_${context.task_run_id}`,
     status: 'created',

@@ -12,14 +12,17 @@ function emptyToUndefined(value: unknown): unknown {
   return value === '' ? undefined : value;
 }
 
-const stringSchema = (defaultValue: string) => z.preprocess(emptyToUndefined, z.string().min(1).default(defaultValue));
-const urlSchema = (defaultValue: string) => z.preprocess(emptyToUndefined, z.string().url().default(defaultValue));
+const stringSchema = (defaultValue: string) =>
+  z.preprocess(emptyToUndefined, z.string().min(1).default(defaultValue));
+const urlSchema = (defaultValue: string) =>
+  z.preprocess(emptyToUndefined, z.string().url().default(defaultValue));
 const optionalUrlSchema = z.preprocess(emptyToUndefined, z.string().url().optional());
-const optionalPortSchema = z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).max(65_535).optional());
-const portSchema = (defaultValue: number) => z.preprocess(
+const optionalPortSchema = z.preprocess(
   emptyToUndefined,
-  z.coerce.number().int().min(1).max(65_535).default(defaultValue),
+  z.coerce.number().int().min(1).max(65_535).optional(),
 );
+const portSchema = (defaultValue: number) =>
+  z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).max(65_535).default(defaultValue));
 
 export const runtimeConfigSchema = z.object({
   NODE_ENV: z.preprocess(
@@ -30,8 +33,10 @@ export const runtimeConfigSchema = z.object({
   APP_VERSION: stringSchema('0.1.5'),
   HOST: stringSchema('0.0.0.0'),
   PORT: optionalPortSchema,
-  DATABASE_URL: urlSchema('postgres://postgres:postgres@localhost:5432/dar'),
-  VALKEY_URL: urlSchema('redis://localhost:6379'),
+  DATABASE_URL: urlSchema(
+    'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime',
+  ),
+  VALKEY_URL: urlSchema('redis://localhost:16380'),
   TEMPORAL_ADDRESS: stringSchema('localhost:7233'),
   TEMPORAL_NAMESPACE: stringSchema('default'),
   MODEL_GATEWAY_BASE_URL: urlSchema('http://localhost:4100'),
@@ -51,8 +56,10 @@ export const runtimeConfigSchema = z.object({
   RUNTIME_WORKER_PORT: portSchema(3002),
   TOOL_GATEWAY_PORT: portSchema(3003),
   RUNTIME_WORKER_MODE: z.preprocess(emptyToUndefined, z.enum(['mock', 'temporal']).default('mock')),
-  RUNTIME_API_WORKFLOW_STARTER: z.preprocess(emptyToUndefined, z.enum(['mock', 'temporal']).default('mock')),
-  RUNTIME_WORKER_MOCK_TOOLS: z.preprocess(emptyToUndefined, z.enum(['true', 'false']).default('true')),
+  RUNTIME_API_WORKFLOW_STARTER: z.preprocess(
+    emptyToUndefined,
+    z.enum(['mock', 'temporal']).default('mock'),
+  ),
 });
 
 export type AppName = z.infer<typeof appNameSchema>;
