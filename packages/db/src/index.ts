@@ -1,2 +1,144 @@
-// db package entry
-export const packageName = '@dar/db';
+import { Kysely, PostgresDialect, type ColumnType, type Generated, sql } from 'kysely';
+import { Pool } from 'pg';
+
+type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
+type Json = ColumnType<unknown, unknown, unknown>;
+
+export interface VersionedSpecTable {
+  id: Generated<number>;
+  tenant_id: string;
+  spec_id: string;
+  version: number;
+  status: string;
+  spec_json: Json;
+  sha256: string;
+  created_by: string | null;
+  created_at: Timestamp;
+  published_at: Timestamp | null;
+}
+
+export interface FlowDefinitionTable extends Omit<VersionedSpecTable, 'spec_id'> {
+  flow_id: string;
+}
+
+export interface FlowRouteConfigTable {
+  id: Generated<number>;
+  tenant_id: string;
+  route_id: string;
+  flow_id: string;
+  flow_version: number;
+  status: string;
+  route_spec_json: Json;
+  priority: number;
+  sha256: string;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface TaskRunTable {
+  task_run_id: string;
+  tenant_id: string;
+  user_id: string;
+  route_type: string;
+  flow_id: string | null;
+  flow_version: number | null;
+  workflow_id: string | null;
+  status: string;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface HumanTaskTable {
+  human_task_id: string;
+  tenant_id: string;
+  task_run_id: string;
+  workflow_id: string | null;
+  status: string;
+  assignee: string | null;
+  candidate_groups: Json;
+  payload: Json;
+  decision: Json | null;
+  created_at: Timestamp;
+  completed_at: Timestamp | null;
+}
+
+export interface AuditEventTable {
+  event_id: string;
+  tenant_id: string;
+  actor_id: string | null;
+  action: string;
+  target_type: string;
+  target_id: string;
+  result: string;
+  reason: string | null;
+  payload: Json;
+  trace_id: string | null;
+  occurred_at: Timestamp;
+}
+
+export interface ToolCallLogTable {
+  id: Generated<number>;
+  task_run_id: string | null;
+  workflow_id: string | null;
+  tenant_id: string;
+  user_id: string | null;
+  tool_name: string;
+  tool_version: string;
+  risk_level: string;
+  policy_decision: string;
+  status: string;
+  duration_ms: number | null;
+  idempotency_key: string | null;
+  input_hash: string | null;
+  output_hash: string | null;
+  error_code: string | null;
+  adapter_type: string | null;
+  created_at: Timestamp;
+}
+
+export interface IdempotencyRecordTable {
+  idempotency_key: string;
+  tenant_id: string;
+  target_type: string;
+  target_id: string;
+  request_hash: string;
+  response_json: Json | null;
+  status: string;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface Database {
+  flow_definition: FlowDefinitionTable;
+  flow_route_config: FlowRouteConfigTable;
+  agent_spec: VersionedSpecTable;
+  tool_manifest: VersionedSpecTable;
+  prompt_definition: VersionedSpecTable;
+  task_run: TaskRunTable;
+  human_task: HumanTaskTable;
+  audit_event: AuditEventTable;
+  tool_call_log: ToolCallLogTable;
+  idempotency_record: IdempotencyRecordTable;
+}
+
+export interface CreateDbOptions {
+  databaseUrl: string;
+  maxConnections?: number;
+}
+
+export function createDb(options: CreateDbOptions): Kysely<Database> {
+  const pool = new Pool({
+    connectionString: options.databaseUrl,
+    max: options.maxConnections ?? 10,
+  });
+
+  return new Kysely<Database>({
+    dialect: new PostgresDialect({ pool }),
+  });
+}
+
+export async function closeDb(db: Kysely<Database>): Promise<void> {
+  await db.destroy();
+}
+
+export { sql };
