@@ -35,6 +35,17 @@ export interface FlowRouteConfigTable {
   updated_at: Timestamp;
 }
 
+export interface FlowRouteEmbeddingTable {
+  id: Generated<number>;
+  tenant_id: string;
+  route_id: string;
+  flow_id: string;
+  flow_version: number;
+  example_text: string;
+  embedding: unknown | null;
+  created_at: Timestamp;
+}
+
 export interface TaskRunTable {
   task_run_id: string;
   tenant_id: string;
@@ -44,6 +55,9 @@ export interface TaskRunTable {
   flow_version: number | null;
   workflow_id: string | null;
   status: string;
+  input_json: Json;
+  route_result_json: Json | null;
+  workflow_start_json: Json | null;
   created_at: Timestamp;
   updated_at: Timestamp;
 }
@@ -111,6 +125,7 @@ export interface IdempotencyRecordTable {
 export interface Database {
   flow_definition: FlowDefinitionTable;
   flow_route_config: FlowRouteConfigTable;
+  flow_route_embedding: FlowRouteEmbeddingTable;
   agent_spec: VersionedSpecTable;
   tool_manifest: VersionedSpecTable;
   prompt_definition: VersionedSpecTable;
@@ -139,6 +154,42 @@ export function createDb(options: CreateDbOptions): Kysely<Database> {
 
 export async function closeDb(db: Kysely<Database>): Promise<void> {
   await db.destroy();
+}
+
+export async function withTransaction<T>(
+  db: Kysely<Database>,
+  callback: (trx: Kysely<Database>) => Promise<T>,
+): Promise<T> {
+  return db.transaction().execute(callback);
+}
+
+export interface Repository<TRecord extends object> {
+  list(): Promise<TRecord[]>;
+  findById(id: string): Promise<TRecord | undefined>;
+  upsert(record: TRecord): Promise<TRecord>;
+}
+
+export class InMemoryRepository<TRecord extends { id: string }> implements Repository<TRecord> {
+  private readonly records = new Map<string, TRecord>();
+
+  constructor(initialRecords: TRecord[] = []) {
+    for (const record of initialRecords) {
+      this.records.set(record.id, record);
+    }
+  }
+
+  async list(): Promise<TRecord[]> {
+    return [...this.records.values()];
+  }
+
+  async findById(id: string): Promise<TRecord | undefined> {
+    return this.records.get(id);
+  }
+
+  async upsert(record: TRecord): Promise<TRecord> {
+    this.records.set(record.id, record);
+    return record;
+  }
 }
 
 export { sql };

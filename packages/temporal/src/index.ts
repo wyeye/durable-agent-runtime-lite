@@ -8,10 +8,11 @@ export interface ConfigDrivenWorkflowInput {
   tenant_id: string;
   user_id: string;
   task_run_id: string;
+  workflow_id?: string;
   flow_id: string;
   flow_version: number;
   flow_snapshot_ref: string;
-  flow_sha256: string;
+  flow_sha256?: string;
   request_id: string;
   trace_id?: string;
   input_ref?: string;
@@ -21,10 +22,12 @@ export interface GenericAgentWorkflowInput {
   tenant_id: string;
   user_id: string;
   task_run_id: string;
+  workflow_id?: string;
   agent_id: string;
   request_id: string;
   trace_id?: string;
   input_ref?: string;
+  input?: unknown;
 }
 
 function sanitizeWorkflowSegment(value: string): string {

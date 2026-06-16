@@ -1,0 +1,11 @@
+{
+  "agent_id": "sample_agent",
+  "version": 1,
+  "prompt_ref": "sample_prompt@1",
+  "model_policy": "mock",
+  "allowed_tools": ["knowledge.search", "record.write.mock"],
+  "max_steps": 4,
+  "max_tokens": 2000,
+  "output_schema": "agent_run_result_v1",
+  "status": "published"
+}

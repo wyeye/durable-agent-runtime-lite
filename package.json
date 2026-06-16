@@ -14,7 +14,7 @@
     "dev:infra:down": "docker compose -f infra/docker-compose.yml down",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
-    "test": "turbo run test",
+    "test": "turbo run test && vitest run --config vitest.root.config.ts --passWithNoTests",
     "test:e2e": "vitest run tests/e2e --passWithNoTests",
     "lint": "eslint .",
     "format": "prettier --write .",

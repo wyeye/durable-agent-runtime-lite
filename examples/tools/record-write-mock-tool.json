@@ -1,0 +1,18 @@
+{
+  "tool_name": "record.write.mock",
+  "version": "1.0.0",
+  "description": "Mock side-effect record write tool.",
+  "risk_level": "L3",
+  "side_effect": true,
+  "adapter": { "type": "mock", "endpoint_ref": "mock/record-write" },
+  "input_schema": {
+    "type": "object",
+    "required": ["record"],
+    "properties": { "record": { "type": "object" } }
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["record_id", "written"]
+  },
+  "status": "published"
+}

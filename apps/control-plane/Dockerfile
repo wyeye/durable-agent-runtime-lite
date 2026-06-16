@@ -14,7 +14,7 @@ RUN pnpm install --frozen-lockfile
 
 FROM deps AS builder
 COPY . .
-RUN pnpm --filter @dar/control-plane build
+RUN pnpm --filter @dar/control-plane... build
 
 # Serve static Vite build through unprivileged Nginx.
 # The internal container port is 8080. Map it to host port 3100 in compose.

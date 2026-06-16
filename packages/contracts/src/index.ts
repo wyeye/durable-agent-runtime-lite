@@ -19,6 +19,28 @@ export const runtimeErrorSchema = z.object({
   details: jsonObjectSchema.optional(),
 });
 
+export const tenantContextSchema = z.object({
+  tenant_id: z.string().min(1),
+  org_id: z.string().optional(),
+});
+
+export const userContextSchema = z.object({
+  user_id: z.string().min(1),
+  roles: z.array(z.string()).default([]),
+  groups: z.array(z.string()).default([]),
+});
+
+export const runtimeContextSchema = z.object({
+  request_id: z.string().min(1),
+  tenant: tenantContextSchema,
+  user: userContextSchema,
+  session_id: z.string().optional(),
+  trace_id: z.string().optional(),
+  channel: z.string().optional(),
+  task_run_id: z.string().optional(),
+  workflow_id: z.string().optional(),
+});
+
 export const requestContextSchema = z.object({
   request_id: z.string().min(1),
   tenant_id: z.string().min(1),
@@ -135,6 +157,11 @@ export const routeDecisionSchema = z.discriminatedUnion('decision', [
   }),
 ]);
 
+export const routeResultSchema = z.object({
+  route_decision: routeDecisionSchema,
+  candidates: z.array(candidateFlowSchema).default([]),
+});
+
 export const agentSpecSchema = z.object({
   agent_id: z.string().min(1),
   version: z.number().int().positive(),
@@ -144,6 +171,16 @@ export const agentSpecSchema = z.object({
   max_steps: z.number().int().positive().default(6),
   max_tokens: z.number().int().positive().default(12_000),
   output_schema: z.string().optional(),
+  status: specStatusSchema.optional(),
+  sha256: z.string().optional(),
+});
+
+export const promptDefinitionSchema = z.object({
+  prompt_id: z.string().min(1),
+  version: z.number().int().positive(),
+  name: z.string().min(1),
+  content: z.string().min(1),
+  variables: z.array(z.string()).default([]),
   status: specStatusSchema.optional(),
   sha256: z.string().optional(),
 });
@@ -195,7 +232,7 @@ export const taskRunSchema = z.object({
 
 export const toolInvokeRequestSchema = z.object({
   tool_name: z.string().min(1),
-  tool_version: z.string().min(1),
+  tool_version: z.string().min(1).default('1.0.0'),
   tenant_id: z.string().min(1),
   user_context: jsonObjectSchema.default({}),
   task_context: jsonObjectSchema.default({}),
@@ -252,7 +289,6 @@ export const auditEventSchema = z.object({
   payload: jsonObjectSchema.default({}),
 });
 
-
 export const taskInputSchema = z
   .object({
     text: z.string().min(1).optional(),
@@ -273,10 +309,30 @@ export const runTaskRequestSchema = z.object({
 });
 
 export const routerPreviewRequestSchema = runTaskRequestSchema;
+export const routerPreviewResponseSchema = routeResultSchema;
 
-export const routerPreviewResponseSchema = z.object({
-  route_decision: routeDecisionSchema,
-  candidates: z.array(candidateFlowSchema).default([]),
+export const workflowStartRequestSchema = z.object({
+  tenant_id: z.string().min(1),
+  user_id: z.string().min(1),
+  task_run_id: z.string().min(1),
+  workflow_type: z.enum(['ConfigDrivenWorkflow', 'GenericAgentWorkflow']),
+  workflow_id: z.string().min(1),
+  flow_id: z.string().optional(),
+  flow_version: z.number().int().positive().optional(),
+  flow_snapshot_ref: z.string().optional(),
+  flow_spec_snapshot: flowSpecSchema.optional(),
+  agent_id: z.string().optional(),
+  input: taskInputSchema.default({ payload: {} }),
+  request_id: z.string().min(1),
+  trace_id: z.string().optional(),
+});
+
+export const workflowStartResponseSchema = z.object({
+  workflow_id: z.string().min(1),
+  run_id: z.string().min(1).optional(),
+  task_run_id: z.string().min(1),
+  started: z.boolean(),
+  mode: z.enum(['temporal', 'mock']),
 });
 
 export const runTaskResponseSchema = z.object({
@@ -284,20 +340,57 @@ export const runTaskResponseSchema = z.object({
   workflow_id: z.string().min(1),
   status: taskRunStatusSchema,
   route_decision: routeDecisionSchema,
+  workflow_start: workflowStartResponseSchema.optional(),
   flow_id: z.string().min(1).optional(),
   flow_version: z.number().int().positive().optional(),
   agent_id: z.string().min(1).optional(),
 });
 
+export const agentRunRequestSchema = z.object({
+  tenant_id: z.string().min(1),
+  user_id: z.string().min(1),
+  task_run_id: z.string().min(1),
+  workflow_id: z.string().optional(),
+  agent_id: z.string().min(1),
+  input: jsonObjectSchema.default({}),
+  allowed_tools: z.array(z.string()).default([]),
+  max_steps: z.number().int().positive().default(6),
+  request_id: z.string().optional(),
+});
+
+export const proposedToolCallSchema = z.object({
+  tool_name: z.string().min(1),
+  tool_version: z.string().min(1).default('1.0.0'),
+  arguments: jsonObjectSchema.default({}),
+  risk_level: riskLevelSchema.optional(),
+});
+
+export const agentRunResultSchema = z.object({
+  status: piResultStatusSchema,
+  final_answer: z.string().optional(),
+  proposed_tool_calls: z.array(proposedToolCallSchema).default([]),
+  handoff_workflow: z.string().optional(),
+  usage: jsonObjectSchema.default({}),
+  error: runtimeErrorSchema.optional(),
+});
+
 export type RiskLevel = z.infer<typeof riskLevelSchema>;
 export type RuntimeError = z.infer<typeof runtimeErrorSchema>;
+export type TenantContext = z.infer<typeof tenantContextSchema>;
+export type UserContext = z.infer<typeof userContextSchema>;
+export type RuntimeContext = z.infer<typeof runtimeContextSchema>;
 export type RequestContext = z.infer<typeof requestContextSchema>;
+export type StandardSuccessResponse<TData = unknown> = Omit<z.infer<typeof standardSuccessResponseSchema>, 'data'> & { data: TData };
+export type StandardErrorResponse = z.infer<typeof standardErrorResponseSchema>;
+export type StandardResponse<TData = unknown> = StandardSuccessResponse<TData> | StandardErrorResponse;
 export type FlowSpec = z.infer<typeof flowSpecSchema>;
 export type FlowStep = z.infer<typeof flowStepSchema>;
 export type RouteSpec = z.infer<typeof routeSpecSchema>;
 export type CandidateFlow = z.infer<typeof candidateFlowSchema>;
 export type RouteDecision = z.infer<typeof routeDecisionSchema>;
+export type RouteResult = z.infer<typeof routeResultSchema>;
 export type AgentSpec = z.infer<typeof agentSpecSchema>;
+export type PromptDefinition = z.infer<typeof promptDefinitionSchema>;
 export type ToolManifest = z.infer<typeof toolManifestSchema>;
 export type TaskRun = z.infer<typeof taskRunSchema>;
 export type ToolInvokeRequest = z.infer<typeof toolInvokeRequestSchema>;
@@ -309,4 +402,7 @@ export type RunTaskRequest = z.infer<typeof runTaskRequestSchema>;
 export type RouterPreviewRequest = z.infer<typeof routerPreviewRequestSchema>;
 export type RouterPreviewResponse = z.infer<typeof routerPreviewResponseSchema>;
 export type RunTaskResponse = z.infer<typeof runTaskResponseSchema>;
-
+export type AgentRunRequest = z.infer<typeof agentRunRequestSchema>;
+export type AgentRunResult = z.infer<typeof agentRunResultSchema>;
+export type WorkflowStartRequest = z.infer<typeof workflowStartRequestSchema>;
+export type WorkflowStartResponse = z.infer<typeof workflowStartResponseSchema>;

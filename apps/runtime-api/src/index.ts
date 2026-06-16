@@ -1,30 +1,13 @@
 import { pathToFileURL } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
+import type { StandardErrorResponse, StandardSuccessResponse } from '@dar/contracts';
 import { getAppPort, loadConfig } from '@dar/config';
 import { createLogger } from '@dar/logger';
-import { createTaskRunPreview, previewRoute } from './modules/task/task-service.js';
+import { TaskService } from './modules/task/task-service.js';
 
 const appName = 'runtime-api' as const;
 const logger = createLogger(appName);
-
-interface StandardSuccessResponse<T> {
-  success: true;
-  data: T;
-  error: null;
-  trace_id?: string;
-}
-
-interface StandardErrorResponse {
-  success: false;
-  data: null;
-  error: {
-    code: string;
-    message: string;
-    details?: Record<string, unknown>;
-  };
-  trace_id?: string;
-}
 
 function toSuccessResponse<T>(data: T, traceId?: string): StandardSuccessResponse<T> {
   return traceId
@@ -76,7 +59,7 @@ function getTraceId(body: unknown): string | undefined {
   return undefined;
 }
 
-export function buildServer(): FastifyInstance {
+export function buildServer(taskService = new TaskService()): FastifyInstance {
   const server = Fastify({ logger: false });
 
   server.get('/healthz', async () => ({
@@ -89,6 +72,8 @@ export function buildServer(): FastifyInstance {
     app: appName,
     checks: {
       config: 'ok',
+      router: 'ok',
+      workflow_starter: 'mock',
     },
   }));
 
@@ -96,7 +81,7 @@ export function buildServer(): FastifyInstance {
     const traceId = getTraceId(request.body);
 
     try {
-      return toSuccessResponse(previewRoute(request.body), traceId);
+      return toSuccessResponse(taskService.preview(request.body), traceId);
     } catch (error) {
       reply.code(error instanceof ZodError ? 400 : 500);
       return toErrorResponse(error, traceId);
@@ -107,11 +92,26 @@ export function buildServer(): FastifyInstance {
     const traceId = getTraceId(request.body);
 
     try {
-      return toSuccessResponse(createTaskRunPreview(request.body), traceId);
+      return toSuccessResponse(await taskService.create(request.body), traceId);
     } catch (error) {
       reply.code(error instanceof ZodError ? 400 : 500);
       return toErrorResponse(error, traceId);
     }
+  });
+
+  server.get('/v1/tasks/:taskRunId', async (request, reply) => {
+    const { taskRunId } = request.params as { taskRunId: string };
+    const taskRun = taskService.get(taskRunId);
+    if (!taskRun) {
+      reply.code(404);
+      return {
+        success: false,
+        data: null,
+        error: { code: 'TASK_RUN_NOT_FOUND', message: '任务不存在' },
+      };
+    }
+
+    return toSuccessResponse(taskRun);
   });
 
   return server;
@@ -122,8 +122,8 @@ export async function start(): Promise<void> {
   const server = buildServer();
   const port = getAppPort(appName, config);
 
-  await server.listen({ host: '0.0.0.0', port });
-  logger.info({ app: appName, port }, `${appName} listening`);
+  await server.listen({ host: config.HOST, port });
+  logger.info({ app: appName, port, host: config.HOST }, `${appName} listening`);
 }
 
 const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;

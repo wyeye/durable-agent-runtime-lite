@@ -30,8 +30,8 @@ export async function start(): Promise<void> {
   const server = buildServer();
   const port = getAppPort(appName, config);
 
-  await server.listen({ host: '0.0.0.0', port });
-  logger.info({ app: appName, port }, `${appName} listening`);
+  await server.listen({ host: config.HOST, port });
+  logger.info({ app: appName, port, host: config.HOST }, `${appName} listening`);
 }
 
 const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;

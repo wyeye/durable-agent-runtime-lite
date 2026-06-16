@@ -21,8 +21,9 @@ export class ToolGatewayClient {
   }
 
   async invoke(payload: ToolInvokeRequest): Promise<ToolInvokeResponse> {
-    const body = JSON.stringify(toolInvokeRequestSchema.parse(payload));
-    const url = new URL('/v1/tools/invoke', this.baseUrl);
+    const parsed = toolInvokeRequestSchema.parse(payload);
+    const body = JSON.stringify(parsed);
+    const url = new URL(`/v1/tools/${encodeURIComponent(parsed.tool_name)}/invoke`, this.baseUrl);
     const response = await request(url, {
       method: 'POST',
       headers: {
@@ -33,7 +34,23 @@ export class ToolGatewayClient {
     });
 
     const text = await response.body.text();
-    const json = text ? JSON.parse(text) : {};
-    return toolInvokeResponseSchema.parse(json);
+    const json: unknown = text ? JSON.parse(text) : {};
+    return toolInvokeResponseSchema.parse(unwrapStandardResponse(json));
   }
+}
+
+function unwrapStandardResponse(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || !('success' in value)) {
+    return value;
+  }
+
+  const response = value as { success?: unknown; data?: unknown; error?: unknown };
+  if (response.success === true) {
+    return response.data;
+  }
+
+  const error = response.error && typeof response.error === 'object'
+    ? (response.error as { code?: unknown; message?: unknown })
+    : {};
+  throw new Error(typeof error.message === 'string' ? error.message : 'tool gateway request failed');
 }

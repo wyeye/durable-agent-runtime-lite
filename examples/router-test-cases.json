@@ -1,0 +1,13 @@
+[
+  {
+    "name": "keyword match sample flow",
+    "input": { "text": "请执行 mvp 示例流程" },
+    "expected_decision": "matched",
+    "expected_flow_id": "sample_flow"
+  },
+  {
+    "name": "fallback on unknown request",
+    "input": { "text": "完全未知的问题" },
+    "expected_decision": "agent_fallback"
+  }
+]

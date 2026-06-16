@@ -1,0 +1,16 @@
+{
+  "route_id": "sample_route",
+  "flow_id": "sample_flow",
+  "version": 1,
+  "status": "published",
+  "route": {
+    "priority": 90,
+    "keywords": ["知识搜索", "记录写入", "mvp"],
+    "examples": ["执行 mvp 示例流程", "搜索知识并写入记录"],
+    "negative_examples": [],
+    "supported_channels": ["web", "api"],
+    "role_constraints": [],
+    "confidence_threshold": 0.72,
+    "ambiguous_threshold": 0.55
+  }
+}

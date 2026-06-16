@@ -4,15 +4,15 @@ export const DEFAULT_AGENT_ID = 'generic_agent';
 
 export const defaultRouteSpecs: RouteSpec[] = [
   {
-    route_id: 'customer_followup_route',
-    flow_id: 'customer_followup_flow',
+    route_id: 'sample_route',
+    flow_id: 'sample_flow',
     version: 1,
     status: 'published',
     route: {
-      priority: 80,
-      keywords: ['客户跟进', '拜访建议', '跟进话术'],
-      examples: ['帮我看看这个客户怎么跟进', '生成一份客户拜访建议'],
-      negative_examples: ['查询本月经营指标'],
+      priority: 90,
+      keywords: ['知识搜索', '记录写入', 'mvp'],
+      examples: ['执行 mvp 示例流程', '搜索知识并写入记录'],
+      negative_examples: [],
       supported_channels: [],
       role_constraints: [],
       confidence_threshold: 0.72,

@@ -95,6 +95,8 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
       TOOL_GATEWAY_URL: http://tool-gateway:3200
+      RUNTIME_WORKER_MODE: mock
+      RUNTIME_WORKER_MOCK_TOOLS: true
       LOG_LEVEL: info
     ports:
       - "3300:3300"
@@ -123,6 +125,7 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
       TOOL_GATEWAY_URL: http://tool-gateway:3200
+      RUNTIME_API_WORKFLOW_STARTER: mock
       LOG_LEVEL: info
     ports:
       - "3000:3000"

@@ -97,6 +97,9 @@ create table if not exists task_run (
   flow_version int,
   workflow_id text,
   status text not null,
+  input_json jsonb not null default '{}'::jsonb,
+  route_result_json jsonb,
+  workflow_start_json jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -163,6 +166,7 @@ create table if not exists tool_call_log (
 
 create index if not exists idx_flow_definition_status on flow_definition(tenant_id, status, flow_id, version);
 create index if not exists idx_flow_route_config_lookup on flow_route_config(tenant_id, status, priority desc);
+create index if not exists idx_flow_route_embedding_flow on flow_route_embedding(tenant_id, flow_id, flow_version);
 create index if not exists idx_task_run_tenant_status on task_run(tenant_id, status, created_at desc);
 create index if not exists idx_human_task_status on human_task(tenant_id, status, created_at desc);
 create index if not exists idx_audit_event_target on audit_event(tenant_id, target_type, target_id, occurred_at desc);

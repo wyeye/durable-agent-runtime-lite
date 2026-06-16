@@ -1,5 +1,7 @@
 import type { CandidateFlow, RouteDecision, RouteSpec, TaskInput } from '@dar/contracts';
 import { DEFAULT_AGENT_ID } from './route-registry.js';
+import { mockRouteDecisionAdapter } from './mock-decision-adapter.js';
+import { mockVectorRecallAdapter } from './vector-recall.js';
 
 export interface RuleRouterInput {
   input: TaskInput;
@@ -90,13 +92,10 @@ export function routeByRules(input: RuleRouterInput, routes: RouteSpec[]): RuleR
   const top = candidates[0];
 
   if (!top) {
+    const recalledCandidates = mockVectorRecallAdapter.recall(input.input, routes);
     return {
-      route_decision: {
-        decision: 'agent_fallback',
-        agent_id: DEFAULT_AGENT_ID,
-        reason: 'no_rule_candidate',
-      },
-      candidates: [],
+      route_decision: mockRouteDecisionAdapter.decide(input.input),
+      candidates: recalledCandidates,
     };
   }
 
