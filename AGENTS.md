@@ -734,7 +734,178 @@ Do not mark a task as complete if tests are missing and no clear explanation is 
 
 ---
 
-## 19. Pull Request Expectations
+
+## 19. Docker Deployment Rules
+
+The project is expected to be deployed with Docker. Every production app must be buildable and runnable as a container image.
+
+Production apps requiring Docker support:
+
+```text
+apps/control-plane
+apps/runtime-api
+apps/runtime-worker
+apps/tool-gateway
+```
+
+`devtools/mock-server` may have a development-only Docker image, but it must not be treated as a production service.
+
+### 19.1 Required Docker Files
+
+Use **multiple app-specific Dockerfiles**. Each production app owns its Dockerfile so that build context, exposed port, healthcheck and runtime entrypoint are explicit.
+
+Required files:
+
+```text
+apps/control-plane/Dockerfile          # static console image, normally Nginx/unprivileged
+apps/runtime-api/Dockerfile            # runtime API image
+apps/runtime-worker/Dockerfile         # Temporal worker image
+apps/tool-gateway/Dockerfile           # tool gateway image
+.dockerignore                          # required for all Docker builds
+infra/docker-compose.yml               # local integrated runtime, including dependencies
+scripts/docker-build-all.sh            # builds all production app images
+scripts/docker-run-local.sh            # starts local Docker stack
+docs/13_docker_deployment.md           # Docker deployment notes
+```
+
+Build context rule:
+
+- All Docker builds must use the **repository root** as the Docker build context.
+- Do not use `apps/<app>` as the build context, because app images need access to workspace packages, lockfiles and shared configs.
+
+Expected build pattern:
+
+```bash
+docker build \
+  -f apps/runtime-api/Dockerfile \
+  -t durable-agent-runtime/runtime-api:local \
+  .
+```
+
+Per-app Dockerfiles may share the same build pattern, base images and comments, but they must remain separate files. This makes it easier for Codex and reviewers to reason about each app image independently.
+
+### 19.2 Docker Build Rules
+
+- Use multi-stage builds.
+- Use the documented Node.js baseline from the technology stack document.
+- Use `corepack` and `pnpm`; do not switch to npm or yarn.
+- Use `pnpm install --frozen-lockfile` inside Docker builds.
+- Prefer Turborepo filter/deploy or an equivalent workspace-pruning approach for smaller images.
+- Do not copy local `node_modules` into images.
+- Do not bake `.env`, tokens, model keys, database passwords or other secrets into images.
+- Do not use `latest` tags for production images.
+- Run runtime containers as a non-root user or use an unprivileged base image.
+- Keep final runtime images as small as practical.
+- Add a Docker healthcheck using `/healthz` where possible.
+- Backend production apps must expose `HOST` and `PORT` environment variables.
+- Backend production apps must bind to `0.0.0.0` inside the container.
+- Backend production apps must support graceful shutdown on `SIGTERM`.
+- `control-plane` may be served as static files by an unprivileged Nginx image. In that case, document its internal port and provide `/healthz`, `/readyz` and SPA fallback.
+
+### 19.3 Required App Scripts
+
+Each production app package should provide these scripts:
+
+```json
+{
+  "scripts": {
+    "dev": "...",
+    "build": "...",
+    "start": "node dist/index.js",
+    "typecheck": "...",
+    "test": "...",
+    "lint": "..."
+  }
+}
+```
+
+For backend apps, the Docker runtime command should normally use the production entrypoint:
+
+```bash
+node dist/index.js
+```
+
+For `control-plane`, the Docker runtime may be a static web server. If so, document it in `apps/control-plane/README.md` and keep Docker Compose port mapping explicit.
+
+### 19.4 Docker Compose Rules
+
+The local Docker Compose stack should include:
+
+- `control-plane`
+- `runtime-api`
+- `runtime-worker`
+- `tool-gateway`
+- PostgreSQL with pgvector support
+- Valkey
+- Temporal Server
+- Temporal UI, if useful for local development
+
+The local Docker Compose stack may include `devtools/mock-server`, but it must be clearly marked as development-only.
+
+Expected local command:
+
+```bash
+docker compose -f infra/docker-compose.yml up --build
+```
+
+Expected image build command:
+
+```bash
+scripts/docker-build-all.sh
+```
+
+### 19.5 Container Configuration Rules
+
+Configuration must come from environment variables. Required variables should be documented in `.env.example`.
+
+Common variables:
+
+```text
+NODE_ENV
+HOST
+PORT
+DATABASE_URL
+VALKEY_URL
+TEMPORAL_ADDRESS
+TEMPORAL_NAMESPACE
+TOOL_GATEWAY_URL
+RUNTIME_API_URL
+MODEL_GATEWAY_URL
+LOG_LEVEL
+OTEL_EXPORTER_OTLP_ENDPOINT
+```
+
+Do not introduce environment variables without updating `.env.example` and the relevant app documentation.
+
+### 19.6 Docker Definition of Done
+
+For any task that changes runtime startup, app scripts, dependencies or deployment behavior, the task is not complete until:
+
+- The affected app image builds successfully.
+- The container starts successfully.
+- `/healthz` returns success.
+- `/readyz` returns success or a clearly documented not-ready state.
+- Logs are written to stdout/stderr as structured logs.
+- No secrets are copied into the image.
+- The Dockerfile and compose files remain aligned with the four-app architecture.
+- The app-specific Dockerfile is updated when that app's runtime entrypoint, build output or package name changes.
+
+### 19.7 Docker Do-Not List
+
+Do not:
+
+- Add a production Docker image for an unapproved fifth app.
+- Add business systems directly to the production runtime image.
+- Use Docker containers to bypass `tool-gateway`.
+- Use bind-mounted local source code in production compose files.
+- Run production containers as root unless explicitly approved.
+- Store secrets in Dockerfile, docker-compose.yml or committed `.env` files.
+- Change the Node.js major version in Docker without updating the technology stack document.
+- Build images from `apps/<app>` context if shared workspace packages are needed.
+
+---
+
+## 20. Pull Request Expectations
 
 Each task should produce a small, reviewable diff.
 
@@ -751,7 +922,7 @@ Do not make broad refactors unless explicitly requested.
 
 ---
 
-## 20. Definition of Done
+## 21. Definition of Done
 
 A task is done only when:
 
@@ -764,10 +935,11 @@ A task is done only when:
 - New runtime behavior is logged and auditable.
 - The result follows the four-app architecture.
 - The task does not introduce unapproved production services.
+- Docker-related changes build and run successfully when the task affects deployment.
 
 ---
 
-## 21. Strict Do-Not List
+## 22. Strict Do-Not List
 
 Do not:
 
@@ -785,7 +957,7 @@ Do not:
 
 ---
 
-## 22. Recommended First Development Order
+## 23. Recommended First Development Order
 
 When starting from a skeleton repository, implement in this order:
 
@@ -798,7 +970,8 @@ When starting from a skeleton repository, implement in this order:
 7. Pi Runner adapter.
 8. Human task flow.
 9. Control-plane first-stage pages.
-10. E2E smoke path.
+10. Docker build and local compose smoke test.
+11. E2E smoke path.
 
 Do not attempt to implement the whole system in one change.
 

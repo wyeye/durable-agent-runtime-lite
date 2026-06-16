@@ -1,0 +1,38 @@
+# dependencies
+node_modules
+**/node_modules
+.pnpm-store
+
+# build outputs
+dist
+build
+coverage
+.turbo
+.next
+.vite
+
+# local env and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# vcs / editor
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local artifacts
+docker_deployment_templates*
+*.zip

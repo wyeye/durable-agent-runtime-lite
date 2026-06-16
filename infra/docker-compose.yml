@@ -2,35 +2,144 @@ services:
   postgres:
     image: pgvector/pgvector:pg17
     container_name: dar-postgres
-    ports: ["5432:5432"]
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: dar
+      POSTGRES_DB: durable_agent_runtime
+      POSTGRES_USER: dar
+      POSTGRES_PASSWORD: dar_local_password
+    ports:
+      - "5432:5432"
     volumes:
-      - dar-postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dar -d durable_agent_runtime"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   valkey:
     image: valkey/valkey:8
     container_name: dar-valkey
-    ports: ["6379:6379"]
-    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   temporal:
-    image: temporalio/auto-setup:latest
+    image: temporalio/auto-setup:1.26
     container_name: dar-temporal
-    ports: ["7233:7233"]
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       DB: postgresql
       DB_PORT: 5432
-      POSTGRES_USER: postgres
-      POSTGRES_PWD: postgres
+      POSTGRES_USER: dar
+      POSTGRES_PWD: dar_local_password
       POSTGRES_SEEDS: postgres
-    depends_on: [postgres]
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    ports:
+      - "7233:7233"
+
   temporal-ui:
-    image: temporalio/ui:latest
+    image: temporalio/ui:2.34.0
     container_name: dar-temporal-ui
-    ports: ["8080:8080"]
+    depends_on:
+      - temporal
     environment:
       TEMPORAL_ADDRESS: temporal:7233
-    depends_on: [temporal]
+      TEMPORAL_CORS_ORIGINS: http://localhost:3100,http://localhost:3000
+    ports:
+      - "8233:8080"
+
+  tool-gateway:
+    build:
+      context: ..
+      dockerfile: apps/tool-gateway/Dockerfile
+    image: durable-agent-runtime/tool-gateway:local
+    container_name: dar-tool-gateway
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3200
+      DATABASE_URL: postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
+      VALKEY_URL: redis://valkey:6379
+      LOG_LEVEL: info
+    ports:
+      - "3200:3200"
+
+  runtime-worker:
+    build:
+      context: ..
+      dockerfile: apps/runtime-worker/Dockerfile
+    image: durable-agent-runtime/runtime-worker:local
+    container_name: dar-runtime-worker
+    depends_on:
+      temporal:
+        condition: service_started
+      tool-gateway:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3300
+      DATABASE_URL: postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
+      VALKEY_URL: redis://valkey:6379
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TOOL_GATEWAY_URL: http://tool-gateway:3200
+      LOG_LEVEL: info
+    ports:
+      - "3300:3300"
+
+  runtime-api:
+    build:
+      context: ..
+      dockerfile: apps/runtime-api/Dockerfile
+    image: durable-agent-runtime/runtime-api:local
+    container_name: dar-runtime-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+      tool-gateway:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
+      VALKEY_URL: redis://valkey:6379
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TOOL_GATEWAY_URL: http://tool-gateway:3200
+      LOG_LEVEL: info
+    ports:
+      - "3000:3000"
+
+  control-plane:
+    build:
+      context: ..
+      dockerfile: apps/control-plane/Dockerfile
+    image: durable-agent-runtime/control-plane:local
+    container_name: dar-control-plane
+    depends_on:
+      runtime-api:
+        condition: service_started
+      tool-gateway:
+        condition: service_started
+    ports:
+      - "3100:8080"
+
 volumes:
-  dar-postgres-data:
+  postgres-data:
