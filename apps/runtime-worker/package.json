@@ -1,0 +1,42 @@
+{
+  "name": "@dar/runtime-worker",
+  "version": "0.1.5",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@dar/contracts": "workspace:*",
+    "@dar/config": "workspace:*",
+    "@dar/logger": "workspace:*",
+    "@dar/telemetry": "workspace:*",
+    "@dar/security": "workspace:*",
+    "fastify": "^5.0.0",
+    "zod": "^4.0.0",
+    "pino": "^9.0.0",
+    "jose": "^6.0.0",
+    "undici": "^7.0.0",
+    "@dar/db": "workspace:*",
+    "@dar/temporal": "workspace:*",
+    "@dar/tool-client": "workspace:*",
+    "@dar/model-client": "workspace:*",
+    "@temporalio/activity": "^1.11.0",
+    "@temporalio/client": "^1.11.0",
+    "@temporalio/worker": "^1.11.0",
+    "@temporalio/workflow": "^1.11.0",
+    "kysely": "^0.28.0",
+    "pg": "^8.0.0",
+    "yaml": "^2.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "~5.8.3",
+    "vitest": "^3.0.0",
+    "@temporalio/testing": "^1.11.0"
+  }
+}

@@ -1,0 +1,24 @@
+flow_id: customer_followup_flow
+version: 1
+name: 客户跟进辅助流程
+runtime:
+  workflow_type: ConfigDrivenWorkflow
+  task_queue: runtime-worker-main
+steps:
+  - id: normalize_input
+    type: activity
+    activity: input.normalize
+  - id: read_profile
+    type: tool
+    tool: customer.profile.read
+  - id: agent_plan
+    type: agent
+    agent_id: customer_followup_agent
+    mode: plan_only
+  - id: human_confirm
+    type: human_task
+    when: "${risk.level >= 'medium'}"
+  - id: write_back
+    type: tool
+    tool: followup.record.write
+    when: "${human_confirm.approved == true}"

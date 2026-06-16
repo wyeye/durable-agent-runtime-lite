@@ -1,0 +1,10 @@
+{
+  "tool_name": "customer.profile.read",
+  "version": "1.0.0",
+  "risk_level": "L1",
+  "side_effect": false,
+  "adapter": {
+    "type": "http",
+    "endpoint_ref": "mock-business/customer-profile"
+  }
+}

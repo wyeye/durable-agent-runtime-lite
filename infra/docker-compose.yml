@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: dar-postgres
+    ports: ["5432:5432"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dar
+    volumes:
+      - dar-postgres-data:/var/lib/postgresql/data
+  valkey:
+    image: valkey/valkey:8
+    container_name: dar-valkey
+    ports: ["6379:6379"]
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+  temporal:
+    image: temporalio/auto-setup:latest
+    container_name: dar-temporal
+    ports: ["7233:7233"]
+    environment:
+      DB: postgresql
+      DB_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PWD: postgres
+      POSTGRES_SEEDS: postgres
+    depends_on: [postgres]
+  temporal-ui:
+    image: temporalio/ui:latest
+    container_name: dar-temporal-ui
+    ports: ["8080:8080"]
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on: [temporal]
+volumes:
+  dar-postgres-data:
