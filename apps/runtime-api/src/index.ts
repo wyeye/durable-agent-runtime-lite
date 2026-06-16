@@ -1,13 +1,44 @@
+import { pathToFileURL } from 'node:url';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { getAppPort, loadConfig } from '@dar/config';
 import { createLogger } from '@dar/logger';
 
-const logger = createLogger('runtime-api');
+const appName = 'runtime-api' as const;
+const logger = createLogger(appName);
 
-async function main() {
-  logger.info({ app: 'runtime-api', event: 'startup' }, 'runtime-api starting');
-  // TODO: bootstrap runtime-api modules.
+export function buildServer(): FastifyInstance {
+  const server = Fastify({ logger: false });
+
+  server.get('/healthz', async () => ({
+    status: 'ok',
+    app: appName,
+  }));
+
+  server.get('/readyz', async () => ({
+    status: 'ready',
+    app: appName,
+    checks: {
+      config: 'ok',
+    },
+  }));
+
+  return server;
 }
 
-main().catch((error) => {
-  logger.error({ err: error }, 'runtime-api startup failed');
-  process.exit(1);
-});
+export async function start(): Promise<void> {
+  const config = loadConfig();
+  const server = buildServer();
+  const port = getAppPort(appName, config);
+
+  await server.listen({ host: '0.0.0.0', port });
+  logger.info({ app: appName, port }, `${appName} listening`);
+}
+
+const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
+
+if (isMain) {
+  start().catch((error: unknown) => {
+    logger.error({ err: error }, `${appName} startup failed`);
+    process.exit(1);
+  });
+}
