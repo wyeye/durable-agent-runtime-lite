@@ -8,11 +8,12 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "undici": "^7.0.0",
-    "zod": "^4.0.0"
+    "zod": "^4.0.0",
+    "@dar/contracts": "workspace:*"
   },
   "devDependencies": {
     "typescript": "~5.8.3",

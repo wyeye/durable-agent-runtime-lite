@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "kysely": "^0.28.0",
@@ -16,6 +16,7 @@
   },
   "devDependencies": {
     "typescript": "~5.8.3",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "@types/pg": "^8.0.0"
   }
 }

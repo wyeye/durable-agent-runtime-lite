@@ -15,7 +15,7 @@
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "test:e2e": "vitest run tests/e2e",
+    "test:e2e": "vitest run tests/e2e --passWithNoTests",
     "lint": "eslint .",
     "format": "prettier --write .",
     "db:migrate": "tsx db/migrate.ts"
@@ -29,6 +29,8 @@
     "turbo": "^2.0.0",
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.0.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "@types/pg": "^8.0.0",
+    "pg": "^8.0.0"
   }
 }
