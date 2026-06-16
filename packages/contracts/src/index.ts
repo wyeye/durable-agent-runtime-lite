@@ -252,12 +252,50 @@ export const auditEventSchema = z.object({
   payload: jsonObjectSchema.default({}),
 });
 
+
+export const taskInputSchema = z
+  .object({
+    text: z.string().min(1).optional(),
+    action_id: z.string().min(1).optional(),
+    payload: jsonObjectSchema.default({}),
+  })
+  .passthrough();
+
+export const runTaskRequestSchema = z.object({
+  request_id: z.string().min(1).optional(),
+  tenant_id: z.string().min(1).optional(),
+  user_id: z.string().min(1).optional(),
+  session_id: z.string().min(1).optional(),
+  trace_id: z.string().min(1).optional(),
+  channel: z.string().min(1).optional(),
+  roles: z.array(z.string()).default([]),
+  input: taskInputSchema.default({ payload: {} }),
+});
+
+export const routerPreviewRequestSchema = runTaskRequestSchema;
+
+export const routerPreviewResponseSchema = z.object({
+  route_decision: routeDecisionSchema,
+  candidates: z.array(candidateFlowSchema).default([]),
+});
+
+export const runTaskResponseSchema = z.object({
+  task_run_id: z.string().min(1),
+  workflow_id: z.string().min(1),
+  status: taskRunStatusSchema,
+  route_decision: routeDecisionSchema,
+  flow_id: z.string().min(1).optional(),
+  flow_version: z.number().int().positive().optional(),
+  agent_id: z.string().min(1).optional(),
+});
+
 export type RiskLevel = z.infer<typeof riskLevelSchema>;
 export type RuntimeError = z.infer<typeof runtimeErrorSchema>;
 export type RequestContext = z.infer<typeof requestContextSchema>;
 export type FlowSpec = z.infer<typeof flowSpecSchema>;
 export type FlowStep = z.infer<typeof flowStepSchema>;
 export type RouteSpec = z.infer<typeof routeSpecSchema>;
+export type CandidateFlow = z.infer<typeof candidateFlowSchema>;
 export type RouteDecision = z.infer<typeof routeDecisionSchema>;
 export type AgentSpec = z.infer<typeof agentSpecSchema>;
 export type ToolManifest = z.infer<typeof toolManifestSchema>;
@@ -266,3 +304,9 @@ export type ToolInvokeRequest = z.infer<typeof toolInvokeRequestSchema>;
 export type ToolInvokeResponse = z.infer<typeof toolInvokeResponseSchema>;
 export type HumanTask = z.infer<typeof humanTaskSchema>;
 export type AuditEvent = z.infer<typeof auditEventSchema>;
+export type TaskInput = z.infer<typeof taskInputSchema>;
+export type RunTaskRequest = z.infer<typeof runTaskRequestSchema>;
+export type RouterPreviewRequest = z.infer<typeof routerPreviewRequestSchema>;
+export type RouterPreviewResponse = z.infer<typeof routerPreviewResponseSchema>;
+export type RunTaskResponse = z.infer<typeof runTaskResponseSchema>;
+
