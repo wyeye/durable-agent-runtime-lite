@@ -1,5 +1,6 @@
 import {
   agentRunRequestSchema,
+  flowSpecSchema,
   toolInvokeRequestSchema,
   type AgentRunResult,
   type FlowSpec,
@@ -7,6 +8,7 @@ import {
 } from '@dar/contracts';
 import { ToolGatewayClient } from '@dar/tool-client';
 import { getToolGatewayUrl, loadConfig } from '@dar/config';
+import { closeDb, createDb, FlowDefinitionRepository, parseDbFlowSnapshotRef } from '@dar/db';
 import { runPiAgent } from '../pi/pi-runner.js';
 
 const sampleFlowSpec: FlowSpec = {
@@ -96,9 +98,29 @@ export async function loadFlowSpecActivity(flowSpec: FlowSpec): Promise<FlowSpec
 }
 
 export async function loadFlowSpecByRefActivity(flowSnapshotRef: string): Promise<FlowSpec> {
-  if (flowSnapshotRef === 'sample_flow@1') {
+  const dbRef = parseDbFlowSnapshotRef(flowSnapshotRef);
+  if (dbRef) {
+    const config = loadConfig();
+    const db = createDb({ databaseUrl: config.DATABASE_URL });
+    try {
+      const flowSpec = await new FlowDefinitionRepository(db).getPublished(dbRef.flowId, dbRef.version);
+      if (!flowSpec) {
+        throw new Error(`FlowSpec not found or not executable: ${flowSnapshotRef}`);
+      }
+      return flowSpecSchema.parse(flowSpec);
+    } finally {
+      await closeDb(db);
+    }
+  }
+
+  const config = loadConfig();
+  if (flowSnapshotRef === 'sample_flow@1' && !isProductionRuntime(config)) {
     return sampleFlowSpec;
   }
 
   throw new Error(`Unknown flow snapshot ref: ${flowSnapshotRef}`);
+}
+
+function isProductionRuntime(config: ReturnType<typeof loadConfig>): boolean {
+  return config.NODE_ENV === 'production' || config.APP_ENV === 'production';
 }

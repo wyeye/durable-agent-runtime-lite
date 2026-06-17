@@ -17,6 +17,12 @@ export interface VersionedSpecTable {
   published_at: Timestamp | null;
 }
 
+export type ToolManifestTable = VersionedSpecTable;
+
+export type AgentSpecTable = VersionedSpecTable;
+
+export type PromptDefinitionTable = VersionedSpecTable;
+
 export interface FlowDefinitionTable extends Omit<VersionedSpecTable, 'spec_id'> {
   flow_id: string;
 }
@@ -126,9 +132,9 @@ export interface Database {
   flow_definition: FlowDefinitionTable;
   flow_route_config: FlowRouteConfigTable;
   flow_route_embedding: FlowRouteEmbeddingTable;
-  agent_spec: VersionedSpecTable;
-  tool_manifest: VersionedSpecTable;
-  prompt_definition: VersionedSpecTable;
+  agent_spec: AgentSpecTable;
+  tool_manifest: ToolManifestTable;
+  prompt_definition: PromptDefinitionTable;
   task_run: TaskRunTable;
   human_task: HumanTaskTable;
   audit_event: AuditEventTable;
@@ -193,3 +199,4 @@ export class InMemoryRepository<TRecord extends { id: string }> implements Repos
 }
 
 export { sql };
+export * from './repositories.js';

@@ -7,6 +7,7 @@ export interface RuleRouterInput {
   input: TaskInput;
   channel?: string | undefined;
   roles?: string[] | undefined;
+  allowMockFallback?: boolean | undefined;
 }
 
 export interface RuleRouterResult {
@@ -90,6 +91,17 @@ export function routeByRules(input: RuleRouterInput, routes: RouteSpec[]): RuleR
   }));
 
   const top = candidates[0];
+
+  if (!top && input.allowMockFallback === false) {
+    return {
+      route_decision: {
+        decision: 'agent_fallback',
+        agent_id: DEFAULT_AGENT_ID,
+        reason: 'no_published_route_match',
+      },
+      candidates: [],
+    };
+  }
 
   if (!top) {
     const recalledCandidates = mockVectorRecallAdapter.recall(input.input, routes);

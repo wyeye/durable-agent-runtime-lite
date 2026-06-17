@@ -6,19 +6,22 @@ import {
   type ToolInvokeResponse,
   type ToolManifest,
 } from '@dar/contracts';
-import { InMemoryAuditStore } from './audit.js';
+import { IdempotencyRecordRepository } from '@dar/db';
+import { InMemoryAuditStore, type AuditStore } from './audit.js';
 import { invokeMockAdapter } from './mock-adapter.js';
 import { validateArguments } from './schema-validator.js';
 import { InMemoryToolManifestRegistry, type ToolManifestRegistry } from './tool-registry.js';
 
 export interface ToolServiceOptions {
   registry?: ToolManifestRegistry;
-  auditStore?: InMemoryAuditStore;
+  auditStore?: AuditStore;
+  idempotencyRepository?: IdempotencyRecordRepository;
 }
 
 export class ToolService {
   private readonly registry: ToolManifestRegistry;
-  private readonly auditStore: InMemoryAuditStore;
+  private readonly auditStore: AuditStore;
+  private readonly idempotencyRepository: IdempotencyRecordRepository | undefined;
   private readonly idempotency = new Map<
     string,
     { requestHash: string; response: ToolInvokeResponse }
@@ -27,17 +30,18 @@ export class ToolService {
   constructor(options: ToolServiceOptions = {}) {
     this.registry = options.registry ?? new InMemoryToolManifestRegistry();
     this.auditStore = options.auditStore ?? new InMemoryAuditStore();
+    this.idempotencyRepository = options.idempotencyRepository;
   }
 
-  async listTools(): Promise<ToolManifest[]> {
-    return this.registry.list();
+  async listTools(tenantId?: string): Promise<ToolManifest[]> {
+    return this.registry.list(tenantId);
   }
 
-  async getTool(toolName: string): Promise<ToolManifest | undefined> {
-    return this.registry.get(toolName);
+  async getTool(toolName: string, tenantId?: string): Promise<ToolManifest | undefined> {
+    return this.registry.get(toolName, tenantId);
   }
 
-  listAuditEvents() {
+  async listAuditEvents() {
     return this.auditStore.list();
   }
 
@@ -46,13 +50,13 @@ export class ToolService {
     const request = toolInvokeRequestSchema.parse({ ...requestPayload, tool_name: toolName });
     const idempotencyStoreKey = buildIdempotencyStoreKey(request);
     const requestHash = hashIdempotencyRequest(request);
-    const replay = this.idempotency.get(idempotencyStoreKey);
-    if (replay) {
-      if (replay.requestHash !== requestHash) {
+    const replay = await this.getIdempotencyReplay(request, idempotencyStoreKey, requestHash);
+    if (replay.decision !== 'miss') {
+      if (replay.decision === 'conflict') {
         return this.auditAndReturnDenied(request, 'IDEMPOTENCY_CONFLICT', '幂等键已被不同请求使用');
       }
 
-      this.auditStore.append({
+      await this.auditStore.append({
         tenant_id: request.tenant_id,
         actor_id: String(request.user_context.user_id ?? request.user_context.userId ?? 'unknown'),
         action: 'tool.invoke',
@@ -71,7 +75,7 @@ export class ToolService {
       return toolInvokeResponseSchema.parse(replay.response);
     }
 
-    const manifest = await this.registry.get(toolName);
+    const manifest = await this.registry.get(toolName, request.tenant_id);
     if (!manifest) {
       return this.auditAndReturnDenied(request, 'TOOL_NOT_FOUND', '工具未注册');
     }
@@ -91,7 +95,7 @@ export class ToolService {
     }
 
     const result = await invokeMockAdapter({ toolName, args: request.arguments });
-    const auditEvent = this.auditStore.append({
+    const auditEvent = await this.auditStore.append({
       tenant_id: request.tenant_id,
       actor_id: String(request.user_context.user_id ?? request.user_context.userId ?? 'unknown'),
       action: 'tool.invoke',
@@ -119,16 +123,16 @@ export class ToolService {
       audit_event_id: auditEvent.event_id,
       idempotency_key: request.idempotency_key,
     });
-    this.idempotency.set(idempotencyStoreKey, { requestHash, response });
+    await this.saveIdempotencyRecord(idempotencyStoreKey, request, requestHash, response);
     return response;
   }
 
-  private auditAndReturnDenied(
+  private async auditAndReturnDenied(
     request: ToolInvokeRequest,
     code: string,
     message: string,
-  ): ToolInvokeResponse {
-    const auditEvent = this.auditStore.append({
+  ): Promise<ToolInvokeResponse> {
+    const auditEvent = await this.auditStore.append({
       tenant_id: request.tenant_id,
       actor_id: String(request.user_context.user_id ?? request.user_context.userId ?? 'unknown'),
       action: 'tool.invoke',
@@ -152,6 +156,69 @@ export class ToolService {
       audit_event_id: auditEvent.event_id,
       idempotency_key: request.idempotency_key,
     });
+  }
+
+  private async getIdempotencyReplay(
+    request: ToolInvokeRequest,
+    idempotencyStoreKey: string,
+    requestHash: string,
+  ): Promise<
+    | { decision: 'miss' }
+    | { decision: 'conflict' }
+    | { decision: 'replay'; response: ToolInvokeResponse }
+  > {
+    if (this.idempotencyRepository) {
+      const decision = await this.idempotencyRepository.replayOrConflict({
+        idempotencyKey: idempotencyStoreKey,
+        tenantId: request.tenant_id,
+        targetType: 'tool',
+        targetId: request.tool_name,
+        requestHash,
+      });
+
+      if (decision.decision === 'miss') {
+        return { decision: 'miss' };
+      }
+      if (decision.decision === 'conflict') {
+        return { decision: 'conflict' };
+      }
+
+      return {
+        decision: 'replay',
+        response: toolInvokeResponseSchema.parse(decision.record.response_json),
+      };
+    }
+
+    const replay = this.idempotency.get(idempotencyStoreKey);
+    if (!replay) {
+      return { decision: 'miss' };
+    }
+    if (replay.requestHash !== requestHash) {
+      return { decision: 'conflict' };
+    }
+    return { decision: 'replay', response: replay.response };
+  }
+
+  private async saveIdempotencyRecord(
+    idempotencyStoreKey: string,
+    request: ToolInvokeRequest,
+    requestHash: string,
+    response: ToolInvokeResponse,
+  ): Promise<void> {
+    if (this.idempotencyRepository) {
+      await this.idempotencyRepository.insert({
+        idempotency_key: idempotencyStoreKey,
+        tenant_id: request.tenant_id,
+        target_type: 'tool',
+        target_id: request.tool_name,
+        request_hash: requestHash,
+        response_json: response,
+        status: response.status === 'succeeded' ? 'succeeded' : 'failed',
+      });
+      return;
+    }
+
+    this.idempotency.set(idempotencyStoreKey, { requestHash, response });
   }
 }
 

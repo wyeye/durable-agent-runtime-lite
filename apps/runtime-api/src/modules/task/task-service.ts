@@ -10,12 +10,16 @@ import {
   type TaskRun,
   type WorkflowStartRequest,
 } from '@dar/contracts';
+import { buildDbFlowSnapshotRef, closeDb, createDb, TaskRunRepository, type Database } from '@dar/db';
+import { loadConfig, type RuntimeConfig } from '@dar/config';
 import { buildTaskWorkflowId } from '@dar/temporal';
-import { defaultRouteSpecs, DEFAULT_AGENT_ID } from '../router/route-registry.js';
+import type { Kysely } from 'kysely';
+import { DEFAULT_AGENT_ID } from '../router/route-registry.js';
 import { routeByRules } from '../router/rule-router.js';
+import { DbRouteSpecSource, MemoryRouteSpecSource, type RouteSpecSource } from '../router/route-source.js';
 import { createWorkflowStarter, type WorkflowStarter } from '../workflow/workflow-starter.js';
 import { createRequestId, createTaskRunId } from './task-id.js';
-import { InMemoryTaskRunStore } from './task-store.js';
+import { DbTaskRunStore, InMemoryTaskRunStore, type TaskRunStore } from './task-store.js';
 
 export interface NormalizedRunTaskRequest extends RunTaskRequest {
   request_id: string;
@@ -25,34 +29,47 @@ export interface NormalizedRunTaskRequest extends RunTaskRequest {
 
 export interface TaskServiceOptions {
   routes?: RouteSpec[];
-  taskStore?: InMemoryTaskRunStore;
+  routeSource?: RouteSpecSource;
+  taskStore?: TaskRunStore;
   workflowStarter?: WorkflowStarter;
+  allowMockRouteFallback?: boolean;
+  buildFlowSnapshotRef?: (flowId: string, version: number) => string;
 }
 
 export class TaskService {
-  private readonly routes: RouteSpec[];
-  private readonly taskStore: InMemoryTaskRunStore;
+  private readonly routeSource: RouteSpecSource;
+  private readonly taskStore: TaskRunStore;
   private readonly workflowStarter: WorkflowStarter;
+  private readonly allowMockRouteFallback: boolean;
+  private readonly buildFlowSnapshotRef: (flowId: string, version: number) => string;
 
   constructor(options: TaskServiceOptions = {}) {
-    this.routes = options.routes ?? defaultRouteSpecs;
+    this.routeSource = options.routeSource ?? new MemoryRouteSpecSource(options.routes);
     this.taskStore = options.taskStore ?? new InMemoryTaskRunStore();
     this.workflowStarter = options.workflowStarter ?? createWorkflowStarter();
+    this.allowMockRouteFallback = options.allowMockRouteFallback ?? true;
+    this.buildFlowSnapshotRef =
+      options.buildFlowSnapshotRef ??
+      (this.allowMockRouteFallback ? buildLocalFlowSnapshotRef : buildDbFlowSnapshotRef);
   }
 
-  preview(input: unknown): RouterPreviewResponse {
-    return previewRoute(input, this.routes);
+  async preview(input: unknown): Promise<RouterPreviewResponse> {
+    const normalized = normalizeRunTaskRequest(input);
+    const routes = await this.routeSource.listPublished(normalized.tenant_id);
+    return previewRoute(input, routes, this.allowMockRouteFallback);
   }
 
   async create(input: unknown): Promise<RunTaskResponse> {
     const normalized = normalizeRunTaskRequest(input);
+    const routes = await this.routeSource.listPublished(normalized.tenant_id);
     const routeResult = routeByRules(
       {
         input: normalized.input,
         channel: normalized.channel,
         roles: normalized.roles,
+        allowMockFallback: this.allowMockRouteFallback,
       },
-      this.routes,
+      routes,
     );
 
     const taskRunId = createTaskRunId();
@@ -68,7 +85,7 @@ export class TaskService {
           workflow_id: workflowId,
           flow_id: decision.flow_id,
           flow_version: decision.flow_version,
-          flow_snapshot_ref: `${decision.flow_id}@${decision.flow_version}`,
+          flow_snapshot_ref: this.buildFlowSnapshotRef(decision.flow_id, decision.flow_version),
           input: normalized.input,
           request_id: normalized.request_id,
           trace_id: normalized.trace_id,
@@ -97,8 +114,8 @@ export class TaskService {
       agent_id: decision.decision === 'agent_fallback' ? decision.agent_id : undefined,
     });
 
-    this.taskStore.create(
-      taskRunSchema.parse({
+    await this.taskStore.create({
+      taskRun: taskRunSchema.parse({
         task_run_id: taskRunId,
         tenant_id: normalized.tenant_id,
         user_id: normalized.user_id,
@@ -110,12 +127,15 @@ export class TaskService {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }),
-    );
+      input: normalized.input,
+      routeResult,
+      workflowStart,
+    });
 
     return response;
   }
 
-  get(taskRunId: string): TaskRun | undefined {
+  async get(taskRunId: string): Promise<TaskRun | undefined> {
     return this.taskStore.get(taskRunId);
   }
 }
@@ -131,9 +151,14 @@ export function normalizeRunTaskRequest(input: unknown): NormalizedRunTaskReques
   };
 }
 
+function buildLocalFlowSnapshotRef(flowId: string, version: number): string {
+  return `${flowId}@${version}`;
+}
+
 export function previewRoute(
   input: unknown,
-  routes: RouteSpec[] = defaultRouteSpecs,
+  routes: RouteSpec[],
+  allowMockFallback = true,
 ): RouterPreviewResponse {
   const normalized = normalizeRunTaskRequest(input);
   const result = routeByRules(
@@ -141,6 +166,7 @@ export function previewRoute(
       input: normalized.input,
       channel: normalized.channel,
       roles: normalized.roles,
+      allowMockFallback,
     },
     routes,
   );
@@ -150,7 +176,7 @@ export function previewRoute(
 
 export function createTaskRunPreview(
   input: unknown,
-  routes: RouteSpec[] = defaultRouteSpecs,
+  routes: RouteSpec[],
 ): RunTaskResponse {
   const normalized = normalizeRunTaskRequest(input);
   const routeResult = routeByRules(
@@ -184,4 +210,41 @@ export function createTaskRunPreview(
     route_decision: decision,
     agent_id: decision.decision === 'agent_fallback' ? decision.agent_id : DEFAULT_AGENT_ID,
   });
+}
+
+export interface RuntimeApiTaskServiceHandle {
+  taskService: TaskService;
+  close(): Promise<void>;
+}
+
+export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()): RuntimeApiTaskServiceHandle {
+  if (isProductionRuntime(config) && config.RUNTIME_API_ROUTE_SOURCE !== 'db') {
+    throw new Error('RUNTIME_API_ROUTE_SOURCE=db is required in production');
+  }
+
+  if (config.RUNTIME_API_ROUTE_SOURCE === 'db') {
+    const db: Kysely<Database> = createDb({ databaseUrl: config.DATABASE_URL });
+    return {
+      taskService: new TaskService({
+        routeSource: new DbRouteSpecSource(db),
+        taskStore: new DbTaskRunStore(new TaskRunRepository(db)),
+        workflowStarter: createWorkflowStarter(config),
+        allowMockRouteFallback: false,
+        buildFlowSnapshotRef: buildDbFlowSnapshotRef,
+      }),
+      close: async () => closeDb(db),
+    };
+  }
+
+  return {
+    taskService: new TaskService({
+      workflowStarter: createWorkflowStarter(config),
+      allowMockRouteFallback: true,
+    }),
+    close: async () => undefined,
+  };
+}
+
+function isProductionRuntime(config: RuntimeConfig): boolean {
+  return config.NODE_ENV === 'production' || config.APP_ENV === 'production';
 }

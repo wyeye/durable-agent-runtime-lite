@@ -13,24 +13,30 @@
     "dev:infra": "docker compose -f infra/docker-compose.yml up -d",
     "dev:infra:down": "docker compose -f infra/docker-compose.yml down",
     "build": "turbo run build",
-    "typecheck": "turbo run typecheck",
+    "typecheck": "turbo run typecheck && tsc -p tsconfig.scripts.json",
     "test": "turbo run test && vitest run --config vitest.root.config.ts --passWithNoTests",
     "test:e2e": "vitest run tests/e2e --passWithNoTests",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "db:migrate": "tsx db/migrate.ts"
+    "db:migrate": "tsx db/migrate.ts",
+    "seed:examples": "tsx scripts/seed-examples.ts",
+    "smoke:db-registry": "tsx scripts/smoke-db-registry.ts"
   },
   "devDependencies": {
+    "@dar/config": "workspace:*",
+    "@dar/contracts": "workspace:*",
+    "@dar/db": "workspace:*",
     "@eslint/js": "^9.0.0",
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.0.0",
     "eslint": "^9.0.0",
+    "pg": "^8.0.0",
+    "pnpm": "10.0.0",
     "prettier": "^3.0.0",
     "tsx": "^4.0.0",
     "turbo": "^2.0.0",
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.0.0",
-    "vitest": "^3.0.0",
-    "@types/pg": "^8.0.0",
-    "pg": "^8.0.0"
+    "vitest": "^3.0.0"
   }
 }

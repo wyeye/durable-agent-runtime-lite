@@ -289,6 +289,20 @@ export const auditEventSchema = z.object({
   payload: jsonObjectSchema.default({}),
 });
 
+export const idempotencyRecordStatusSchema = z.enum(['created', 'succeeded', 'failed']);
+
+export const idempotencyRecordSchema = z.object({
+  idempotency_key: z.string().min(1),
+  tenant_id: z.string().min(1),
+  target_type: z.string().min(1),
+  target_id: z.string().min(1),
+  request_hash: z.string().min(1),
+  response_json: z.unknown().optional(),
+  status: idempotencyRecordStatusSchema,
+  created_at: z.string().datetime().optional(),
+  updated_at: z.string().datetime().optional(),
+});
+
 export const taskInputSchema = z
   .object({
     text: z.string().min(1).optional(),
@@ -397,6 +411,7 @@ export type ToolInvokeRequest = z.infer<typeof toolInvokeRequestSchema>;
 export type ToolInvokeResponse = z.infer<typeof toolInvokeResponseSchema>;
 export type HumanTask = z.infer<typeof humanTaskSchema>;
 export type AuditEvent = z.infer<typeof auditEventSchema>;
+export type IdempotencyRecord = z.infer<typeof idempotencyRecordSchema>;
 export type TaskInput = z.infer<typeof taskInputSchema>;
 export type RunTaskRequest = z.infer<typeof runTaskRequestSchema>;
 export type RouterPreviewRequest = z.infer<typeof routerPreviewRequestSchema>;

@@ -4,6 +4,17 @@ import { ZodError } from 'zod';
 import type { RuntimeError, StandardErrorResponse, StandardSuccessResponse, ToolInvokeResponse } from '@dar/contracts';
 import { getAppPort, loadConfig } from '@dar/config';
 import { createLogger } from '@dar/logger';
+import {
+  AuditEventRepository,
+  closeDb,
+  createDb,
+  IdempotencyRecordRepository,
+  type Database,
+} from '@dar/db';
+import type { RuntimeConfig } from '@dar/config';
+import type { Kysely } from 'kysely';
+import { DbAuditStore } from './modules/audit.js';
+import { DbToolManifestRegistry } from './modules/tool-registry.js';
 import { ToolService } from './modules/tool-service.js';
 
 const appName = 'tool-gateway' as const;
@@ -71,11 +82,15 @@ export function buildServer(toolService = new ToolService()): FastifyInstance {
     },
   }));
 
-  server.get('/v1/tools', async () => success(await toolService.listTools()));
+  server.get('/v1/tools', async (request) => {
+    const { tenant_id: tenantId } = request.query as { tenant_id?: string };
+    return success(await toolService.listTools(tenantId));
+  });
 
   server.get('/v1/tools/:toolName', async (request, reply) => {
     const { toolName } = request.params as { toolName: string };
-    const manifest = await toolService.getTool(toolName);
+    const { tenant_id: tenantId } = request.query as { tenant_id?: string };
+    const manifest = await toolService.getTool(toolName, tenantId);
     if (!manifest) {
       reply.code(404);
       return { success: false, data: null, error: { code: 'TOOL_NOT_FOUND', message: '工具未注册' } };
@@ -120,15 +135,52 @@ export function buildServer(toolService = new ToolService()): FastifyInstance {
     }
   });
 
-  server.get('/v1/audit-events', async () => success(toolService.listAuditEvents()));
+  server.get('/v1/audit-events', async () => success(await toolService.listAuditEvents()));
 
   return server;
 }
 
+export interface ToolGatewayServiceHandle {
+  toolService: ToolService;
+  close(): Promise<void>;
+}
+
+export function createToolGatewayService(config: RuntimeConfig = loadConfig()): ToolGatewayServiceHandle {
+  if (isProductionRuntime(config) && config.TOOL_GATEWAY_REGISTRY_SOURCE !== 'db') {
+    throw new Error('TOOL_GATEWAY_REGISTRY_SOURCE=db is required in production');
+  }
+
+  if (config.TOOL_GATEWAY_REGISTRY_SOURCE === 'db') {
+    const db: Kysely<Database> = createDb({ databaseUrl: config.DATABASE_URL });
+    return {
+      toolService: new ToolService({
+        registry: new DbToolManifestRegistry(db),
+        auditStore: new DbAuditStore(new AuditEventRepository(db)),
+        idempotencyRepository: new IdempotencyRecordRepository(db),
+      }),
+      close: async () => closeDb(db),
+    };
+  }
+
+  return {
+    toolService: new ToolService(),
+    close: async () => undefined,
+  };
+}
+
+function isProductionRuntime(config: RuntimeConfig): boolean {
+  return config.NODE_ENV === 'production' || config.APP_ENV === 'production';
+}
+
 export async function start(): Promise<void> {
   const config = loadConfig();
-  const server = buildServer();
+  const { toolService, close } = createToolGatewayService(config);
+  const server = buildServer(toolService);
   const port = getAppPort(appName, config);
+
+  server.addHook('onClose', async () => {
+    await close();
+  });
 
   await server.listen({ host: config.HOST, port });
   logger.info({ app: appName, port, host: config.HOST }, `${appName} listening`);

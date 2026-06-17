@@ -1,10 +1,10 @@
 import { toolManifestSchema, type ToolManifest } from '@dar/contracts';
-import type { Database } from '@dar/db';
+import { ToolManifestRepository, type Database } from '@dar/db';
 import type { Kysely } from 'kysely';
 
 export interface ToolManifestRegistry {
-  list(): Promise<ToolManifest[]>;
-  get(toolName: string): Promise<ToolManifest | undefined>;
+  list(tenantId?: string): Promise<ToolManifest[]>;
+  get(toolName: string, tenantId?: string): Promise<ToolManifest | undefined>;
 }
 
 export const builtInToolManifests: ToolManifest[] = [
@@ -59,50 +59,31 @@ export class InMemoryToolManifestRegistry implements ToolManifestRegistry {
     this.manifests = new Map(manifests.map((manifest) => [manifest.tool_name, manifest]));
   }
 
-  async list(): Promise<ToolManifest[]> {
+  async list(_tenantId?: string): Promise<ToolManifest[]> {
     return [...this.manifests.values()].filter((manifest) => manifest.status !== 'disabled');
   }
 
-  async get(toolName: string): Promise<ToolManifest | undefined> {
+  async get(toolName: string, _tenantId?: string): Promise<ToolManifest | undefined> {
     const manifest = this.manifests.get(toolName);
     return manifest?.status === 'disabled' ? undefined : manifest;
   }
 }
 
 export class DbToolManifestRegistry implements ToolManifestRegistry {
-  constructor(
-    private readonly db: Kysely<Database>,
-    private readonly fallback: ToolManifestRegistry = new InMemoryToolManifestRegistry(),
-  ) {}
+  private readonly repository: ToolManifestRepository;
 
-  async list(): Promise<ToolManifest[]> {
-    const rows = await this.db
-      .selectFrom('tool_manifest')
-      .select(['spec_json'])
-      .where('status', 'in', ['published', 'gray'])
-      .execute();
-
-    if (rows.length === 0) {
-      return this.fallback.list();
-    }
-
-    return rows.map((row) => toolManifestSchema.parse(row.spec_json));
+  constructor(db: Kysely<Database>) {
+    this.repository = new ToolManifestRepository(db);
   }
 
-  async get(toolName: string): Promise<ToolManifest | undefined> {
-    const row = await this.db
-      .selectFrom('tool_manifest')
-      .select(['spec_json'])
-      .where('spec_id', '=', toolName)
-      .where('status', 'in', ['published', 'gray'])
-      .orderBy('version', 'desc')
-      .executeTakeFirst();
+  async list(tenantId = 'default'): Promise<ToolManifest[]> {
+    const manifests = await this.repository.listPublished({ tenantId });
+    return manifests.map((manifest) => toolManifestSchema.parse(manifest));
+  }
 
-    if (!row) {
-      return this.fallback.get(toolName);
-    }
-
-    return toolManifestSchema.parse(row.spec_json);
+  async get(toolName: string, tenantId = 'default'): Promise<ToolManifest | undefined> {
+    const manifest = await this.repository.getPublished(toolName, { tenantId });
+    return manifest ? toolManifestSchema.parse(manifest) : undefined;
   }
 }
 

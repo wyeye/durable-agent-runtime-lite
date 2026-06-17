@@ -4,7 +4,7 @@ import { ZodError } from 'zod';
 import type { StandardErrorResponse, StandardSuccessResponse } from '@dar/contracts';
 import { getAppPort, loadConfig } from '@dar/config';
 import { createLogger } from '@dar/logger';
-import { TaskService } from './modules/task/task-service.js';
+import { createRuntimeApiTaskService, TaskService } from './modules/task/task-service.js';
 
 const appName = 'runtime-api' as const;
 const logger = createLogger(appName);
@@ -81,7 +81,7 @@ export function buildServer(taskService = new TaskService()): FastifyInstance {
     const traceId = getTraceId(request.body);
 
     try {
-      return toSuccessResponse(taskService.preview(request.body), traceId);
+      return toSuccessResponse(await taskService.preview(request.body), traceId);
     } catch (error) {
       reply.code(error instanceof ZodError ? 400 : 500);
       return toErrorResponse(error, traceId);
@@ -101,7 +101,7 @@ export function buildServer(taskService = new TaskService()): FastifyInstance {
 
   server.get('/v1/tasks/:taskRunId', async (request, reply) => {
     const { taskRunId } = request.params as { taskRunId: string };
-    const taskRun = taskService.get(taskRunId);
+    const taskRun = await taskService.get(taskRunId);
     if (!taskRun) {
       reply.code(404);
       return {
@@ -119,8 +119,13 @@ export function buildServer(taskService = new TaskService()): FastifyInstance {
 
 export async function start(): Promise<void> {
   const config = loadConfig();
-  const server = buildServer();
+  const { taskService, close } = createRuntimeApiTaskService(config);
+  const server = buildServer(taskService);
   const port = getAppPort(appName, config);
+
+  server.addHook('onClose', async () => {
+    await close();
+  });
 
   await server.listen({ host: config.HOST, port });
   logger.info({ app: appName, port, host: config.HOST }, `${appName} listening`);

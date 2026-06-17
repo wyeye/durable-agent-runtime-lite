@@ -60,6 +60,8 @@ export const runtimeConfigSchema = z.object({
     emptyToUndefined,
     z.enum(['mock', 'temporal']).default('mock'),
   ),
+  RUNTIME_API_ROUTE_SOURCE: z.preprocess(emptyToUndefined, z.enum(['db', 'memory']).default('memory')),
+  TOOL_GATEWAY_REGISTRY_SOURCE: z.preprocess(emptyToUndefined, z.enum(['db', 'memory']).default('memory')),
 });
 
 export type AppName = z.infer<typeof appNameSchema>;

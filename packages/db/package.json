@@ -12,6 +12,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@dar/contracts": "workspace:*",
     "kysely": "^0.28.0",
     "pg": "^8.0.0"
   },
