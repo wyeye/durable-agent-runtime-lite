@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type {
   AuditEvent,
+  FlowExecutionPlan,
   FlowSpec,
   HumanTask,
   HumanTaskCreateRequest,
@@ -15,6 +16,7 @@ import {
   type CapabilityRelease,
   agentSpecSchema,
   auditEventSchema,
+  flowExecutionPlanSchema,
   flowSpecSchema,
   grayPolicySchema,
   humanTaskCreateRequestSchema,
@@ -28,6 +30,8 @@ import {
   toolCallLogSchema,
   toolManifestSchema,
   type AgentSpec,
+  type FlowExecutionPlanAgent,
+  type FlowExecutionPlanTool,
   type RouteResult,
   type WorkflowStartResponse,
 } from '@dar/contracts';
@@ -36,6 +40,7 @@ import type {
   AgentSpecTable,
   AuditEventTable,
   Database,
+  FlowExecutionPlanTable,
   FlowDefinitionTable,
   FlowRouteConfigTable,
   HumanTaskTable,
@@ -73,6 +78,7 @@ export interface CreateTaskRunInput {
   input: unknown;
   routeResult?: RouteResult;
   workflowStart?: WorkflowStartResponse;
+  executionPlanRef?: string;
 }
 
 export interface UpdateTaskRunStatusInput {
@@ -191,6 +197,23 @@ export function parseDbFlowSnapshotRef(ref: string): { flowId: string; version: 
     flowId: decodeURIComponent(match[1] ?? ''),
     version: Number(match[2]),
   };
+}
+
+export function buildToolVersionRef(toolName: string, toolVersion: string): string {
+  return `${toolName}@${toolVersion}`;
+}
+
+export function buildExecutionPlanRef(executionPlanId: string): string {
+  return `db://flow-execution-plan/${encodeURIComponent(executionPlanId)}`;
+}
+
+export function parseExecutionPlanRef(ref: string): { executionPlanId: string } | undefined {
+  const match = /^db:\/\/flow-execution-plan\/([^/]+)$/u.exec(ref);
+  if (!match) {
+    return undefined;
+  }
+
+  return { executionPlanId: decodeURIComponent(match[1] ?? '') };
 }
 
 export class FlowDefinitionRepository {
@@ -339,6 +362,223 @@ export class FlowDefinitionRepository {
       .executeTakeFirstOrThrow();
 
     return flowSpecSchema.parse(saved.spec_json);
+  }
+}
+
+export interface BuildFlowExecutionPlanInput extends RepositoryTenantOptions {
+  flowId: string;
+  flowVersion: number;
+  operatorId?: string;
+  tenantAllowedTools?: readonly string[];
+  generatedAt?: string;
+}
+
+interface VersionRef {
+  id: string;
+  version: number;
+}
+
+interface ToolVersionRef {
+  name: string;
+  version: string;
+}
+
+interface ToolPlanEntryInput {
+  stepId?: string;
+  toolName: string;
+  toolVersion: string;
+  tenantId: string;
+}
+
+export async function buildFlowExecutionPlan(
+  db: Kysely<Database>,
+  input: BuildFlowExecutionPlanInput,
+): Promise<FlowExecutionPlan> {
+  const tenantId = tenant(input);
+  const flow = await new FlowDefinitionRepository(db).getByIdAndVersion(input.flowId, input.flowVersion, { tenantId });
+  if (!flow) {
+    throw new Error(`FlowSpec exact version not found: ${input.flowId}@${input.flowVersion}`);
+  }
+  if (!isDependencyPublishable(flow.status)) {
+    throw new Error(`FlowSpec is not executable for plan generation: ${input.flowId}@${input.flowVersion}`);
+  }
+
+  const agents: FlowExecutionPlanAgent[] = [];
+  const toolEntries = new Map<string, FlowExecutionPlanTool>();
+  const generatedAt = input.generatedAt ?? new Date().toISOString();
+
+  for (const step of flow.spec.steps) {
+    if (step.type === 'tool') {
+      if (!step.tool) {
+        throw new Error(`Flow tool step missing tool name: ${step.id}`);
+      }
+      if (!step.tool_version) {
+        throw new Error(`Flow tool step missing exact tool_version: ${step.id}`);
+      }
+      addToolEntry(toolEntries, await resolveToolPlanEntry(db, {
+        stepId: step.id,
+        toolName: step.tool,
+        toolVersion: step.tool_version,
+        tenantId,
+      }));
+    }
+
+    if (step.type === 'agent') {
+      if (!step.agent_id) {
+        throw new Error(`Flow agent step missing agent_id: ${step.id}`);
+      }
+      const agentVersion = numberFromUnknown(step.input?.agent_version);
+      if (!agentVersion) {
+        throw new Error(`Flow agent step missing exact input.agent_version: ${step.id}`);
+      }
+      const agentRecord = await new AgentSpecRepository(db).getByIdAndVersion(step.agent_id, agentVersion, { tenantId });
+      if (!agentRecord) {
+        throw new Error(`AgentSpec exact version not found: ${step.agent_id}@${agentVersion}`);
+      }
+      if (!isDependencyPublishable(agentRecord.status)) {
+        throw new Error(`AgentSpec is not executable for plan generation: ${step.agent_id}@${agentVersion}`);
+      }
+
+      const promptRef = parseVersionRef(agentRecord.spec.prompt_ref);
+      if (!promptRef) {
+        throw new Error(`Agent prompt_ref must use prompt_id@version: ${agentRecord.spec.agent_id}@${agentRecord.spec.version}`);
+      }
+      const promptRecord = await new PromptDefinitionRepository(db).getByIdAndVersion(promptRef.id, promptRef.version, { tenantId });
+      if (!promptRecord) {
+        throw new Error(`PromptDefinition exact version not found: ${agentRecord.spec.prompt_ref}`);
+      }
+      if (!isDependencyPublishable(promptRecord.status)) {
+        throw new Error(`PromptDefinition is not executable for plan generation: ${agentRecord.spec.prompt_ref}`);
+      }
+
+      const allowedToolRefs = resolveAllowedToolRefs(
+        agentRecord.spec.allowed_tools,
+        flowAllowedToolOverrides(flow.spec, step.id, agentRecord.spec.agent_id),
+        input.tenantAllowedTools,
+      );
+      const allowedTools: string[] = [];
+      for (const allowedTool of allowedToolRefs) {
+        const tool = await resolveToolPlanEntry(db, {
+          toolName: allowedTool.name,
+          toolVersion: allowedTool.version,
+          tenantId,
+        });
+        addToolEntry(toolEntries, tool);
+        allowedTools.push(tool.tool_name);
+      }
+
+      agents.push({
+        step_id: step.id,
+        agent_id: agentRecord.spec.agent_id,
+        agent_version: agentRecord.spec.version,
+        agent_sha256: agentRecord.sha256,
+        prompt_id: promptRecord.spec.prompt_id,
+        prompt_version: promptRecord.spec.version,
+        prompt_sha256: promptRecord.sha256,
+        model_policy: agentRecord.spec.model_policy,
+        allowed_tools: allowedTools,
+        budget: {
+          max_steps: agentRecord.spec.max_steps,
+          max_tokens: agentRecord.spec.max_tokens,
+        },
+      });
+    }
+  }
+
+  const executionPlanId = `plan_${randomUUID()}`;
+  const executionPlanRef = buildExecutionPlanRef(executionPlanId);
+  const tools = [...toolEntries.values()].sort(comparePlanTools);
+  const planWithoutHash = {
+    execution_plan_id: executionPlanId,
+    execution_plan_ref: executionPlanRef,
+    tenant_id: tenantId,
+    flow_id: flow.resource_id,
+    flow_version: flow.version,
+    flow_sha256: flow.sha256,
+    flow_spec: flow.spec,
+    agents,
+    tools,
+    allowed_tools: [...new Set(agents.flatMap((agent) => agent.allowed_tools))].sort(),
+    budget: {
+      max_steps: agents.reduce((sum, agent) => sum + agent.budget.max_steps, 0),
+      max_tokens: agents.reduce((sum, agent) => sum + agent.budget.max_tokens, 0),
+    },
+    generated_at: generatedAt,
+  };
+
+  return flowExecutionPlanSchema.parse({
+    ...planWithoutHash,
+    execution_plan_hash: hashJson(planWithoutHash),
+  });
+}
+
+export class FlowExecutionPlanRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async createForFlow(input: BuildFlowExecutionPlanInput): Promise<FlowExecutionPlan> {
+    const plan = await buildFlowExecutionPlan(this.db, input);
+    const row: Insertable<FlowExecutionPlanTable> = {
+      execution_plan_id: plan.execution_plan_id,
+      execution_plan_ref: plan.execution_plan_ref,
+      tenant_id: plan.tenant_id,
+      flow_id: plan.flow_id,
+      flow_version: plan.flow_version,
+      flow_sha256: plan.flow_sha256,
+      plan_json: plan,
+      execution_plan_hash: plan.execution_plan_hash,
+      generated_at: plan.generated_at,
+    };
+
+    const saved = await this.db
+      .insertInto('flow_execution_plan')
+      .values(row)
+      .onConflict((oc) =>
+        oc.column('execution_plan_ref').doNothing(),
+      )
+      .returningAll()
+      .executeTakeFirst();
+
+    if (saved) {
+      return mapFlowExecutionPlan(saved);
+    }
+
+    const existing = await this.getByRef(plan.execution_plan_ref, { tenantId: plan.tenant_id });
+    if (!existing) {
+      throw new Error(`FlowExecutionPlan insert conflict but existing plan was not found: ${plan.execution_plan_ref}`);
+    }
+    return existing;
+  }
+
+  async getByRef(ref: string, options: RepositoryTenantOptions = {}): Promise<FlowExecutionPlan | undefined> {
+    const parsed = parseExecutionPlanRef(ref);
+    if (!parsed) {
+      return undefined;
+    }
+
+    let query = this.db
+      .selectFrom('flow_execution_plan')
+      .selectAll()
+      .where('execution_plan_id', '=', parsed.executionPlanId);
+
+    if (options.tenantId) {
+      query = query.where('tenant_id', '=', options.tenantId);
+    }
+
+    const row = await query.executeTakeFirst();
+    return row ? mapFlowExecutionPlan(row) : undefined;
+  }
+
+  async getLatestForFlow(flowId: string, version: number, options: RepositoryTenantOptions = {}): Promise<FlowExecutionPlan | undefined> {
+    const row = await this.db
+      .selectFrom('flow_execution_plan')
+      .selectAll()
+      .where('tenant_id', '=', tenant(options))
+      .where('flow_id', '=', flowId)
+      .where('flow_version', '=', version)
+      .orderBy('generated_at', 'desc')
+      .executeTakeFirst();
+
+    return row ? mapFlowExecutionPlan(row) : undefined;
   }
 }
 
@@ -674,6 +914,7 @@ export class TaskRunRepository {
       flow_id: taskRun.flow_id ?? null,
       flow_version: taskRun.flow_version ?? null,
       workflow_id: taskRun.workflow_id ?? null,
+      execution_plan_ref: taskRun.execution_plan_ref ?? input.executionPlanRef ?? null,
       status: taskRun.status,
       error_code: taskRun.error_code ?? null,
       error_message: taskRun.error_message ?? null,
@@ -922,6 +1163,14 @@ export class HumanTaskRepository {
     status: HumanTask['status'],
     input: HumanTaskDecisionInput,
   ): Promise<HumanTask | undefined> {
+    const existing = await this.get(humanTaskId);
+    if (!existing || (input.tenantId && existing.tenant_id !== input.tenantId)) {
+      return undefined;
+    }
+    if (existing.status !== 'pending' && existing.status !== 'created' && existing.status !== 'assigned') {
+      return existing;
+    }
+
     const decidedAt = new Date();
     let query = this.db
       .updateTable('human_task')
@@ -1366,6 +1615,130 @@ function tenant(options: RepositoryTenantOptions): string {
   return options.tenantId ?? 'default';
 }
 
+function isDependencyPublishable(status: SpecStatus): boolean {
+  return status === 'published' || status === 'gray';
+}
+
+function parseVersionRef(ref: string): VersionRef | undefined {
+  const match = /^(.+)@([1-9]\d*)$/u.exec(ref);
+  if (!match) {
+    return undefined;
+  }
+  return { id: match[1] ?? '', version: Number(match[2]) };
+}
+
+function parseToolVersionRef(ref: string): ToolVersionRef | undefined {
+  const match = /^(.+)@([^@]+)$/u.exec(ref);
+  if (!match) {
+    return undefined;
+  }
+  return { name: match[1] ?? '', version: match[2] ?? '' };
+}
+
+function flowAllowedToolOverrides(flowSpec: FlowSpec, stepId: string, agentId: string): string[] | undefined {
+  const fromMetadata = flowSpec.metadata?.allowed_tools;
+  if (isRecord(fromMetadata)) {
+    const byStep = fromMetadata[stepId];
+    if (Array.isArray(byStep)) {
+      return byStep.map(String);
+    }
+    const byAgent = fromMetadata[agentId];
+    if (Array.isArray(byAgent)) {
+      return byAgent.map(String);
+    }
+  }
+  if (Array.isArray(fromMetadata)) {
+    return fromMetadata.map(String);
+  }
+  return undefined;
+}
+
+function resolveAllowedToolRefs(
+  agentAllowedTools: string[],
+  flowOverride: string[] | undefined,
+  tenantAllowedTools: readonly string[] | undefined,
+): ToolVersionRef[] {
+  const agentRefs = parseToolVersionRefs(agentAllowedTools, 'AgentSpec.allowed_tools');
+  const overrideRefs = flowOverride ? parseToolVersionRefs(flowOverride, 'FlowSpec allowed_tools override') : agentRefs;
+  const tenantNames = tenantAllowedTools ? new Set(tenantAllowedTools) : undefined;
+  const agentKeys = new Set(agentRefs.map((ref) => buildToolVersionRef(ref.name, ref.version)));
+  const selected: ToolVersionRef[] = [];
+  for (const ref of overrideRefs) {
+    const key = buildToolVersionRef(ref.name, ref.version);
+    if (!agentKeys.has(key)) {
+      throw new Error(`Flow allowed_tools override is not permitted by AgentSpec: ${key}`);
+    }
+    if (tenantNames && !tenantNames.has(ref.name) && !tenantNames.has(key)) {
+      continue;
+    }
+    selected.push(ref);
+  }
+  return selected;
+}
+
+function parseToolVersionRefs(values: string[], label: string): ToolVersionRef[] {
+  return values.map((value) => {
+    const parsed = parseToolVersionRef(value);
+    if (!parsed?.name || !parsed.version) {
+      throw new Error(`${label} must use tool_name@tool_version exact refs: ${value}`);
+    }
+    return parsed;
+  });
+}
+
+async function resolveToolPlanEntry(
+  db: Kysely<Database>,
+  input: ToolPlanEntryInput,
+): Promise<FlowExecutionPlanTool> {
+  const repository = new ToolManifestRepository(db);
+  const numericVersion = manifestVersionToRegistryVersion(input.toolVersion);
+  const toolRecord = await repository.getByIdAndVersion(input.toolName, numericVersion, { tenantId: input.tenantId });
+  if (!toolRecord) {
+    throw new Error(`ToolManifest exact version not found: ${input.toolName}@${input.toolVersion}`);
+  }
+  if (toolRecord.spec.version !== input.toolVersion) {
+    throw new Error(`ToolManifest version mismatch: requested ${input.toolName}@${input.toolVersion}, got ${toolRecord.spec.version}`);
+  }
+  if (!isDependencyPublishable(toolRecord.status)) {
+    throw new Error(`ToolManifest is not executable for plan generation: ${input.toolName}@${input.toolVersion}`);
+  }
+
+  return {
+    ...(input.stepId ? { step_id: input.stepId } : {}),
+    tool_name: toolRecord.spec.tool_name,
+    tool_version: toolRecord.spec.version,
+    tool_sha256: toolRecord.sha256,
+    risk_level: toolRecord.spec.risk_level,
+  };
+}
+
+function manifestVersionToRegistryVersion(toolVersion: string): number {
+  const [major] = toolVersion.split('.');
+  const parsed = Number(major);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`ToolManifest version must start with a positive numeric major: ${toolVersion}`);
+  }
+  return parsed;
+}
+
+function addToolEntry(entries: Map<string, FlowExecutionPlanTool>, tool: FlowExecutionPlanTool): void {
+  const key = buildToolVersionRef(tool.tool_name, tool.tool_version);
+  const existing = entries.get(key);
+  if (existing && existing.tool_sha256 !== tool.tool_sha256) {
+    throw new Error(`ToolManifest hash conflict in execution plan: ${key}`);
+  }
+  entries.set(key, existing ? { ...existing, step_id: existing.step_id ?? tool.step_id } : tool);
+}
+
+function comparePlanTools(left: FlowExecutionPlanTool, right: FlowExecutionPlanTool): number {
+  const byName = left.tool_name.localeCompare(right.tool_name);
+  return byName === 0 ? left.tool_version.localeCompare(right.tool_version) : byName;
+}
+
+function numberFromUnknown(value: unknown): number | undefined {
+  return Number.isInteger(value) && Number(value) > 0 ? Number(value) : undefined;
+}
+
 function manifestSpecVersion(manifest: ToolManifest): number {
   const [major] = manifest.version.split('.');
   const parsed = Number(major);
@@ -1404,6 +1777,9 @@ function mapTaskRun(row: Selectable<TaskRunTable>): TaskRun {
   if (row.workflow_id) {
     taskRun.workflow_id = row.workflow_id;
   }
+  if (row.execution_plan_ref) {
+    taskRun.execution_plan_ref = row.execution_plan_ref;
+  }
   if (row.error_code) {
     taskRun.error_code = row.error_code;
   }
@@ -1412,6 +1788,38 @@ function mapTaskRun(row: Selectable<TaskRunTable>): TaskRun {
   }
 
   return taskRunSchema.parse(taskRun);
+}
+
+function mapFlowExecutionPlan(row: Selectable<FlowExecutionPlanTable>): FlowExecutionPlan {
+  const plan = flowExecutionPlanSchema.parse({
+    ...(isRecord(row.plan_json) ? row.plan_json : {}),
+    execution_plan_id: row.execution_plan_id,
+    execution_plan_ref: row.execution_plan_ref,
+    tenant_id: row.tenant_id,
+    flow_id: row.flow_id,
+    flow_version: row.flow_version,
+    flow_sha256: row.flow_sha256,
+    execution_plan_hash: row.execution_plan_hash,
+    generated_at: toIso(row.generated_at),
+  });
+  const expectedHash = hashJson({
+    execution_plan_id: plan.execution_plan_id,
+    execution_plan_ref: plan.execution_plan_ref,
+    tenant_id: plan.tenant_id,
+    flow_id: plan.flow_id,
+    flow_version: plan.flow_version,
+    flow_sha256: plan.flow_sha256,
+    flow_spec: plan.flow_spec,
+    agents: plan.agents,
+    tools: plan.tools,
+    allowed_tools: plan.allowed_tools,
+    budget: plan.budget,
+    generated_at: plan.generated_at,
+  });
+  if (expectedHash !== plan.execution_plan_hash) {
+    throw new Error(`FlowExecutionPlan hash mismatch: ${plan.execution_plan_ref}`);
+  }
+  return plan;
 }
 
 function mapAuditEvent(row: Selectable<AuditEventTable>): AuditEvent {

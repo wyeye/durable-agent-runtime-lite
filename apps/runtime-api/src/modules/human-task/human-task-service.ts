@@ -15,6 +15,7 @@ import {
   type ToolCallLog,
 } from '@dar/contracts';
 import type { HumanTaskDecisionInput, ListHumanTasksOptions, ToolCallLogUpdateInput } from '@dar/db';
+import type { HumanTaskDecisionSignalInput } from '@dar/temporal';
 
 export interface HumanTaskStore {
   get(humanTaskId: string): Promise<HumanTask | undefined>;
@@ -31,21 +32,28 @@ export interface HumanTaskToolCallLogStore {
   update(toolCallId: string, input: ToolCallLogUpdateInput): Promise<ToolCallLog | undefined>;
 }
 
+export interface HumanTaskDecisionSignalSender {
+  send(input: HumanTaskDecisionSignalInput): Promise<void>;
+}
+
 export interface HumanTaskServiceOptions {
   store?: HumanTaskStore;
   auditStore?: HumanTaskAuditStore;
   toolCallLogStore?: HumanTaskToolCallLogStore;
+  signalSender?: HumanTaskDecisionSignalSender;
 }
 
 export class HumanTaskService {
   private readonly store: HumanTaskStore;
   private readonly auditStore: HumanTaskAuditStore;
   private readonly toolCallLogStore: HumanTaskToolCallLogStore | undefined;
+  private readonly signalSender: HumanTaskDecisionSignalSender | undefined;
 
   constructor(options: HumanTaskServiceOptions = {}) {
     this.store = options.store ?? new InMemoryHumanTaskStore();
     this.auditStore = options.auditStore ?? new InMemoryHumanTaskAuditStore();
     this.toolCallLogStore = options.toolCallLogStore;
+    this.signalSender = options.signalSender;
   }
 
   async list(input: unknown): Promise<HumanTaskListResponse> {
@@ -85,6 +93,8 @@ export class HumanTaskService {
     status: 'approved' | 'rejected',
   ): Promise<HumanTaskDecisionResponse | undefined> {
     const parsed = humanTaskDecisionRequestSchema.parse(input);
+    const before = await this.store.get(humanTaskId);
+    const wasPending = before?.status === 'pending' || before?.status === 'created' || before?.status === 'assigned';
     const decisionInput: HumanTaskDecisionInput = {
       tenantId: parsed.tenant_id,
       decidedBy: parsed.user_id,
@@ -100,30 +110,46 @@ export class HumanTaskService {
     }
 
     const toolCallId = stringValue(humanTask.payload.tool_call_id);
-    if (toolCallId && this.toolCallLogStore) {
+    if (wasPending && toolCallId && this.toolCallLogStore) {
       await this.toolCallLogStore.update(toolCallId, { status });
     }
 
-    const auditEvent = await this.auditStore.append({
-      tenant_id: humanTask.tenant_id,
-      actor_id: parsed.user_id,
-      action: status === 'approved' ? 'human_task.approve' : 'human_task.reject',
-      target_type: 'human_task',
-      target_id: humanTask.human_task_id,
-      result: status === 'approved' ? 'allowed' : 'denied',
-      ...(parsed.decision_reason ? { reason: parsed.decision_reason } : {}),
-      ...(parsed.request_id ? { trace_id: parsed.request_id } : {}),
-      payload: {
+    if (wasPending && this.signalSender && humanTask.workflow_id) {
+      await this.signalSender.send({
+        human_task_id: humanTask.human_task_id,
+        tenant_id: humanTask.tenant_id,
         task_run_id: humanTask.task_run_id,
-        tool_call_id: toolCallId,
-        decision_payload: parsed.payload,
-        ...(humanTask.workflow_id ? { workflow_id: humanTask.workflow_id } : {}),
-      },
-    });
+        workflow_id: humanTask.workflow_id,
+        status,
+        ...(humanTask.decision ? { decision: humanTask.decision } : {}),
+        ...(humanTask.decided_by ? { decided_by: humanTask.decided_by } : {}),
+        ...(humanTask.decided_at ? { decided_at: humanTask.decided_at } : {}),
+        ...(humanTask.decision_reason ? { decision_reason: humanTask.decision_reason } : {}),
+      });
+    }
+
+    const auditEvent = wasPending
+      ? await this.auditStore.append({
+          tenant_id: humanTask.tenant_id,
+          actor_id: parsed.user_id,
+          action: status === 'approved' ? 'human_task.approve' : 'human_task.reject',
+          target_type: 'human_task',
+          target_id: humanTask.human_task_id,
+          result: status === 'approved' ? 'allowed' : 'denied',
+          ...(parsed.decision_reason ? { reason: parsed.decision_reason } : {}),
+          ...(parsed.request_id ? { trace_id: parsed.request_id } : {}),
+          payload: {
+            task_run_id: humanTask.task_run_id,
+            tool_call_id: toolCallId,
+            decision_payload: parsed.payload,
+            ...(humanTask.workflow_id ? { workflow_id: humanTask.workflow_id } : {}),
+          },
+        })
+      : undefined;
 
     return humanTaskDecisionResponseSchema.parse({
       human_task: humanTask,
-      audit_event_id: auditEvent.event_id,
+      audit_event_id: auditEvent?.event_id,
     });
   }
 }
@@ -175,6 +201,9 @@ export class InMemoryHumanTaskStore implements HumanTaskStore {
     const existing = this.tasks.get(humanTaskId);
     if (!existing || (input.tenantId && existing.tenant_id !== input.tenantId)) {
       return undefined;
+    }
+    if (existing.status !== 'pending' && existing.status !== 'created' && existing.status !== 'assigned') {
+      return existing;
     }
 
     const decidedAt = new Date().toISOString();

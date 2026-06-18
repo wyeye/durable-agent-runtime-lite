@@ -50,6 +50,8 @@ RUNTIME_WORKER_MODE=mock
 
 DB 模式下不会回退到内置 sample RouteSpec 或 ToolManifest。缺失 RouteSpec 会返回明确未命中，缺失 ToolManifest 会返回 `TOOL_NOT_FOUND`。生产或 Docker smoke 路径必须使用 DB source；不能用 `defaultRouteSpecs`、`sample_flow@1` 或 memory tool registry 伪造成功。
 
+发布 Flow 时会生成不可变 `FlowExecutionPlan`。runtime-api 启动 `ConfigDrivenWorkflow` 时只传 `execution_plan_ref`，runtime-worker 按该 ref 加载计划，不在运行时选择 `latest` Flow/Agent/Prompt/Tool 版本。
+
 ## 本地基础设施
 
 ```bash
@@ -134,7 +136,7 @@ control-plane:
 
 1. `POST /v1/tasks` 到 `runtime-api`，文本包含 `mvp` 或 `知识搜索`。
 2. `runtime-api` 命中 memory `sample_flow`，创建 TaskRun，并使用 mock Workflow Starter 返回 workflow id。
-3. `runtime-worker` 可通过 FlowSpec snapshot/ref 跑通 `input.normalize -> knowledge.search -> agent.plan -> record.write.mock`。
+3. `runtime-worker` 通过 `execution_plan_ref` 加载不可变 FlowExecutionPlan，跑通 `input.normalize -> knowledge.search -> agent.plan -> record.write.mock`。
 4. `record.write.mock` 是 L3 side-effect 工具，真实路径会走 `preview -> human confirm -> commit`；不能通过直接 `invoke` 执行副作用。
 
 DB Registry -> mock execution 窄闭环：
@@ -166,7 +168,7 @@ corepack pnpm smoke:control-plane-api-e2e
 2. `POST /v1/router/preview` 命中 DB seed 的 `sample_route`，请求文本使用 `db-smoke`，不会被内置 `defaultRouteSpecs` 命中；
 3. `POST /v1/tasks` 返回真实 Temporal `workflow_id` 和 `task_run_id`；
 4. `GET /v1/tasks/:taskRunId` 轮询到 `completed`；
-5. 遇到 L3 `record.write.mock` 时查询 pending `human_task`，调用 runtime-api approve；
+5. 遇到 L3 `record.write.mock` 时查询 pending `human_task`，调用 runtime-api approve；runtime-api 先写 DB 决策，再向对应 Temporal workflow 发送 Human Task Signal；
 6. DB `task_run` 状态为 `completed`；
 7. DB `audit_event` 有 `tool.preview`、`human_task.approve`、`tool.commit`；
 8. DB `tool_call_log` 中 L3 工具从 `pending_confirmation` 进入 `committed`；

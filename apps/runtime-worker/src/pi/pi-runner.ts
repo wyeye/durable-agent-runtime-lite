@@ -1,14 +1,21 @@
 import { agentRunResultSchema, type AgentRunRequest, type AgentRunResult } from '@dar/contracts';
 
 export async function runPiAgent(request: AgentRunRequest): Promise<AgentRunResult> {
-  if (request.allowed_tools.includes('record.write.mock')) {
+  const recordWriteTool = request.allowed_tools
+    .map((toolRef) => {
+      const [toolName, toolVersion] = toolRef.split('@');
+      return toolName && toolVersion ? { toolName, toolVersion } : undefined;
+    })
+    .find((tool) => tool?.toolName === 'record.write.mock');
+
+  if (recordWriteTool) {
     return agentRunResultSchema.parse({
       status: 'need_tool',
       final_answer: 'Mock agent generated a record write proposal.',
       proposed_tool_calls: [
         {
-          tool_name: 'record.write.mock',
-          tool_version: '1.0.0',
+          tool_name: recordWriteTool.toolName,
+          tool_version: recordWriteTool.toolVersion,
           risk_level: 'L3',
           arguments: {
             record: {

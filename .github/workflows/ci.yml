@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: durable_agent_runtime
+          POSTGRES_USER: dar
+          POSTGRES_PASSWORD: dar_local_password
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd "pg_isready -U dar -d durable_agent_runtime"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Run migrations
+        run: pnpm db:migrate
+
+      - name: PostgreSQL repository tests
+        run: RUN_POSTGRES_TESTS=1 pnpm --filter @dar/db test
+
+      - name: PostgreSQL registry release tests
+        run: RUN_POSTGRES_TESTS=1 pnpm --filter @dar/control-plane test
+
+      - name: Docker Compose config
+        run: docker compose -f infra/docker-compose.yml config

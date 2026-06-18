@@ -8,7 +8,7 @@ import {
   type WorkflowStartRequest,
   type WorkflowStartResponse,
 } from '@dar/contracts';
-import { TASK_QUEUES } from '@dar/temporal';
+import { TASK_QUEUES, WORKFLOW_SIGNALS, type HumanTaskDecisionSignalInput } from '@dar/temporal';
 
 export interface WorkflowStarter {
   start(request: WorkflowStartRequest): Promise<WorkflowStartResponse>;
@@ -53,6 +53,23 @@ export class TemporalWorkflowStarter implements WorkflowStarter {
       started: true,
       mode: 'temporal',
     });
+  }
+}
+
+export class TemporalHumanTaskSignalSender {
+  private readonly clientPromise: Promise<Client>;
+
+  constructor(config: RuntimeConfig = loadConfig()) {
+    this.clientPromise = createTemporalClient(config);
+  }
+
+  async send(input: HumanTaskDecisionSignalInput): Promise<void> {
+    const client = await this.clientPromise;
+    const workflowId = input.workflow_id;
+    if (!workflowId) {
+      throw new Error(`HumanTask ${input.human_task_id} is missing workflow_id`);
+    }
+    await client.workflow.getHandle(workflowId).signal(WORKFLOW_SIGNALS.humanTaskDecision, input);
   }
 }
 

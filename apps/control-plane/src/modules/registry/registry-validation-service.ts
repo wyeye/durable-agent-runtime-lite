@@ -58,14 +58,23 @@ export class RegistryValidationService {
 
     for (const step of parsed.steps) {
       if (step.type === 'tool' && step.tool) {
-        const tool = await this.repositories.tools.getLatestVersion(step.tool, tenantOptions(options));
+        const toolVersion = parseToolVersion(step.tool_version);
+        if (!toolVersion) {
+          addError(context, 'FLOW_TOOL_VERSION_REQUIRED', `Tool step must pin exact tool_version: ${step.tool}`, `steps.${step.id}.tool_version`);
+          continue;
+        }
+        const tool = await this.repositories.tools.getByIdAndVersion(step.tool, toolVersion.registryVersion, tenantOptions(options));
         addDependency(context, 'flow', parsed.flow_id, parsed.version, 'tool', step.tool, tool?.version, tool?.status, 'uses_tool');
         if (!tool) {
-          addError(context, 'FLOW_TOOL_NOT_FOUND', `ToolManifest not found: ${step.tool}`, `steps.${step.id}.tool`);
+          addError(context, 'FLOW_TOOL_NOT_FOUND', `ToolManifest not found: ${step.tool}@${step.tool_version}`, `steps.${step.id}.tool`);
+          continue;
+        }
+        if (tool.spec.version !== step.tool_version) {
+          addError(context, 'FLOW_TOOL_VERSION_MISMATCH', `ToolManifest exact version not found: ${step.tool}@${step.tool_version}`, `steps.${step.id}.tool_version`);
           continue;
         }
         if (!isDependencyPublishable(tool.status)) {
-          addError(context, 'FLOW_TOOL_NOT_PUBLISHABLE', `ToolManifest is not published or gray: ${step.tool}`, `steps.${step.id}.tool`);
+          addError(context, 'FLOW_TOOL_NOT_PUBLISHABLE', `ToolManifest is not published or gray: ${step.tool}@${step.tool_version}`, `steps.${step.id}.tool`);
         }
         if (tool.spec.risk_level === 'L3' && step.mode !== 'preview_commit') {
           addError(context, 'FLOW_L3_TOOL_NEEDS_CONFIRMATION', `L3 tool must use preview_commit mode: ${step.tool}`, `steps.${step.id}.mode`);
@@ -76,10 +85,17 @@ export class RegistryValidationService {
       }
 
       if (step.type === 'agent' && step.agent_id) {
-        const agent = await this.repositories.agents.getLatestVersion(step.agent_id, tenantOptions(options));
+        const agentVersion = typeof step.input?.agent_version === 'number' && Number.isInteger(step.input.agent_version)
+          ? step.input.agent_version
+          : undefined;
+        if (!agentVersion) {
+          addError(context, 'FLOW_AGENT_VERSION_REQUIRED', `Agent step must pin exact input.agent_version: ${step.agent_id}`, `steps.${step.id}.input.agent_version`);
+          continue;
+        }
+        const agent = await this.repositories.agents.getByIdAndVersion(step.agent_id, agentVersion, tenantOptions(options));
         addDependency(context, 'flow', parsed.flow_id, parsed.version, 'agent', step.agent_id, agent?.version, agent?.status, 'uses_agent');
         if (!agent) {
-          addError(context, 'FLOW_AGENT_NOT_FOUND', `AgentSpec not found: ${step.agent_id}`, `steps.${step.id}.agent_id`);
+          addError(context, 'FLOW_AGENT_NOT_FOUND', `AgentSpec not found: ${step.agent_id}@${agentVersion}`, `steps.${step.id}.agent_id`);
           continue;
         }
         if (!isDependencyPublishable(agent.status)) {
@@ -227,10 +243,17 @@ export class RegistryValidationService {
     }
 
     for (const toolName of agentSpec.allowed_tools) {
-      const tool = await this.repositories.tools.getLatestVersion(toolName, tenantOptions(options));
-      addDependency(context, 'agent', ownerId, ownerVersion, 'tool', toolName, tool?.version, tool?.status, 'allows_tool');
+      const toolRef = parseToolRef(toolName);
+      if (!toolRef) {
+        addError(context, 'AGENT_TOOL_REF_INVALID', `allowed_tools must use tool_name@tool_version: ${toolName}`, 'allowed_tools');
+        continue;
+      }
+      const tool = await this.repositories.tools.getByIdAndVersion(toolRef.name, toolRef.registryVersion, tenantOptions(options));
+      addDependency(context, 'agent', ownerId, ownerVersion, 'tool', toolRef.name, tool?.version, tool?.status, 'allows_tool');
       if (!tool) {
         addError(context, 'AGENT_TOOL_NOT_FOUND', `Allowed tool not found: ${toolName}`, 'allowed_tools');
+      } else if (tool.spec.version !== toolRef.version) {
+        addError(context, 'AGENT_TOOL_VERSION_MISMATCH', `Allowed tool exact version not found: ${toolName}`, 'allowed_tools');
       } else if (!isDependencyPublishable(tool.status)) {
         addError(context, 'AGENT_TOOL_NOT_PUBLISHABLE', `Allowed tool is not published or gray: ${toolName}`, 'allowed_tools');
       }
@@ -319,6 +342,26 @@ function validateSafeStringArray(values: string[], context: ValidationContext, c
       addError(context, code, `Invalid value: ${value}`, path);
     }
   }
+}
+
+function parseToolVersion(version: string | undefined): { version: string; registryVersion: number } | undefined {
+  if (!version) {
+    return undefined;
+  }
+  const [major] = version.split('.');
+  const registryVersion = Number(major);
+  return Number.isInteger(registryVersion) && registryVersion > 0
+    ? { version, registryVersion }
+    : undefined;
+}
+
+function parseToolRef(value: string): { name: string; version: string; registryVersion: number } | undefined {
+  const match = /^(.+)@([^@]+)$/u.exec(value);
+  if (!match) {
+    return undefined;
+  }
+  const parsed = parseToolVersion(match[2]);
+  return parsed ? { name: match[1] ?? '', version: parsed.version, registryVersion: parsed.registryVersion } : undefined;
 }
 
 function parseWithIssues<T>(

@@ -7,6 +7,7 @@ import {
   cloneVersionRequestSchema,
   createDraftRequestSchema,
   dashboardSummaryResponseSchema,
+  flowExecutionPlanSchema,
   flowSpecSchema,
   grayResourceRequestSchema,
   humanTaskCreateRequestSchema,
@@ -120,6 +121,7 @@ describe('contracts schemas', () => {
       user_id: 'user_1',
       task_run_id: 'task_1',
       agent_id: 'sample_agent',
+      allowed_tools: [],
     }).allowed_tools).toEqual([]);
 
     expect(agentRunResultSchema.parse({ status: 'final', final_answer: 'ok' }).status).toBe('final');
@@ -171,12 +173,21 @@ describe('contracts schemas', () => {
     expect(toolCommitRequestSchema.parse({
       tool_call_id: 'tool_call_1',
       tool_name: 'record.write.mock',
+      tool_version: '1.0.0',
       tenant_id: 'tenant_1',
       user_context: { user_id: 'user_1' },
       task_context: { task_run_id: 'task_1' },
       arguments: { record: { title: 'demo' } },
       idempotency_key: 'task_1:record.write.mock:commit',
     }).tool_version).toBe('1.0.0');
+
+    expect(() => toolCommitRequestSchema.parse({
+      tool_call_id: 'tool_call_1',
+      tool_name: 'record.write.mock',
+      tenant_id: 'tenant_1',
+      arguments: { record: { title: 'demo' } },
+      idempotency_key: 'task_1:record.write.mock:commit',
+    })).toThrow();
 
     expect(toolCommitResponseSchema.parse({
       tool_call_id: 'tool_call_1',
@@ -237,6 +248,59 @@ describe('contracts schemas', () => {
       mode: 'preview',
       idempotency_key: 'task_1:record.write.mock:preview',
     }).risk_level).toBe('L3');
+  });
+
+  it('validates immutable FlowExecutionPlan schema', () => {
+    const flowSpec = {
+      flow_id: 'flow_1',
+      version: 1,
+      runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
+      steps: [
+        { id: 'search', type: 'tool', tool: 'knowledge.search', tool_version: '1.0.0' },
+        { id: 'agent', type: 'agent', agent_id: 'agent_1', input: { agent_version: 2 } },
+      ],
+    };
+    const hash = 'a'.repeat(64);
+    const plan = flowExecutionPlanSchema.parse({
+      execution_plan_id: 'plan_1',
+      execution_plan_ref: 'db://flow-execution-plan/plan_1',
+      tenant_id: 'tenant_1',
+      flow_id: 'flow_1',
+      flow_version: 1,
+      flow_sha256: hash,
+      flow_spec: flowSpec,
+      agents: [
+        {
+          step_id: 'agent',
+          agent_id: 'agent_1',
+          agent_version: 2,
+          agent_sha256: hash,
+          prompt_id: 'prompt_1',
+          prompt_version: 3,
+          prompt_sha256: hash,
+          model_policy: 'mock',
+          allowed_tools: ['knowledge.search'],
+          budget: { max_steps: 4, max_tokens: 1000 },
+        },
+      ],
+      tools: [
+        {
+          step_id: 'search',
+          tool_name: 'knowledge.search',
+          tool_version: '1.0.0',
+          tool_sha256: hash,
+          risk_level: 'L1',
+        },
+      ],
+      allowed_tools: ['knowledge.search'],
+      budget: { max_steps: 4, max_tokens: 1000 },
+      generated_at: '2026-01-01T00:00:00.000Z',
+      execution_plan_hash: hash,
+    });
+
+    expect(plan.agents[0]?.prompt_version).toBe(3);
+    expect(plan.tools[0]?.tool_sha256).toBe(hash);
+    expect(() => flowExecutionPlanSchema.parse({ ...plan, flow_sha256: 'not-a-sha' })).toThrow();
   });
 
   it('validates control-plane management API DTOs', () => {

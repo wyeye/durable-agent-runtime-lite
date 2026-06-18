@@ -229,7 +229,7 @@ function agentSpec(ids: { agent: string; prompt: string; tool: string }, version
     version,
     prompt_ref: `${ids.prompt}@1`,
     model_policy: 'mock',
-    allowed_tools: [ids.tool],
+    allowed_tools: [`${ids.tool}@1.0.0`],
     max_steps: 3,
     max_tokens: 1000,
     output_schema: 'ui_smoke_agent_result_v1',
@@ -249,8 +249,8 @@ function flowSpec(ids: { flow: string; tool: string; agent: string }, version: n
     },
     steps: [
       { id: 'start', type: 'activity', activity: 'input.normalize' },
-      { id: 'call_tool', type: 'tool', tool: ids.tool, input: { query: '${text}' } },
-      { id: 'agent_step', type: 'agent', agent_id: ids.agent },
+      { id: 'call_tool', type: 'tool', tool: ids.tool, tool_version: '1.0.0', input: { query: '${text}' } },
+      { id: 'agent_step', type: 'agent', agent_id: ids.agent, input: { agent_version: 1 } },
     ],
   };
 }

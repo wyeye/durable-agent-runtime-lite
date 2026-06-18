@@ -10,6 +10,7 @@ import {
 import {
   closeDb,
   createDb,
+  FlowExecutionPlanRepository,
   FlowDefinitionRepository,
   RouteConfigRepository,
   ToolManifestRepository,
@@ -61,6 +62,12 @@ export async function seedExamples(databaseUrl = process.env.DATABASE_URL ?? def
     });
     await upsertAgentSpec(db, agent, { tenantId, status: 'published', createdBy: 'seed-examples' });
     await upsertPromptDefinition(db, prompt, { tenantId, status: 'published', createdBy: 'seed-examples' });
+    await new FlowExecutionPlanRepository(db).createForFlow({
+      tenantId,
+      flowId: flow.flow_id,
+      flowVersion: flow.version,
+      operatorId: 'seed-examples',
+    });
   } finally {
     await closeDb(db);
   }

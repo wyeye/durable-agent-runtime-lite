@@ -1,5 +1,8 @@
 import type {
   AgentRunResult,
+  FlowExecutionPlan,
+  FlowExecutionPlanAgent,
+  FlowExecutionPlanTool,
   FlowSpec,
   HumanTask,
   ToolCommitResponse,
@@ -11,19 +14,18 @@ import { evaluateCondition } from './condition-evaluator.js';
 
 export interface FlowExecutionActivities {
   normalizeInput(input: unknown): Promise<Record<string, unknown>>;
-  invokeTool(context: ActivityContext, toolName: string, args: Record<string, unknown>): Promise<ToolInvokeResponse>;
-  previewTool(context: ActivityContext, toolName: string, args: Record<string, unknown>): Promise<ToolPreviewResponse>;
+  invokeTool(context: ActivityContext, tool: FlowExecutionPlanTool, args: Record<string, unknown>): Promise<ToolInvokeResponse>;
+  previewTool(context: ActivityContext, tool: FlowExecutionPlanTool, args: Record<string, unknown>): Promise<ToolPreviewResponse>;
   commitTool(
     context: ActivityContext,
     toolCallId: string,
-    toolName: string,
+    tool: FlowExecutionPlanTool,
     args: Record<string, unknown>,
   ): Promise<ToolCommitResponse>;
   runAgent(
     context: ActivityContext,
-    agentId: string,
+    agent: FlowExecutionPlanAgent,
     input: Record<string, unknown>,
-    allowedTools?: string[],
   ): Promise<AgentRunResult>;
   createHumanTask(context: ActivityContext, input?: CreateHumanTaskActivityInput): Promise<HumanTask>;
   waitForHumanTaskDecision(context: ActivityContext, humanTaskId: string): Promise<HumanTask>;
@@ -37,11 +39,13 @@ export interface FlowExecutionResult {
 }
 
 export async function executeFlowSpec(
-  flowSpec: FlowSpec,
+  flowSpecOrPlan: FlowSpec | FlowExecutionPlan,
   context: ActivityContext,
   input: unknown,
   activities: FlowExecutionActivities,
 ): Promise<FlowExecutionResult> {
+  const flowSpec = isExecutionPlan(flowSpecOrPlan) ? flowSpecOrPlan.flow_spec : flowSpecOrPlan;
+  const plan = isExecutionPlan(flowSpecOrPlan) ? flowSpecOrPlan : undefined;
   const state: Record<string, unknown> = { input, steps: {} };
 
   for (const step of flowSpec.steps) {
@@ -58,9 +62,10 @@ export async function executeFlowSpec(
       if (!step.tool) {
         throw new Error(`tool step ${step.id} missing tool`);
       }
+      const plannedTool = resolvePlannedTool(plan, step.id, step.tool);
       const args = resolveToolArguments(step.input, state, input);
-      if (step.risk_level === 'L3') {
-        const preview = await activities.previewTool(context, step.tool, args);
+      if (plannedTool.risk_level === 'L3') {
+        const preview = await activities.previewTool(context, plannedTool, args);
         if (preview.status === 'denied') {
           setStepResult(state, step.id, {
             status: 'failed',
@@ -76,12 +81,13 @@ export async function executeFlowSpec(
 
         const humanTask = await activities.createHumanTask(context, {
           tool_call_id: preview.tool_call_id,
-          tool_name: step.tool,
+          tool_name: plannedTool.tool_name,
           payload: {
             step_id: step.id,
             tool_call_id: preview.tool_call_id,
-            tool_name: step.tool,
-            tool_version: preview.tool_version,
+            tool_name: plannedTool.tool_name,
+            tool_version: plannedTool.tool_version,
+            tool_sha256: plannedTool.tool_sha256,
             preview,
             arguments: args,
           },
@@ -94,7 +100,7 @@ export async function executeFlowSpec(
 
         const decision = await activities.waitForHumanTaskDecision(context, humanTask.human_task_id);
         if (decision.status === 'approved') {
-          const commit = await activities.commitTool(context, preview.tool_call_id, step.tool, args);
+          const commit = await activities.commitTool(context, preview.tool_call_id, plannedTool, args);
           setStepResult(state, step.id, {
             status: commit.status === 'committed' || commit.status === 'replayed' ? 'committed' : 'failed',
             preview,
@@ -106,7 +112,7 @@ export async function executeFlowSpec(
               status: 'failed',
               steps: state,
               error_code: commit.error?.code ?? 'TOOL_COMMIT_FAILED',
-              error_message: commit.error?.message ?? `Tool commit failed: ${step.tool}`,
+              error_message: commit.error?.message ?? `Tool commit failed: ${plannedTool.tool_name}`,
             };
           }
           continue;
@@ -129,7 +135,7 @@ export async function executeFlowSpec(
         };
       }
 
-      const response = await activities.invokeTool(context, step.tool, args);
+      const response = await activities.invokeTool(context, plannedTool, args);
       setStepResult(
         state,
         step.id,
@@ -140,17 +146,18 @@ export async function executeFlowSpec(
           status: 'failed',
           steps: state,
           error_code: response.error?.code ?? 'TOOL_INVOKE_FAILED',
-          error_message: response.error?.message ?? `Tool invoke failed: ${step.tool}`,
+          error_message: response.error?.message ?? `Tool invoke failed: ${plannedTool.tool_name}`,
         };
       }
       continue;
     }
 
     if (step.type === 'agent') {
+      const plannedAgent = resolvePlannedAgent(plan, step.id, step.agent_id);
       setStepResult(
         state,
         step.id,
-        await activities.runAgent(context, step.agent_id ?? 'sample-agent', resolveStepInput(step.input, state, input)),
+        await activities.runAgent(context, plannedAgent, resolveStepInput(step.input, state, input)),
       );
       continue;
     }
@@ -172,6 +179,32 @@ export async function executeFlowSpec(
   }
 
   return { status: 'completed', steps: state };
+}
+
+function isExecutionPlan(value: FlowSpec | FlowExecutionPlan): value is FlowExecutionPlan {
+  return 'execution_plan_ref' in value && 'flow_spec' in value;
+}
+
+function resolvePlannedTool(plan: FlowExecutionPlan | undefined, stepId: string, toolName: string): FlowExecutionPlanTool {
+  const tool = plan?.tools.find((candidate) => candidate.step_id === stepId)
+    ?? plan?.tools.find((candidate) => candidate.tool_name === toolName);
+  if (!tool) {
+    throw new Error(`FlowExecutionPlan missing tool entry for step ${stepId}: ${toolName}`);
+  }
+  return tool;
+}
+
+function resolvePlannedAgent(
+  plan: FlowExecutionPlan | undefined,
+  stepId: string,
+  agentId: string | undefined,
+): FlowExecutionPlanAgent {
+  const agent = plan?.agents.find((candidate) => candidate.step_id === stepId)
+    ?? plan?.agents.find((candidate) => candidate.agent_id === agentId);
+  if (!agent) {
+    throw new Error(`FlowExecutionPlan missing agent entry for step ${stepId}: ${agentId ?? 'unknown'}`);
+  }
+  return agent;
 }
 
 export function resolveToolArguments(

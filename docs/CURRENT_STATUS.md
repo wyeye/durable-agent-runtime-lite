@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated for CP-R5 + CP-R6: complete control-plane React operations UI and UI smoke.
+Last updated for AR-0: executable runtime plan and Temporal durable wait hardening.
 
 ## Completed Platform Capabilities
 
@@ -27,6 +27,17 @@ Last updated for CP-R5 + CP-R6: complete control-plane React operations UI and U
 21. Docker + PostgreSQL + Temporal smoke path: `smoke:temporal-db-e2e`.
 22. control-plane API smoke: `smoke:control-plane-api-e2e`.
 23. control-plane UI smoke: `smoke:control-plane-ui-e2e`.
+
+## Completed In AR-0
+
+1. Immutable `FlowExecutionPlan` contract and `flow_execution_plan` table.
+2. Registry publish creates an execution plan that locks Flow, Agent, Prompt, Tool, risk, allowed tools and budget references.
+3. runtime-api resolves and stores `execution_plan_ref` before starting `ConfigDrivenWorkflow`.
+4. runtime-worker loads execution plans by exact ref and does not select `latest` during workflow execution.
+5. Tool Gateway validates exact tool version/hash/risk from the execution plan.
+6. L3 Human Task wait now uses Temporal Signal after runtime-api writes the DB decision.
+7. runtime-worker readiness tracks the real Temporal Worker state and graceful shutdown closes Worker, NativeConnection and shared DB resources.
+8. CI workflow added for install, lint, typecheck, test, build, PostgreSQL repository tests and docker compose config.
 
 ## Completed In CP-R5 + CP-R6
 
@@ -73,9 +84,9 @@ deprecated
 disabled
 ```
 
-runtime-api avoids DB production fallback to memory/default/sample routes. tool-gateway avoids production fallback to built-in manifests when DB registry mode is configured.
+runtime-api avoids DB production fallback to memory/default/sample routes. Non-matched DB routing does not start a default Agent workflow without an execution plan. tool-gateway avoids production fallback to built-in manifests when DB registry mode is configured.
 
-Temporal workflow inputs continue to use immutable `db://flow/{flow_id}/versions/{version}` refs, so running workflows are not changed by later publish, gray, rollback, disable, or deprecate operations.
+Temporal workflow inputs use immutable `execution_plan_ref` values. The execution plan contains the FlowSpec snapshot plus exact Agent, Prompt and Tool version/hash references, so running workflows are not changed by later publish, gray, rollback, disable, deprecate or tool version changes.
 
 control-plane does not execute tools and does not copy the Human Task state machine. UI operations go through control-plane API/BFF.
 

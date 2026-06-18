@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type {
+  FlowExecutionPlan,
   FlowSpec,
   HumanTask,
   IdempotencyRecord,
@@ -9,8 +10,10 @@ import type {
   ToolManifest,
 } from '@dar/contracts';
 import {
+  buildExecutionPlanRef,
   buildDbFlowSnapshotRef,
   FlowDefinitionRepository,
+  FlowExecutionPlanRepository,
   hashJson,
   HumanTaskRepository,
   IdempotencyRecordRepository,
@@ -53,6 +56,22 @@ class FakeQuery {
   }
 
   onConflict() {
+    return this;
+  }
+
+  column() {
+    return this;
+  }
+
+  columns() {
+    return this;
+  }
+
+  doNothing() {
+    return this;
+  }
+
+  doUpdateSet() {
     return this;
   }
 
@@ -112,7 +131,7 @@ const flowSpec: FlowSpec = {
   version: 7,
   status: 'published',
   runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
-  steps: [{ id: 'search', type: 'tool', tool: 'knowledge.search', input: { query: '${input.query}' } }],
+  steps: [{ id: 'search', type: 'tool', tool: 'knowledge.search', tool_version: '1.0.0', input: { query: '${input.query}' } }],
 };
 
 const routeSpec: RouteSpec = {
@@ -152,6 +171,7 @@ describe('db repositories', () => {
     expect(ref).toBe('db://flow/db_route_flow/versions/7');
     expect(parseDbFlowSnapshotRef(ref)).toEqual({ flowId: 'db_route_flow', version: 7 });
     expect(parseDbFlowSnapshotRef('sample_flow@1')).toBeUndefined();
+    expect(buildExecutionPlanRef('plan_1')).toBe('db://flow-execution-plan/plan_1');
   });
 
   it('loads published FlowSpec, RouteSpec, and ToolManifest from the DB tables', async () => {
@@ -175,6 +195,55 @@ describe('db repositories', () => {
       'flow_route_config',
       'tool_manifest',
     ]);
+  });
+
+  it('stores and verifies FlowExecutionPlan by immutable ref', async () => {
+    const now = '2026-01-01T00:00:00.000Z';
+    const plan: FlowExecutionPlan = {
+      execution_plan_id: 'plan_1',
+      execution_plan_ref: buildExecutionPlanRef('plan_1'),
+      tenant_id: 'tenant_1',
+      flow_id: flowSpec.flow_id,
+      flow_version: flowSpec.version,
+      flow_sha256: hashJson(flowSpec),
+      flow_spec: flowSpec,
+      agents: [],
+      tools: [],
+      allowed_tools: [],
+      budget: { max_steps: 0, max_tokens: 0 },
+      generated_at: now,
+      execution_plan_hash: hashJson({
+        execution_plan_id: 'plan_1',
+        execution_plan_ref: buildExecutionPlanRef('plan_1'),
+        tenant_id: 'tenant_1',
+        flow_id: flowSpec.flow_id,
+        flow_version: flowSpec.version,
+        flow_sha256: hashJson(flowSpec),
+        flow_spec: flowSpec,
+        agents: [],
+        tools: [],
+        allowed_tools: [],
+        budget: { max_steps: 0, max_tokens: 0 },
+        generated_at: now,
+      }),
+    };
+    const db = new FakeDb({
+      flow_execution_plan: [
+        {
+          execution_plan_id: plan.execution_plan_id,
+          execution_plan_ref: plan.execution_plan_ref,
+          tenant_id: plan.tenant_id,
+          flow_id: plan.flow_id,
+          flow_version: plan.flow_version,
+          flow_sha256: plan.flow_sha256,
+          plan_json: plan,
+          execution_plan_hash: plan.execution_plan_hash,
+          generated_at: now,
+        },
+      ],
+    });
+
+    await expect(new FlowExecutionPlanRepository(db as never).getByRef(plan.execution_plan_ref, { tenantId: 'tenant_1' })).resolves.toEqual(plan);
   });
 
   it('returns idempotency replay or conflict from stored request hash', async () => {

@@ -103,12 +103,13 @@ Seed 的 sample FlowSpec 显式映射：
 
 1. `previewToolActivity` 调 `tool-gateway /preview`，生成 `tool_call_id`，不执行副作用；
 2. `createHumanTaskActivity` 通过 `HumanTaskRepository` 写入 pending `human_task`，同时把 `task_run` 标为 `waiting_human`；
-3. `waitForHumanTaskDecisionActivity` 轮询 DB 中的 human decision；
-4. approved 后，`commitToolActivity` 调 `tool-gateway /commit`；
-5. rejected/cancelled/expired 后不 commit，workflow 返回 failed；
-6. commit failed/denied 时 workflow 返回 failed。
+3. Workflow 使用 Temporal Signal 等待 runtime-api 传入 human decision，不轮询 DB；
+4. runtime-api approve/reject 先幂等写入 DB，再向对应 workflow 发送 Signal；
+5. approved 后，`commitToolActivity` 调 `tool-gateway /commit`；
+6. rejected/cancelled/expired 后不 commit，workflow 返回 failed；
+7. commit failed/denied 时 workflow 返回 failed。
 
-Workflow 本体只调用 Activity proxy，不直接访问 DB、HTTP、Pi、LLM、`Date.now` 或 `Math.random`。HTTP 调用 tool-gateway、DB 写 human task、DB 查询 decision 都在 Activity 中执行。
+Workflow 本体只调用 Activity proxy 并等待 deterministic Signal 条件，不直接访问 DB、HTTP、Pi、LLM、`Date.now` 或 `Math.random`。HTTP 调用 tool-gateway、DB 写 human task、DB 决策写入都在 Workflow 外部执行。
 
 Seed 的 `sample_flow` 中 `record.write.mock` 是 L3：
 

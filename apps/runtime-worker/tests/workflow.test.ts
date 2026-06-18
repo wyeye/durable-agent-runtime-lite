@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import type { FlowSpec, HumanTask } from '@dar/contracts';
+import type { FlowExecutionPlan, FlowExecutionPlanTool, FlowSpec, HumanTask } from '@dar/contracts';
 import { loadFlowSpecByRefActivity } from '../src/activities/index.js';
 import { executeFlowSpec, resolveToolArguments } from '../src/interpreter/flow-interpreter.js';
 
@@ -10,16 +10,16 @@ const flow: FlowSpec = {
   runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
   steps: [
     { id: 'input_normalize', type: 'activity', activity: 'input.normalize' },
-    { id: 'knowledge_search', type: 'tool', tool: 'knowledge.search' },
-    { id: 'agent_plan', type: 'agent', agent_id: 'sample_agent' },
-    { id: 'record_write', type: 'tool', tool: 'record.write.mock', risk_level: 'L1' },
+    { id: 'knowledge_search', type: 'tool', tool: 'knowledge.search', tool_version: '1.0.0' },
+    { id: 'agent_plan', type: 'agent', agent_id: 'sample_agent', input: { agent_version: 1 } },
+    { id: 'record_write', type: 'tool', tool: 'record.write.mock', tool_version: '1.0.0', risk_level: 'L1' },
   ],
 };
 
 describe('runtime-worker flow interpreter', () => {
   it('runs sample flow through activity/tool/agent/tool steps', async () => {
     const result = await executeFlowSpec(
-      flow,
+      planFor(flow),
       {
         tenant_id: 'tenant_1',
         user_id: 'user_1',
@@ -30,16 +30,16 @@ describe('runtime-worker flow interpreter', () => {
       { text: 'hello' },
       {
         normalizeInput: async (input) => ({ normalized: true, input }),
-        invokeTool: async (_context, toolName) => ({
-          tool_name: toolName,
-          tool_version: '1.0.0',
+        invokeTool: async (_context, tool) => ({
+          tool_name: tool.tool_name,
+          tool_version: tool.tool_version,
           status: 'succeeded',
-          result: { toolName },
+          result: { toolName: tool.tool_name },
         }),
-        previewTool: async (_context, toolName) => ({
+        previewTool: async (_context, tool) => ({
           tool_call_id: 'tool_call_unused',
-          tool_name: toolName,
-          tool_version: '1.0.0',
+          tool_name: tool.tool_name,
+          tool_version: tool.tool_version,
           mode: 'preview',
           status: 'allowed',
           policy: {
@@ -49,10 +49,10 @@ describe('runtime-worker flow interpreter', () => {
             requires_human_confirm: false,
           },
         }),
-        commitTool: async (_context, toolCallId, toolName) => ({
+        commitTool: async (_context, toolCallId, tool) => ({
           tool_call_id: toolCallId,
-          tool_name: toolName,
-          tool_version: '1.0.0',
+          tool_name: tool.tool_name,
+          tool_version: tool.tool_version,
           mode: 'commit',
           status: 'committed',
         }),
@@ -101,12 +101,14 @@ describe('runtime-worker flow interpreter', () => {
           id: 'retrieve_context',
           type: 'tool',
           tool: 'knowledge.search',
+          tool_version: '1.0.0',
           input: { query: '${input.query}', source: 'literal' },
         },
         {
           id: 'record_write',
           type: 'tool',
-          tool: 'record.write.mock',
+          tool: 'record.read.mock',
+          tool_version: '1.0.0',
           input: {
             record: '${state.steps.retrieve_context.result}',
             state_snapshot: '${state}',
@@ -116,7 +118,7 @@ describe('runtime-worker flow interpreter', () => {
     };
 
     await executeFlowSpec(
-      mappedFlow,
+      planFor(mappedFlow),
       {
         tenant_id: 'tenant_1',
         user_id: 'user_1',
@@ -127,19 +129,19 @@ describe('runtime-worker flow interpreter', () => {
       { query: 'db-backed query' },
       {
         normalizeInput: async (input) => ({ normalized: true, input }),
-        invokeTool: async (_context, toolName, args) => {
-          calls.push({ toolName, args });
+        invokeTool: async (_context, tool, args) => {
+          calls.push({ toolName: tool.tool_name, args });
           return {
-            tool_name: toolName,
-            tool_version: '1.0.0',
+            tool_name: tool.tool_name,
+            tool_version: tool.tool_version,
             status: 'succeeded',
-            result: { toolName, args },
+            result: { toolName: tool.tool_name, args },
           };
         },
-        previewTool: async (_context, toolName) => ({
+        previewTool: async (_context, tool) => ({
           tool_call_id: 'tool_call_unused',
-          tool_name: toolName,
-          tool_version: '1.0.0',
+          tool_name: tool.tool_name,
+          tool_version: tool.tool_version,
           mode: 'preview',
           status: 'allowed',
           policy: {
@@ -149,10 +151,10 @@ describe('runtime-worker flow interpreter', () => {
             requires_human_confirm: false,
           },
         }),
-        commitTool: async (_context, toolCallId, toolName) => ({
+        commitTool: async (_context, toolCallId, tool) => ({
           tool_call_id: toolCallId,
-          tool_name: toolName,
-          tool_version: '1.0.0',
+          tool_name: tool.tool_name,
+          tool_version: tool.tool_version,
           mode: 'commit',
           status: 'committed',
         }),
@@ -166,7 +168,7 @@ describe('runtime-worker flow interpreter', () => {
       toolName: 'knowledge.search',
       args: { query: 'db-backed query', source: 'literal' },
     });
-    expect(calls[1]?.toolName).toBe('record.write.mock');
+    expect(calls[1]?.toolName).toBe('record.read.mock');
     expect(calls[1]?.args.record).toMatchObject({
       tool_name: 'knowledge.search',
       result: { toolName: 'knowledge.search' },
@@ -190,7 +192,7 @@ describe('runtime-worker flow interpreter', () => {
   it('enters pending confirmation for L3 tool steps before commit', async () => {
     let humanTaskInput: unknown;
     const result = await executeFlowSpec(
-      l3Flow,
+      planFor(l3Flow),
       context(),
       { query: 'db-backed query' },
       {
@@ -198,10 +200,10 @@ describe('runtime-worker flow interpreter', () => {
         invokeTool: async () => {
           throw new Error('L3 flow should not directly invoke');
         },
-        previewTool: async (_context, toolName, args) => ({
+        previewTool: async (_context, tool, args) => ({
           tool_call_id: 'tool_call_l3_1',
-          tool_name: toolName,
-          tool_version: '1.0.0',
+          tool_name: tool.tool_name,
+          tool_version: tool.tool_version,
           mode: 'preview',
           status: 'pending_confirmation',
           preview: { args },
@@ -238,7 +240,7 @@ describe('runtime-worker flow interpreter', () => {
   it('commits L3 tool steps after approval', async () => {
     const calls: string[] = [];
     const result = await executeFlowSpec(
-      l3Flow,
+      planFor(l3Flow),
       context(),
       { query: 'db-backed query' },
       {
@@ -246,12 +248,12 @@ describe('runtime-worker flow interpreter', () => {
         invokeTool: async () => {
           throw new Error('L3 flow should not directly invoke');
         },
-        previewTool: async (_context, toolName) => {
+        previewTool: async (_context, tool) => {
           calls.push('preview');
           return {
             tool_call_id: 'tool_call_l3_1',
-            tool_name: toolName,
-            tool_version: '1.0.0',
+            tool_name: tool.tool_name,
+            tool_version: tool.tool_version,
             mode: 'preview',
             status: 'pending_confirmation',
             policy: {
@@ -262,12 +264,12 @@ describe('runtime-worker flow interpreter', () => {
             },
           };
         },
-        commitTool: async (_context, toolCallId, toolName) => {
+        commitTool: async (_context, toolCallId, tool) => {
           calls.push('commit');
           return {
             tool_call_id: toolCallId,
-            tool_name: toolName,
-            tool_version: '1.0.0',
+            tool_name: tool.tool_name,
+            tool_version: tool.tool_version,
             mode: 'commit',
             status: 'committed',
             result: { written: true },
@@ -290,7 +292,7 @@ describe('runtime-worker flow interpreter', () => {
   it('does not commit L3 tool steps after rejection', async () => {
     let committed = false;
     const result = await executeFlowSpec(
-      l3Flow,
+      planFor(l3Flow),
       context(),
       { query: 'db-backed query' },
       {
@@ -298,10 +300,10 @@ describe('runtime-worker flow interpreter', () => {
         invokeTool: async () => {
           throw new Error('L3 flow should not directly invoke');
         },
-        previewTool: async (_context, toolName) => ({
+        previewTool: async (_context, tool) => ({
           tool_call_id: 'tool_call_l3_1',
-          tool_name: toolName,
-          tool_version: '1.0.0',
+          tool_name: tool.tool_name,
+          tool_version: tool.tool_version,
           mode: 'preview',
           status: 'pending_confirmation',
           policy: {
@@ -347,7 +349,7 @@ const l3Flow: FlowSpec = {
   version: 1,
   runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
   steps: [
-    { id: 'record_write', type: 'tool', tool: 'record.write.mock', risk_level: 'L3' },
+    { id: 'record_write', type: 'tool', tool: 'record.write.mock', tool_version: '1.0.0', risk_level: 'L3' },
   ],
 };
 
@@ -358,6 +360,46 @@ function context() {
     task_run_id: 'task_1',
     workflow_id: 'wf_1',
     request_id: 'req_1',
+  };
+}
+
+function planFor(flowSpec: FlowSpec): FlowExecutionPlan {
+  const tools: FlowExecutionPlanTool[] = flowSpec.steps
+    .filter((step) => step.type === 'tool' && step.tool)
+    .map((step) => ({
+      step_id: step.id,
+      tool_name: step.tool as string,
+      tool_version: step.tool_version ?? '1.0.0',
+      tool_sha256: 'a'.repeat(64),
+      risk_level: step.risk_level ?? (step.tool === 'record.write.mock' ? 'L3' : 'L1'),
+    }));
+  return {
+    execution_plan_id: `plan_${flowSpec.flow_id}_${flowSpec.version}`,
+    execution_plan_ref: `db://flow-execution-plan/plan_${flowSpec.flow_id}_${flowSpec.version}`,
+    tenant_id: 'tenant_1',
+    flow_id: flowSpec.flow_id,
+    flow_version: flowSpec.version,
+    flow_sha256: 'b'.repeat(64),
+    flow_spec: flowSpec,
+    agents: flowSpec.steps
+      .filter((step) => step.type === 'agent' && step.agent_id)
+      .map((step) => ({
+        step_id: step.id,
+        agent_id: step.agent_id as string,
+        agent_version: 1,
+        agent_sha256: 'c'.repeat(64),
+        prompt_id: 'sample_prompt',
+        prompt_version: 1,
+        prompt_sha256: 'd'.repeat(64),
+        model_policy: 'mock',
+        allowed_tools: tools.map((tool) => tool.tool_name),
+        budget: { max_steps: 4, max_tokens: 2000 },
+      })),
+    tools,
+    allowed_tools: tools.map((tool) => tool.tool_name),
+    budget: { max_steps: 4, max_tokens: 2000 },
+    generated_at: '2026-01-01T00:00:00.000Z',
+    execution_plan_hash: 'e'.repeat(64),
   };
 }
 

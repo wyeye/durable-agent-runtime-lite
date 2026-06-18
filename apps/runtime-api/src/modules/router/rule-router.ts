@@ -1,5 +1,4 @@
 import type { CandidateFlow, RouteDecision, RouteSpec, TaskInput } from '@dar/contracts';
-import { DEFAULT_AGENT_ID } from './route-registry.js';
 import { mockRouteDecisionAdapter } from './mock-decision-adapter.js';
 import { mockVectorRecallAdapter } from './vector-recall.js';
 
@@ -95,8 +94,7 @@ export function routeByRules(input: RuleRouterInput, routes: RouteSpec[]): RuleR
   if (!top && input.allowMockFallback === false) {
     return {
       route_decision: {
-        decision: 'agent_fallback',
-        agent_id: DEFAULT_AGENT_ID,
+        decision: 'reject',
         reason: 'no_published_route_match',
       },
       candidates: [],
@@ -137,9 +135,9 @@ export function routeByRules(input: RuleRouterInput, routes: RouteSpec[]): RuleR
 
   return {
     route_decision: {
-      decision: 'agent_fallback',
-      agent_id: DEFAULT_AGENT_ID,
-      reason: 'low_confidence_rule_match',
+      decision: 'need_clarify',
+      question: '请确认要执行的流程。',
+      candidates: candidateFlows,
     },
     candidates: candidateFlows,
   };

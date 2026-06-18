@@ -65,7 +65,7 @@ type RouteDecision =
 ## Temporal 启动规范
 
 - `workflowId` 使用：`task-${tenant_id}-${task_run_id}`。
-- 启动参数包含 `flow_id`、`flow_version`、`flow_snapshot_ref`、`flow_sha256`。
+- 启动参数包含 `flow_id`、`flow_version`、`execution_plan_ref`、`flow_sha256`。
 - Workflow 启动失败要标记 `task_run.status = failed_to_start`。
 
 ## 禁止事项

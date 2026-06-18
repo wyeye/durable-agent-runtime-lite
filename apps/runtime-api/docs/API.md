@@ -64,17 +64,19 @@ DB 模式下只读取 DB 中已发布 RouteSpec，不使用 sample route fallbac
 
 - `flow_id`
 - `flow_version`
-- `flow_snapshot_ref`。DB 模式格式为 `db://flow/{flow_id}/versions/{version}`；memory 模式仅用于开发/测试兼容，格式为 `{flow_id}@{version}`。
+- `execution_plan_ref`
+- `flow_sha256`
 
-未命中 Flow 时启动 `GenericAgentWorkflow` mock/Temporal starter。
+DB source 未命中 Flow 时不会启动默认 Agent workflow；memory/mock 开发模式仍可使用本地 fallback。
 
 DB source 下的创建顺序：
 
 1. 使用 DB RouteSpec 路由；
-2. 创建 `task_run`，初始状态为 `queued`；
-3. 使用 `RUNTIME_API_WORKFLOW_STARTER=temporal` 时通过 Temporal Client 启动 workflow；
-4. 将 workflow start 信息写回 DB；
-5. 如果 workflow 启动失败，将 `task_run` 更新为 `failed_to_start`，并记录 `error_code=WORKFLOW_START_FAILED` 与安全错误消息。
+2. 解析已发布 Flow 对应的不可变 `FlowExecutionPlan`；
+3. 创建 `task_run`，记录 `execution_plan_ref`，初始状态为 `queued`；
+4. 使用 `RUNTIME_API_WORKFLOW_STARTER=temporal` 时通过 Temporal Client 启动 workflow；
+5. 将 workflow start 信息写回 DB；
+6. 如果 workflow 启动失败，将 `task_run` 更新为 `failed_to_start`，并记录 `error_code=WORKFLOW_START_FAILED` 与安全错误消息。
 
 ### `GET /v1/tasks/:taskRunId`
 

@@ -6,6 +6,7 @@ import {
   closeDb,
   createDb,
   FlowDefinitionRepository,
+  FlowExecutionPlanRepository,
   PromptDefinitionRepository,
   RouteConfigRepository,
   ToolManifestRepository,
@@ -62,7 +63,7 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
         version: 1,
         prompt_ref: `${promptId}@1`,
         model_policy: 'mock',
-        allowed_tools: [toolName],
+        allowed_tools: [`${toolName}@1.0.0`],
         max_steps: 4,
         max_tokens: 1000,
         status: 'published',
@@ -78,14 +79,21 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
         status: 'draft',
         runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
         steps: [
-          { id: 'tool', type: 'tool', tool: toolName, input: { query: '${input.text}' } },
-          { id: 'agent', type: 'agent', agent_id: agentId },
+          { id: 'tool', type: 'tool', tool: toolName, tool_version: '1.0.0', input: { query: '${input.text}' } },
+          { id: 'agent', type: 'agent', agent_id: agentId, input: { agent_version: 1 } },
         ],
       };
       await flows.createDraft(flowV1, { tenantId, operatorId });
       const release = await releaseService.publish('flow', flowId, 1, { tenantId, operatorId, releaseNote: 'publish v1' });
       expect(release.action).toBe('publish');
       expect((await flows.getByIdAndVersion(flowId, 1, { tenantId }))?.status).toBe('published');
+      const plan = await new FlowExecutionPlanRepository(db).getLatestForFlow(flowId, 1, { tenantId });
+      expect(plan).toMatchObject({
+        flow_id: flowId,
+        flow_version: 1,
+        tools: [{ tool_name: toolName, tool_version: '1.0.0', risk_level: 'L1' }],
+        agents: [{ agent_id: agentId, agent_version: 1, prompt_id: promptId, prompt_version: 1 }],
+      });
 
       await flows.cloneVersion(flowId, 1, { tenantId, operatorId });
       await releaseService.publish('flow', flowId, 2, { tenantId, operatorId, releaseNote: 'publish v2' });

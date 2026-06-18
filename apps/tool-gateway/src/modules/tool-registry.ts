@@ -4,7 +4,7 @@ import type { Kysely } from 'kysely';
 
 export interface ToolManifestRegistry {
   list(tenantId?: string): Promise<ToolManifest[]>;
-  get(toolName: string, tenantId?: string): Promise<ToolManifest | undefined>;
+  get(toolName: string, tenantId?: string, toolVersion?: string): Promise<ToolManifest | undefined>;
 }
 
 export const builtInToolManifests: ToolManifest[] = [
@@ -53,19 +53,22 @@ export const builtInToolManifests: ToolManifest[] = [
 ];
 
 export class InMemoryToolManifestRegistry implements ToolManifestRegistry {
-  private readonly manifests: Map<string, ToolManifest>;
+  private readonly manifests: ToolManifest[];
 
   constructor(manifests: ToolManifest[] = builtInToolManifests) {
-    this.manifests = new Map(manifests.map((manifest) => [manifest.tool_name, manifest]));
+    this.manifests = manifests;
   }
 
   async list(_tenantId?: string): Promise<ToolManifest[]> {
-    return [...this.manifests.values()].filter((manifest) => manifest.status === undefined || manifest.status === 'published' || manifest.status === 'gray');
+    return this.manifests.filter((manifest) => manifest.status === undefined || manifest.status === 'published' || manifest.status === 'gray');
   }
 
-  async get(toolName: string, _tenantId?: string): Promise<ToolManifest | undefined> {
-    const manifest = this.manifests.get(toolName);
-    return manifest?.status === undefined || manifest.status === 'published' || manifest.status === 'gray' ? manifest : undefined;
+  async get(toolName: string, _tenantId?: string, toolVersion?: string): Promise<ToolManifest | undefined> {
+    return this.manifests.find((manifest) => {
+      const isExecutable = manifest.status === undefined || manifest.status === 'published' || manifest.status === 'gray';
+      const versionMatches = toolVersion ? manifest.version === toolVersion : true;
+      return manifest.tool_name === toolName && versionMatches && isExecutable;
+    });
   }
 }
 
@@ -81,9 +84,21 @@ export class DbToolManifestRegistry implements ToolManifestRegistry {
     return manifests.map((manifest) => toolManifestSchema.parse(manifest));
   }
 
-  async get(toolName: string, tenantId = 'default'): Promise<ToolManifest | undefined> {
+  async get(toolName: string, tenantId = 'default', toolVersion?: string): Promise<ToolManifest | undefined> {
+    if (toolVersion) {
+      const major = Number.parseInt(toolVersion.split('.')[0] ?? '', 10);
+      if (!Number.isInteger(major) || major <= 0) {
+        return undefined;
+      }
+      const selected = await this.repository.getByIdAndVersion(toolName, major, { tenantId });
+      if (!selected || selected.spec.version !== toolVersion || (selected.status !== 'published' && selected.status !== 'gray')) {
+        return undefined;
+      }
+      return toolManifestSchema.parse({ ...selected.spec, sha256: selected.sha256 });
+    }
+
     const selected = await this.repository.selectVersionForRequest(toolName, { tenantId });
-    return selected ? toolManifestSchema.parse(selected.spec) : undefined;
+    return selected ? toolManifestSchema.parse({ ...selected.spec, sha256: selected.sha256 }) : undefined;
   }
 }
 

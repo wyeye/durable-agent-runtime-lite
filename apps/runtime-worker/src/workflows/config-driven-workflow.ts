@@ -1,12 +1,14 @@
-import { proxyActivities } from '@temporalio/workflow';
-import type { ConfigDrivenWorkflowInput } from '@dar/temporal';
-import type { FlowSpec } from '@dar/contracts';
+import { condition, defineSignal, proxyActivities, setHandler } from '@temporalio/workflow';
+import type { ConfigDrivenWorkflowInput, HumanTaskDecisionSignalInput } from '@dar/temporal';
+import { WORKFLOW_SIGNALS } from '@dar/temporal';
+import type { FlowExecutionPlan, HumanTask } from '@dar/contracts';
 import { executeFlowSpec, type FlowExecutionActivities, type FlowExecutionResult } from '../interpreter/flow-interpreter.js';
 
 export interface ConfigDrivenWorkflowArgs extends ConfigDrivenWorkflowInput {
-  flow_spec_snapshot?: FlowSpec;
   input?: unknown;
 }
+
+const humanTaskDecisionSignal = defineSignal<[HumanTaskDecisionSignalInput]>(WORKFLOW_SIGNALS.humanTaskDecision);
 
 const {
   normalizeInput,
@@ -15,8 +17,7 @@ const {
   commitToolActivity,
   runAgentActivity,
   createHumanTaskActivity,
-  waitForHumanTaskDecisionActivity,
-  loadFlowSpecByRefActivity,
+  loadExecutionPlanByRefActivity,
   updateTaskRunStatusActivity,
 } = proxyActivities<{
   normalizeInput: FlowExecutionActivities['normalizeInput'];
@@ -25,8 +26,7 @@ const {
   commitToolActivity: FlowExecutionActivities['commitTool'];
   runAgentActivity: FlowExecutionActivities['runAgent'];
   createHumanTaskActivity: FlowExecutionActivities['createHumanTask'];
-  waitForHumanTaskDecisionActivity: FlowExecutionActivities['waitForHumanTaskDecision'];
-  loadFlowSpecByRefActivity(flowSnapshotRef: string): Promise<FlowSpec>;
+  loadExecutionPlanByRefActivity(executionPlanRef: string): Promise<FlowExecutionPlan>;
   updateTaskRunStatusActivity(input: {
     tenant_id: string;
     user_id: string;
@@ -42,6 +42,16 @@ const {
 });
 
 export async function configDrivenWorkflow(input: ConfigDrivenWorkflowArgs): Promise<FlowExecutionResult> {
+  const decisions = new Map<string, HumanTaskDecisionSignalInput>();
+  setHandler(humanTaskDecisionSignal, (decision) => {
+    if (decision.task_run_id !== input.task_run_id) {
+      return;
+    }
+    if (!decisions.has(decision.human_task_id)) {
+      decisions.set(decision.human_task_id, decision);
+    }
+  });
+
   const context = {
     tenant_id: input.tenant_id,
     user_id: input.user_id,
@@ -53,15 +63,32 @@ export async function configDrivenWorkflow(input: ConfigDrivenWorkflowArgs): Pro
   await updateTaskRunStatusActivity({ ...context, status: 'running' });
 
   try {
-    const flowSpec = input.flow_spec_snapshot ?? (await loadFlowSpecByRefActivity(input.flow_snapshot_ref));
-    const result = await executeFlowSpec(flowSpec, context, input.input ?? {}, {
+    if (!input.execution_plan_ref) {
+      throw new Error('ConfigDrivenWorkflow requires execution_plan_ref');
+    }
+    const executionPlan = await loadExecutionPlanByRefActivity(input.execution_plan_ref);
+    if (executionPlan.flow_id !== input.flow_id || executionPlan.flow_version !== input.flow_version) {
+      throw new Error(`FlowExecutionPlan target mismatch: ${input.execution_plan_ref}`);
+    }
+    if (input.flow_sha256 && executionPlan.flow_sha256 !== input.flow_sha256) {
+      throw new Error(`FlowExecutionPlan flow hash mismatch: ${input.execution_plan_ref}`);
+    }
+
+    const result = await executeFlowSpec(executionPlan, context, input.input ?? {}, {
       normalizeInput,
       invokeTool: invokeToolActivity,
       previewTool: previewToolActivity,
       commitTool: commitToolActivity,
       runAgent: runAgentActivity,
       createHumanTask: createHumanTaskActivity,
-      waitForHumanTaskDecision: waitForHumanTaskDecisionActivity,
+      waitForHumanTaskDecision: async (_context, humanTaskId) => {
+        await condition(() => decisions.has(humanTaskId));
+        const decision = decisions.get(humanTaskId);
+        if (!decision) {
+          throw new Error(`HumanTask decision signal missing after wait: ${humanTaskId}`);
+        }
+        return signalDecisionToHumanTask(decision);
+      },
     });
 
     await updateTaskRunStatusActivity({
@@ -80,6 +107,23 @@ export async function configDrivenWorkflow(input: ConfigDrivenWorkflowArgs): Pro
     });
     throw error;
   }
+}
+
+function signalDecisionToHumanTask(decision: HumanTaskDecisionSignalInput): HumanTask {
+  return {
+    human_task_id: decision.human_task_id,
+    tenant_id: decision.tenant_id,
+    task_run_id: decision.task_run_id,
+    ...(decision.workflow_id ? { workflow_id: decision.workflow_id } : {}),
+    status: decision.status,
+    candidate_groups: [],
+    payload: {},
+    ...(decision.decision ? { decision: decision.decision } : {}),
+    ...(decision.decided_by ? { decided_by: decision.decided_by } : {}),
+    ...(decision.decided_at ? { decided_at: decision.decided_at } : {}),
+    ...(decision.decision_reason ? { decision_reason: decision.decision_reason } : {}),
+    ...(decision.decided_at ? { completed_at: decision.decided_at } : {}),
+  };
 }
 
 function workflowErrorMessage(error: unknown): string {

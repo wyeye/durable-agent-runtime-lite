@@ -387,6 +387,51 @@ export const toolManifestSchema = z.object({
   sha256: z.string().optional(),
 });
 
+const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
+
+export const flowExecutionPlanToolSchema = z.object({
+  step_id: z.string().min(1).optional(),
+  tool_name: z.string().min(1),
+  tool_version: z.string().min(1),
+  tool_sha256: sha256Schema,
+  risk_level: riskLevelSchema,
+});
+
+export const flowExecutionPlanAgentSchema = z.object({
+  step_id: z.string().min(1),
+  agent_id: z.string().min(1),
+  agent_version: z.number().int().positive(),
+  agent_sha256: sha256Schema,
+  prompt_id: z.string().min(1),
+  prompt_version: z.number().int().positive(),
+  prompt_sha256: sha256Schema,
+  model_policy: z.string().min(1),
+  allowed_tools: z.array(z.string().min(1)),
+  budget: z.object({
+    max_steps: z.number().int().positive(),
+    max_tokens: z.number().int().positive(),
+  }),
+});
+
+export const flowExecutionPlanSchema = z.object({
+  execution_plan_id: z.string().min(1),
+  execution_plan_ref: z.string().min(1),
+  tenant_id: z.string().min(1).default('default'),
+  flow_id: z.string().min(1),
+  flow_version: z.number().int().positive(),
+  flow_sha256: sha256Schema,
+  flow_spec: flowSpecSchema,
+  agents: z.array(flowExecutionPlanAgentSchema),
+  tools: z.array(flowExecutionPlanToolSchema),
+  allowed_tools: z.array(z.string().min(1)),
+  budget: z.object({
+    max_steps: z.number().int().nonnegative(),
+    max_tokens: z.number().int().nonnegative(),
+  }),
+  generated_at: z.string().datetime(),
+  execution_plan_hash: sha256Schema,
+});
+
 export const taskRunStatusSchema = z.enum([
   'created',
   'routing',
@@ -407,6 +452,7 @@ export const taskRunSchema = z.object({
   flow_id: z.string().optional(),
   flow_version: z.number().int().positive().optional(),
   workflow_id: z.string().optional(),
+  execution_plan_ref: z.string().optional(),
   status: taskRunStatusSchema,
   error_code: z.string().min(1).optional(),
   error_message: z.string().min(1).optional(),
@@ -416,7 +462,8 @@ export const taskRunSchema = z.object({
 
 export const toolInvokeRequestSchema = z.object({
   tool_name: z.string().min(1),
-  tool_version: z.string().min(1).default('1.0.0'),
+  tool_version: z.string().min(1),
+  tool_sha256: sha256Schema.optional(),
   tenant_id: z.string().min(1),
   user_context: jsonObjectSchema.default({}),
   task_context: jsonObjectSchema.default({}),
@@ -448,7 +495,8 @@ export const toolInvokeResponseSchema = z.object({
 
 export const toolPreviewRequestSchema = z.object({
   tool_name: z.string().min(1),
-  tool_version: z.string().min(1).default('1.0.0'),
+  tool_version: z.string().min(1),
+  tool_sha256: sha256Schema.optional(),
   tenant_id: z.string().min(1),
   user_context: jsonObjectSchema.default({}),
   task_context: jsonObjectSchema.default({}),
@@ -474,7 +522,8 @@ export const toolPreviewResponseSchema = z.object({
 export const toolCommitRequestSchema = z.object({
   tool_call_id: z.string().min(1),
   tool_name: z.string().min(1),
-  tool_version: z.string().min(1).default('1.0.0'),
+  tool_version: z.string().min(1),
+  tool_sha256: sha256Schema.optional(),
   tenant_id: z.string().min(1),
   user_context: jsonObjectSchema.default({}),
   task_context: jsonObjectSchema.default({}),
@@ -671,6 +720,8 @@ export const workflowStartRequestSchema = z.object({
   flow_id: z.string().optional(),
   flow_version: z.number().int().positive().optional(),
   flow_snapshot_ref: z.string().optional(),
+  execution_plan_ref: z.string().optional(),
+  flow_sha256: z.string().optional(),
   flow_spec_snapshot: flowSpecSchema.optional(),
   agent_id: z.string().optional(),
   input: taskInputSchema.default({ payload: {} }),
@@ -740,15 +791,19 @@ export const agentRunRequestSchema = z.object({
   task_run_id: z.string().min(1),
   workflow_id: z.string().optional(),
   agent_id: z.string().min(1),
+  agent_version: z.number().int().positive().optional(),
+  prompt_ref: z.string().min(1).optional(),
+  model_policy: z.string().min(1).optional(),
   input: jsonObjectSchema.default({}),
-  allowed_tools: z.array(z.string()).default([]),
+  allowed_tools: z.array(z.string()),
   max_steps: z.number().int().positive().default(6),
+  max_tokens: z.number().int().positive().default(12_000),
   request_id: z.string().optional(),
 });
 
 export const proposedToolCallSchema = z.object({
   tool_name: z.string().min(1),
-  tool_version: z.string().min(1).default('1.0.0'),
+  tool_version: z.string().min(1),
   arguments: jsonObjectSchema.default({}),
   risk_level: riskLevelSchema.optional(),
 });
@@ -820,6 +875,9 @@ export type RouteResult = z.infer<typeof routeResultSchema>;
 export type AgentSpec = z.infer<typeof agentSpecSchema>;
 export type PromptDefinition = z.infer<typeof promptDefinitionSchema>;
 export type ToolManifest = z.infer<typeof toolManifestSchema>;
+export type FlowExecutionPlanTool = z.infer<typeof flowExecutionPlanToolSchema>;
+export type FlowExecutionPlanAgent = z.infer<typeof flowExecutionPlanAgentSchema>;
+export type FlowExecutionPlan = z.infer<typeof flowExecutionPlanSchema>;
 export type TaskRun = z.infer<typeof taskRunSchema>;
 export type PolicyEvaluationResult = z.infer<typeof policyEvaluationResultSchema>;
 export type ToolInvokeRequest = z.infer<typeof toolInvokeRequestSchema>;

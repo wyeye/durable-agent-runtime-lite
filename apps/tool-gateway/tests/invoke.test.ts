@@ -9,27 +9,25 @@ import {
 } from '../src/modules/tool-service.js';
 
 class MutableRegistry implements ToolManifestRegistry {
-  readonly calls: Array<{ toolName?: string; tenantId?: string }> = [];
-  private readonly manifests = new Map<string, ToolManifest>();
+  readonly calls: Array<{ toolName?: string; tenantId?: string; toolVersion?: string }> = [];
+  private manifests: ToolManifest[];
 
   constructor(manifests: ToolManifest[]) {
-    for (const manifest of manifests) {
-      this.manifests.set(manifest.tool_name, manifest);
-    }
+    this.manifests = manifests;
   }
 
   async list(tenantId?: string): Promise<ToolManifest[]> {
     this.calls.push({ tenantId });
-    return [...this.manifests.values()];
+    return [...this.manifests];
   }
 
-  async get(toolName: string, tenantId?: string): Promise<ToolManifest | undefined> {
-    this.calls.push({ toolName, tenantId });
-    return this.manifests.get(toolName);
+  async get(toolName: string, tenantId?: string, toolVersion?: string): Promise<ToolManifest | undefined> {
+    this.calls.push({ toolName, tenantId, toolVersion });
+    return this.manifests.find((manifest) => manifest.tool_name === toolName && (!toolVersion || manifest.version === toolVersion));
   }
 
   delete(toolName: string): void {
-    this.manifests.delete(toolName);
+    this.manifests = this.manifests.filter((manifest) => manifest.tool_name !== toolName);
   }
 }
 
@@ -474,6 +472,89 @@ describe('tool-gateway invoke', () => {
     await server.close();
   });
 
+  it('rejects execution plan tool hash and risk mismatches', async () => {
+    const registry = new MutableRegistry([
+      {
+        ...dbKnowledgeSearchTool,
+        sha256: 'a'.repeat(64),
+      },
+    ]);
+    const server = buildServer(new ToolService({ registry }));
+
+    const hashMismatch = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/knowledge.search/invoke',
+      payload: {
+        tool_version: '1.0.0',
+        tool_sha256: 'b'.repeat(64),
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_hash_mismatch' },
+        arguments: { query: 'hello' },
+        idempotency_key: 'task_hash_mismatch:knowledge.search',
+      },
+    });
+    expect(hashMismatch.statusCode).toBe(400);
+    expect(hashMismatch.json().error.code).toBe('TOOL_HASH_MISMATCH');
+
+    const riskMismatch = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/knowledge.search/invoke',
+      payload: {
+        tool_version: '1.0.0',
+        tool_sha256: 'a'.repeat(64),
+        risk_level: 'L3',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_risk_mismatch' },
+        arguments: { query: 'hello' },
+        idempotency_key: 'task_risk_mismatch:knowledge.search',
+      },
+    });
+    expect(riskMismatch.statusCode).toBe(400);
+    expect(riskMismatch.json().error.code).toBe('TOOL_RISK_MISMATCH');
+    await server.close();
+  });
+
+  it('loads the exact tool version locked by the execution plan', async () => {
+    const registry = new MutableRegistry([
+      {
+        ...dbKnowledgeSearchTool,
+        version: '2.0.0',
+        sha256: 'b'.repeat(64),
+      },
+      {
+        ...dbKnowledgeSearchTool,
+        version: '1.0.0',
+        sha256: 'a'.repeat(64),
+      },
+    ]);
+    const server = buildServer(new ToolService({ registry }));
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/knowledge.search/invoke',
+      payload: {
+        tool_version: '1.0.0',
+        tool_sha256: 'a'.repeat(64),
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_plan_version' },
+        arguments: { query: 'hello' },
+        idempotency_key: 'task_plan_version:knowledge.search',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.status).toBe('succeeded');
+    expect(registry.calls).toContainEqual({
+      toolName: 'knowledge.search',
+      tenantId: 'tenant_1',
+      toolVersion: '1.0.0',
+    });
+    await server.close();
+  });
+
   it('rejects invalid arguments with standard error', async () => {
     const server = buildServer();
     const response = await server.inject({
@@ -573,7 +654,7 @@ describe('tool-gateway invoke', () => {
 
     expect(first.statusCode).toBe(200);
     expect(first.json().data.status).toBe('succeeded');
-    expect(registry.calls).toContainEqual({ toolName: 'knowledge.search', tenantId: 'tenant_1' });
+    expect(registry.calls).toContainEqual({ toolName: 'knowledge.search', tenantId: 'tenant_1', toolVersion: '1.0.0' });
     expect(second.statusCode).toBe(200);
     expect(second.json().data).toEqual(first.json().data);
     expect(conflict.statusCode).toBe(400);

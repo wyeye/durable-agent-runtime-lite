@@ -9,6 +9,7 @@ import {
   AuditEventRepository,
   CapabilityReleaseRepository,
   type Database,
+  FlowExecutionPlanRepository,
   FlowDefinitionRepository,
   PromptDefinitionRepository,
   RouteConfigRepository,
@@ -65,6 +66,14 @@ export class RegistryReleaseService {
         await repository.markValidated(resourceId, version, { tenantId: tenant(options), operatorId: options.operatorId });
       }
       await repository.publish(resourceId, version, { tenantId: tenant(options), operatorId: options.operatorId });
+      const executionPlan = resourceType === 'flow'
+        ? await new FlowExecutionPlanRepository(trx).createForFlow({
+            flowId: resourceId,
+            flowVersion: version,
+            tenantId: tenant(options),
+            operatorId: options.operatorId,
+          })
+        : undefined;
       const release = await service.appendRelease({
         resourceType,
         resourceId,
@@ -75,7 +84,10 @@ export class RegistryReleaseService {
         options,
         ...(previous ? { previousVersion: previous.version } : {}),
       });
-      await service.appendAudit(resourceType, resourceId, version, 'registry.publish', 'succeeded', options, { release_id: release.release_id });
+      await service.appendAudit(resourceType, resourceId, version, 'registry.publish', 'succeeded', options, {
+        release_id: release.release_id,
+        ...(executionPlan ? { execution_plan_ref: executionPlan.execution_plan_ref, execution_plan_hash: executionPlan.execution_plan_hash } : {}),
+      });
       return release;
     });
   }
@@ -100,6 +112,12 @@ export class RegistryReleaseService {
         await service.repositories.flows.markValidated(flowId, flowVersion, { tenantId: tenant(options), operatorId: options.operatorId });
       }
       await service.repositories.flows.publish(flowId, flowVersion, { tenantId: tenant(options), operatorId: options.operatorId });
+      const executionPlan = await new FlowExecutionPlanRepository(trx).createForFlow({
+        flowId,
+        flowVersion,
+        tenantId: tenant(options),
+        operatorId: options.operatorId,
+      });
       const routeValidation = await service.validate('route', routeId, routeVersion, tenant(options));
       if (!routeValidation.can_publish) {
         throw new Error('Route validation failed');
@@ -129,7 +147,11 @@ export class RegistryReleaseService {
         options,
         ...(previousRoute ? { previousVersion: previousRoute.version } : {}),
       });
-      await service.appendAudit('flow', flowId, flowVersion, 'registry.publish', 'succeeded', options, { release_id: flowRelease.release_id });
+      await service.appendAudit('flow', flowId, flowVersion, 'registry.publish', 'succeeded', options, {
+        release_id: flowRelease.release_id,
+        execution_plan_ref: executionPlan.execution_plan_ref,
+        execution_plan_hash: executionPlan.execution_plan_hash,
+      });
       await service.appendAudit('route', routeId, routeVersion, 'registry.publish', 'succeeded', options, { release_id: routeRelease.release_id });
       return { flow_release: flowRelease, route_release: routeRelease };
     });

@@ -16,6 +16,7 @@ import {
   buildDbFlowSnapshotRef,
   closeDb,
   createDb,
+  FlowExecutionPlanRepository,
   HumanTaskRepository,
   TaskRunRepository,
   ToolCallLogRepository,
@@ -27,7 +28,7 @@ import type { Kysely } from 'kysely';
 import { DEFAULT_AGENT_ID } from '../router/route-registry.js';
 import { routeByRules } from '../router/rule-router.js';
 import { DbRouteSpecSource, MemoryRouteSpecSource, type RouteSpecSource } from '../router/route-source.js';
-import { createWorkflowStarter, type WorkflowStarter } from '../workflow/workflow-starter.js';
+import { createWorkflowStarter, TemporalHumanTaskSignalSender, type WorkflowStarter } from '../workflow/workflow-starter.js';
 import { HumanTaskService } from '../human-task/human-task-service.js';
 import { createRequestId, createTaskRunId } from './task-id.js';
 import { DbTaskRunStore, InMemoryTaskRunStore, type TaskRunStore } from './task-store.js';
@@ -45,6 +46,16 @@ export interface TaskServiceOptions {
   workflowStarter?: WorkflowStarter;
   allowMockRouteFallback?: boolean;
   buildFlowSnapshotRef?: (flowId: string, version: number) => string;
+  executionPlanResolver?: ExecutionPlanResolver;
+}
+
+export interface ExecutionPlanResolver {
+  resolve(input: {
+    tenantId: string;
+    userId: string;
+    flowId: string;
+    flowVersion: number;
+  }): Promise<{ executionPlanRef: string; flowSha256: string } | undefined>;
 }
 
 export class TaskService {
@@ -53,6 +64,7 @@ export class TaskService {
   private readonly workflowStarter: WorkflowStarter;
   private readonly allowMockRouteFallback: boolean;
   private readonly buildFlowSnapshotRef: (flowId: string, version: number) => string;
+  private readonly executionPlanResolver: ExecutionPlanResolver | undefined;
 
   constructor(options: TaskServiceOptions = {}) {
     this.routeSource = options.routeSource ?? new MemoryRouteSpecSource(options.routes);
@@ -62,6 +74,7 @@ export class TaskService {
     this.buildFlowSnapshotRef =
       options.buildFlowSnapshotRef ??
       (this.allowMockRouteFallback ? buildLocalFlowSnapshotRef : buildDbFlowSnapshotRef);
+    this.executionPlanResolver = options.executionPlanResolver;
   }
 
   async preview(input: unknown): Promise<RouterPreviewResponse> {
@@ -86,6 +99,37 @@ export class TaskService {
     const taskRunId = createTaskRunId();
     const workflowId = buildTaskWorkflowId(normalized.tenant_id, taskRunId);
     const decision = routeResult.route_decision;
+    const executionPlan = decision.decision === 'matched'
+      ? await this.resolveExecutionPlan(normalized.tenant_id, normalized.user_id, decision.flow_id, decision.flow_version)
+      : undefined;
+
+    if (decision.decision !== 'matched' && !this.allowMockRouteFallback) {
+      const blockedResponse = runTaskResponseSchema.parse({
+        task_run_id: taskRunId,
+        workflow_id: workflowId,
+        status: 'failed',
+        route_decision: decision,
+      });
+
+      await this.taskStore.create({
+        taskRun: taskRunSchema.parse({
+          task_run_id: taskRunId,
+          tenant_id: normalized.tenant_id,
+          user_id: normalized.user_id,
+          route_type: decision.decision === 'need_clarify' ? 'manual' : 'unknown',
+          workflow_id: workflowId,
+          status: blockedResponse.status,
+          error_code: decision.decision === 'need_clarify' ? 'ROUTE_NEEDS_CLARIFICATION' : 'ROUTE_NOT_MATCHED',
+          error_message: decision.decision === 'need_clarify' ? decision.question : decision.reason,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }),
+        input: normalized.input,
+        routeResult,
+      });
+
+      return blockedResponse;
+    }
 
     const workflowRequest: WorkflowStartRequest = decision.decision === 'matched'
       ? {
@@ -96,7 +140,9 @@ export class TaskService {
           workflow_id: workflowId,
           flow_id: decision.flow_id,
           flow_version: decision.flow_version,
-          flow_snapshot_ref: this.buildFlowSnapshotRef(decision.flow_id, decision.flow_version),
+          ...(!executionPlan ? { flow_snapshot_ref: this.buildFlowSnapshotRef(decision.flow_id, decision.flow_version) } : {}),
+          execution_plan_ref: executionPlan?.executionPlanRef,
+          flow_sha256: executionPlan?.flowSha256,
           input: normalized.input,
           request_id: normalized.request_id,
           trace_id: normalized.trace_id,
@@ -133,11 +179,13 @@ export class TaskService {
         flow_version: queuedResponse.flow_version,
         workflow_id: workflowId,
         status: queuedResponse.status,
+        execution_plan_ref: executionPlan?.executionPlanRef,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }),
       input: normalized.input,
       routeResult,
+      ...(executionPlan?.executionPlanRef ? { executionPlanRef: executionPlan.executionPlanRef } : {}),
     });
 
     try {
@@ -155,6 +203,26 @@ export class TaskService {
       });
       throw error;
     }
+  }
+
+  private async resolveExecutionPlan(
+    tenantId: string,
+    userId: string,
+    flowId: string,
+    flowVersion: number,
+  ): Promise<{ executionPlanRef: string; flowSha256: string } | undefined> {
+    if (!this.executionPlanResolver) {
+      if (this.allowMockRouteFallback) {
+        return undefined;
+      }
+      throw new Error(`FlowExecutionPlan resolver is not configured for ${flowId}@${flowVersion}`);
+    }
+
+    const plan = await this.executionPlanResolver.resolve({ tenantId, userId, flowId, flowVersion });
+    if (!plan) {
+      throw new Error(`FlowExecutionPlan not found for ${flowId}@${flowVersion}`);
+    }
+    return plan;
   }
 
   async get(taskRunId: string): Promise<TaskRun | undefined> {
@@ -268,6 +336,7 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
         routeSource: new DbRouteSpecSource(db),
         taskStore: new DbTaskRunStore(new TaskRunRepository(db)),
         workflowStarter: createWorkflowStarter(config),
+        executionPlanResolver: new DbExecutionPlanResolver(db),
         allowMockRouteFallback: false,
         buildFlowSnapshotRef: buildDbFlowSnapshotRef,
       }),
@@ -275,6 +344,9 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
         store: new HumanTaskRepository(db),
         auditStore: new AuditEventRepository(db),
         toolCallLogStore: new ToolCallLogRepository(db),
+        ...(config.RUNTIME_API_WORKFLOW_STARTER === 'temporal'
+          ? { signalSender: new TemporalHumanTaskSignalSender(config) }
+          : {}),
       }),
       close: async () => closeDb(db),
     };
@@ -288,6 +360,27 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
     humanTaskService: new HumanTaskService(),
     close: async () => undefined,
   };
+}
+
+export class DbExecutionPlanResolver implements ExecutionPlanResolver {
+  private readonly repository: FlowExecutionPlanRepository;
+
+  constructor(db: Kysely<Database>) {
+    this.repository = new FlowExecutionPlanRepository(db);
+  }
+
+  async resolve(input: {
+    tenantId: string;
+    userId: string;
+    flowId: string;
+    flowVersion: number;
+  }): Promise<{ executionPlanRef: string; flowSha256: string } | undefined> {
+    void input.userId;
+    const plan = await this.repository.getLatestForFlow(input.flowId, input.flowVersion, { tenantId: input.tenantId });
+    return plan
+      ? { executionPlanRef: plan.execution_plan_ref, flowSha256: plan.flow_sha256 }
+      : undefined;
+  }
 }
 
 function isProductionRuntime(config: RuntimeConfig): boolean {

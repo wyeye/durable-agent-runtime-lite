@@ -510,7 +510,7 @@ export class ToolService {
     | { manifest: ToolManifest }
     | { response: ToolInvokeResponse; policy: PolicyEvaluationResult }
   > {
-    const manifest = await this.registry.get(request.tool_name, request.tenant_id);
+    const manifest = await this.registry.get(request.tool_name, request.tenant_id, request.tool_version);
     if (!manifest) {
       return {
         response: await this.auditAndReturnDenied(request, 'TOOL_NOT_FOUND', '工具未注册'),
@@ -522,6 +522,20 @@ export class ToolService {
       return {
         response: await this.auditAndReturnDenied(request, 'TOOL_VERSION_NOT_FOUND', '工具版本不存在'),
         policy: deniedPolicy(manifest.risk_level, 'TOOL_VERSION_NOT_FOUND', '工具版本不存在'),
+      };
+    }
+
+    if (request.tool_sha256 && manifest.sha256 && manifest.sha256 !== request.tool_sha256) {
+      return {
+        response: await this.auditAndReturnDenied(request, 'TOOL_HASH_MISMATCH', '工具版本哈希与执行计划不一致'),
+        policy: deniedPolicy(manifest.risk_level, 'TOOL_HASH_MISMATCH', '工具版本哈希与执行计划不一致'),
+      };
+    }
+
+    if ('risk_level' in request && request.risk_level && request.risk_level !== manifest.risk_level) {
+      return {
+        response: await this.auditAndReturnDenied(request, 'TOOL_RISK_MISMATCH', '工具风险等级与 Tool Gateway 注册表不一致'),
+        policy: deniedPolicy(manifest.risk_level, 'TOOL_RISK_MISMATCH', '工具风险等级与 Tool Gateway 注册表不一致'),
       };
     }
 
@@ -556,6 +570,7 @@ export class ToolService {
       payload: {
         tool_name: request.tool_name,
         tool_version: request.tool_version,
+        ...(request.tool_sha256 ? { tool_sha256: request.tool_sha256 } : {}),
         task_run_id: getTaskRunId(request.task_context),
       },
     });
@@ -589,6 +604,7 @@ export class ToolService {
         tool_call_id: request.tool_call_id,
         tool_name: request.tool_name,
         tool_version: request.tool_version,
+        ...(request.tool_sha256 ? { tool_sha256: request.tool_sha256 } : {}),
         task_run_id: getTaskRunId(request.task_context),
       },
     });
@@ -634,6 +650,7 @@ export class ToolService {
       payload: {
         tool_name: request.tool_name,
         tool_version: request.tool_version,
+        ...(request.tool_sha256 ? { tool_sha256: request.tool_sha256 } : {}),
         task_run_id: getTaskRunId(request.task_context),
         idempotency_key: request.idempotency_key,
       },
@@ -777,6 +794,7 @@ function hashInvokeRequest(request: ToolInvokeRequest): string {
     tenant_id: request.tenant_id,
     tool_name: request.tool_name,
     tool_version: request.tool_version,
+    tool_sha256: request.tool_sha256,
     user_context: request.user_context,
     task_context: request.task_context,
     arguments: request.arguments,
@@ -791,6 +809,7 @@ function hashCommitRequest(request: ToolCommitRequest): string {
     tenant_id: request.tenant_id,
     tool_name: request.tool_name,
     tool_version: request.tool_version,
+    tool_sha256: request.tool_sha256,
     user_context: request.user_context,
     task_context: request.task_context,
     arguments: request.arguments,

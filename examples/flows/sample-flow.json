@@ -12,16 +12,25 @@
       "id": "knowledge_search",
       "type": "tool",
       "tool": "knowledge.search",
+      "tool_version": "1.0.0",
       "input": {
         "query": "${input.text}"
       }
     },
-    { "id": "agent_plan", "type": "agent", "agent_id": "sample_agent" },
+    {
+      "id": "agent_plan",
+      "type": "agent",
+      "agent_id": "sample_agent",
+      "input": {
+        "agent_version": 1
+      }
+    },
     {
       "id": "record_write",
       "type": "tool",
       "name": "record.write.mock preview -> human_confirm -> commit",
       "tool": "record.write.mock",
+      "tool_version": "1.0.0",
       "mode": "preview_commit",
       "risk_level": "L3",
       "input": {

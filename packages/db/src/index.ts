@@ -71,6 +71,7 @@ export interface TaskRunTable {
   flow_id: string | null;
   flow_version: number | null;
   workflow_id: string | null;
+  execution_plan_ref: string | null;
   status: string;
   error_code: string | null;
   error_message: string | null;
@@ -165,6 +166,18 @@ export interface CapabilityReleaseTable {
   created_at: Timestamp;
 }
 
+export interface FlowExecutionPlanTable {
+  execution_plan_id: string;
+  execution_plan_ref: string;
+  tenant_id: string;
+  flow_id: string;
+  flow_version: number;
+  flow_sha256: string;
+  plan_json: Json;
+  execution_plan_hash: string;
+  generated_at: Timestamp;
+}
+
 export interface Database {
   flow_definition: FlowDefinitionTable;
   flow_route_config: FlowRouteConfigTable;
@@ -178,6 +191,7 @@ export interface Database {
   tool_call_log: ToolCallLogTable;
   idempotency_record: IdempotencyRecordTable;
   capability_release: CapabilityReleaseTable;
+  flow_execution_plan: FlowExecutionPlanTable;
 }
 
 export interface CreateDbOptions {

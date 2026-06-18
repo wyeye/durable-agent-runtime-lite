@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HumanTask, RouteSpec, TaskRun, WorkflowStartResponse } from '@dar/contracts';
+import type { HumanTaskDecisionSignalInput } from '@dar/temporal';
 import { buildServer } from '../src/index.js';
 import {
   HumanTaskService,
@@ -52,6 +53,15 @@ class RecordingTaskRunStore implements TaskRunStore {
     return this.taskRuns.get(taskRunId);
   }
 }
+
+const staticExecutionPlanResolver = {
+  async resolve(input: { flowId: string; flowVersion: number }) {
+    return {
+      executionPlanRef: `db://flow-execution-plan/plan_${input.flowId}_${input.flowVersion}`,
+      flowSha256: 'a'.repeat(64),
+    };
+  },
+};
 
 const dbOnlyRoute: RouteSpec = {
   route_id: 'db_only_route',
@@ -119,6 +129,7 @@ describe('runtime-api router and task endpoints', () => {
       new TaskService({
         routeSource: new StaticRouteSource([dbOnlyRoute]),
         allowMockRouteFallback: false,
+        executionPlanResolver: staticExecutionPlanResolver,
       }),
     );
 
@@ -170,7 +181,7 @@ describe('runtime-api router and task endpoints', () => {
       },
     });
     expect(defaultPreview.json().data.route_decision).toMatchObject({
-      decision: 'agent_fallback',
+      decision: 'need_clarify',
     });
     expect(defaultPreview.json().data.route_decision.flow_id).not.toBe('sample_flow');
 
@@ -182,6 +193,7 @@ describe('runtime-api router and task endpoints', () => {
       new TaskService({
         routeSource: new StaticRouteSource([]),
         allowMockRouteFallback: false,
+        executionPlanResolver: staticExecutionPlanResolver,
       }),
     );
 
@@ -197,9 +209,54 @@ describe('runtime-api router and task endpoints', () => {
 
     expect(preview.statusCode).toBe(200);
     expect(preview.json().data.route_decision).toMatchObject({
-      decision: 'agent_fallback',
+      decision: 'reject',
       reason: 'no_published_route_match',
     });
+
+    await server.close();
+  });
+
+  it('does not start a default agent workflow when DB routing cannot match', async () => {
+    const starts: unknown[] = [];
+    const server = buildServer(
+      new TaskService({
+        routeSource: new StaticRouteSource([]),
+        allowMockRouteFallback: false,
+        executionPlanResolver: staticExecutionPlanResolver,
+        workflowStarter: {
+          async start(request) {
+            starts.push(request);
+            return {
+              workflow_id: request.workflow_id,
+              task_run_id: request.task_run_id,
+              started: true,
+              mode: 'mock',
+            };
+          },
+        },
+      }),
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/tasks',
+      payload: {
+        tenant_id: 'tenant_1',
+        user_id: 'user_1',
+        input: { text: 'unmatched production request' },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      status: 'failed',
+      route_decision: {
+        decision: 'reject',
+        reason: 'no_published_route_match',
+      },
+    });
+    expect(response.json().data.workflow_start).toBeUndefined();
+    expect(starts).toHaveLength(0);
 
     await server.close();
   });
@@ -253,9 +310,14 @@ describe('runtime-api router and task endpoints', () => {
     const service = new TaskService({
       routeSource: new StaticRouteSource([dbOnlyRoute]),
       taskStore,
+      executionPlanResolver: staticExecutionPlanResolver,
       workflowStarter: {
         async start(request) {
           expect(taskStore.calls).toEqual(['create']);
+          expect(request).toMatchObject({
+            execution_plan_ref: 'db://flow-execution-plan/plan_db_route_flow_3',
+            flow_sha256: 'a'.repeat(64),
+          });
           return {
             ...workflowStart,
             workflow_id: request.workflow_id,
@@ -331,10 +393,16 @@ describe('runtime-api router and task endpoints', () => {
     };
     const auditStore = new InMemoryHumanTaskAuditStore();
     const toolCallStore = new InMemoryHumanTaskToolCallLogStore();
+    const signals: HumanTaskDecisionSignalInput[] = [];
     const humanTaskService = new HumanTaskService({
       store: new InMemoryHumanTaskStore([pendingTask, rejectedTask]),
       auditStore,
       toolCallLogStore: toolCallStore,
+      signalSender: {
+        async send(input) {
+          signals.push(input);
+        },
+      },
     });
     const server = buildServer(undefined, undefined, humanTaskService);
 
@@ -373,6 +441,18 @@ describe('runtime-api router and task endpoints', () => {
       decision_reason: 'safe in test',
     });
 
+    const duplicateApprove = await server.inject({
+      method: 'POST',
+      url: '/v1/human-tasks/human_l3_1/approve',
+      payload: {
+        tenant_id: 'tenant_1',
+        user_id: 'approver_1',
+        decision_reason: 'duplicate',
+        request_id: 'req_human_approve_duplicate',
+      },
+    });
+    expect(duplicateApprove.statusCode).toBe(200);
+
     const reject = await server.inject({
       method: 'POST',
       url: '/v1/human-tasks/human_l3_2/reject',
@@ -394,6 +474,10 @@ describe('runtime-api router and task endpoints', () => {
     expect(toolCallStore.updates).toEqual([
       { toolCallId: 'tool_call_l3_1', input: { status: 'approved' } },
       { toolCallId: 'tool_call_l3_2', input: { status: 'rejected' } },
+    ]);
+    expect(signals).toEqual([
+      expect.objectContaining({ human_task_id: 'human_l3_1', status: 'approved', workflow_id: 'workflow_l3_1' }),
+      expect.objectContaining({ human_task_id: 'human_l3_2', status: 'rejected', workflow_id: 'workflow_l3_2' }),
     ]);
 
     await server.close();

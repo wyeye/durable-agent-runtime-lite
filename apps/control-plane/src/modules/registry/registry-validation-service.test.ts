@@ -3,9 +3,12 @@ import type { AgentSpec, FlowSpec, PromptDefinition, RegistryValidationIssue, Ro
 import { RegistryValidationService } from './registry-validation-service.js';
 
 class FakeRepository<T extends object> {
+  getLatestVersionCalls = 0;
+
   constructor(private readonly records: Map<string, { version: number; status: string; spec: T }>) {}
 
   async getLatestVersion(id: string) {
+    this.getLatestVersionCalls += 1;
     return [...this.records.entries()]
       .filter(([key]) => key.startsWith(`${id}@`))
       .map(([, value]) => value)
@@ -71,7 +74,7 @@ const agent: AgentSpec = {
   version: 1,
   prompt_ref: 'sample_prompt@1',
   model_policy: 'mock',
-  allowed_tools: ['knowledge.search', 'record.write.mock'],
+  allowed_tools: ['knowledge.search@1.0.0', 'record.write.mock@1.0.0'],
   max_steps: 4,
   max_tokens: 2000,
   status: 'published',
@@ -105,20 +108,33 @@ function sampleFlow(): FlowSpec {
     runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
     steps: [
       { id: 'search', type: 'tool', tool: 'knowledge.search', input: { query: '${input.text}' } },
-      { id: 'plan', type: 'agent', agent_id: 'sample_agent' },
-      { id: 'write', type: 'tool', tool: 'record.write.mock', mode: 'preview_commit', input: { record: '${state.steps.search.result}' } },
+      { id: 'plan', type: 'agent', agent_id: 'sample_agent', input: { agent_version: 1 } },
+      { id: 'write', type: 'tool', tool: 'record.write.mock', tool_version: '1.0.0', mode: 'preview_commit', input: { record: '${state.steps.search.result}' } },
     ],
   };
 }
 
 describe('RegistryValidationService', () => {
   it('validates Flow dependencies and L3/L4 tool rules', async () => {
-    const result = await service().validateFlow(sampleFlow());
+    const valid = sampleFlow();
+    valid.steps[0] = { id: 'search', type: 'tool', tool: 'knowledge.search', tool_version: '1.0.0', input: { query: '${input.text}' } };
+    const tools = new FakeRepository<ToolManifest>(new Map([
+      ['knowledge.search@1', { version: 1, status: 'published', spec: knowledgeTool }],
+      ['record.write.mock@1', { version: 1, status: 'published', spec: l3Tool }],
+      ['secret.rotate@1', { version: 1, status: 'published', spec: l4Tool }],
+      ['knowledge.search@2', { version: 2, status: 'published', spec: { ...knowledgeTool, version: '2.0.0' } }],
+    ]));
+    const result = await service({ tools }).validateFlow(valid);
     expect(result.can_publish).toBe(true);
+    expect(tools.getLatestVersionCalls).toBe(0);
     expect(result.dependency_graph.nodes.map((node: { resource_id: string }) => node.resource_id)).toContain('record.write.mock');
 
-    const invalid = sampleFlow();
-    invalid.steps.push({ id: 'secret', type: 'tool', tool: 'secret.rotate', mode: 'preview_commit' });
+    const missingVersion = sampleFlow();
+    const missingVersionResult = await service().validateFlow(missingVersion);
+    expect(missingVersionResult.errors.map((error: RegistryValidationIssue) => error.code)).toContain('FLOW_TOOL_VERSION_REQUIRED');
+
+    const invalid = valid;
+    invalid.steps.push({ id: 'secret', type: 'tool', tool: 'secret.rotate', tool_version: '1.0.0', mode: 'preview_commit' });
     const invalidResult = await service().validateFlow(invalid);
     expect(invalidResult.errors.map((error: RegistryValidationIssue) => error.code)).toContain('FLOW_L4_TOOL_AUTO_EXECUTION_DENIED');
   });
@@ -165,6 +181,10 @@ describe('RegistryValidationService', () => {
     const missingPrompt = { ...agent, prompt_ref: 'missing@1' };
     const agentResult = await service().validateAgent(missingPrompt);
     expect(agentResult.errors.map((error: RegistryValidationIssue) => error.code)).toContain('AGENT_PROMPT_NOT_FOUND');
+
+    const invalidToolRef = { ...agent, allowed_tools: ['knowledge.search'] };
+    const invalidToolResult = await service().validateAgent(invalidToolRef);
+    expect(invalidToolResult.errors.map((error: RegistryValidationIssue) => error.code)).toContain('AGENT_TOOL_REF_INVALID');
 
     const promptResult = await service().validatePrompt({ ...prompt, variables: ['bad-name'] });
     expect(promptResult.errors.map((error: RegistryValidationIssue) => error.code)).toContain('PROMPT_VARIABLE_INVALID');
