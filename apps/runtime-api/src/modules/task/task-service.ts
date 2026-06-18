@@ -10,7 +10,16 @@ import {
   type TaskRun,
   type WorkflowStartRequest,
 } from '@dar/contracts';
-import { buildDbFlowSnapshotRef, closeDb, createDb, TaskRunRepository, type Database } from '@dar/db';
+import {
+  AuditEventRepository,
+  buildDbFlowSnapshotRef,
+  closeDb,
+  createDb,
+  HumanTaskRepository,
+  TaskRunRepository,
+  ToolCallLogRepository,
+  type Database,
+} from '@dar/db';
 import { loadConfig, type RuntimeConfig } from '@dar/config';
 import { buildTaskWorkflowId } from '@dar/temporal';
 import type { Kysely } from 'kysely';
@@ -18,6 +27,7 @@ import { DEFAULT_AGENT_ID } from '../router/route-registry.js';
 import { routeByRules } from '../router/rule-router.js';
 import { DbRouteSpecSource, MemoryRouteSpecSource, type RouteSpecSource } from '../router/route-source.js';
 import { createWorkflowStarter, type WorkflowStarter } from '../workflow/workflow-starter.js';
+import { HumanTaskService } from '../human-task/human-task-service.js';
 import { createRequestId, createTaskRunId } from './task-id.js';
 import { DbTaskRunStore, InMemoryTaskRunStore, type TaskRunStore } from './task-store.js';
 
@@ -229,6 +239,7 @@ export function createTaskRunPreview(
 
 export interface RuntimeApiTaskServiceHandle {
   taskService: TaskService;
+  humanTaskService: HumanTaskService;
   close(): Promise<void>;
 }
 
@@ -247,6 +258,11 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
         allowMockRouteFallback: false,
         buildFlowSnapshotRef: buildDbFlowSnapshotRef,
       }),
+      humanTaskService: new HumanTaskService({
+        store: new HumanTaskRepository(db),
+        auditStore: new AuditEventRepository(db),
+        toolCallLogStore: new ToolCallLogRepository(db),
+      }),
       close: async () => closeDb(db),
     };
   }
@@ -256,6 +272,7 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
       workflowStarter: createWorkflowStarter(config),
       allowMockRouteFallback: true,
     }),
+    humanTaskService: new HumanTaskService(),
     close: async () => undefined,
   };
 }

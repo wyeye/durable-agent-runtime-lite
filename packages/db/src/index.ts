@@ -80,6 +80,9 @@ export interface HumanTaskTable {
   candidate_groups: Json;
   payload: Json;
   decision: Json | null;
+  decided_by: string | null;
+  decided_at: Timestamp | null;
+  decision_reason: string | null;
   created_at: Timestamp;
   completed_at: Timestamp | null;
 }
@@ -100,6 +103,7 @@ export interface AuditEventTable {
 
 export interface ToolCallLogTable {
   id: Generated<number>;
+  tool_call_id: string;
   task_run_id: string | null;
   workflow_id: string | null;
   tenant_id: string;
@@ -115,7 +119,11 @@ export interface ToolCallLogTable {
   output_hash: string | null;
   error_code: string | null;
   adapter_type: string | null;
+  mode: string | null;
+  preview_json: Json | null;
+  result_json: Json | null;
   created_at: Timestamp;
+  updated_at: Timestamp;
 }
 
 export interface IdempotencyRecordTable {

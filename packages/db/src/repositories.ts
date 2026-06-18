@@ -2,21 +2,27 @@ import { createHash, randomUUID } from 'node:crypto';
 import type {
   AuditEvent,
   FlowSpec,
+  HumanTask,
+  HumanTaskCreateRequest,
   IdempotencyRecord,
   PromptDefinition,
   RouteSpec,
   TaskRun,
+  ToolCallLog,
   ToolManifest,
 } from '@dar/contracts';
 import {
   agentSpecSchema,
   auditEventSchema,
   flowSpecSchema,
+  humanTaskCreateRequestSchema,
+  humanTaskSchema,
   idempotencyRecordSchema,
   promptDefinitionSchema,
   routeSpecSchema,
   taskRunSchema,
   taskRunStatusSchema,
+  toolCallLogSchema,
   toolManifestSchema,
   type AgentSpec,
   type RouteResult,
@@ -29,9 +35,11 @@ import type {
   Database,
   FlowDefinitionTable,
   FlowRouteConfigTable,
+  HumanTaskTable,
   IdempotencyRecordTable,
   PromptDefinitionTable,
   TaskRunTable,
+  ToolCallLogTable,
   ToolManifestTable,
 } from './index.js';
 
@@ -72,6 +80,46 @@ export type IdempotencyReplayDecision =
   | { decision: 'miss' }
   | { decision: 'replay'; record: IdempotencyRecord }
   | { decision: 'conflict'; record: IdempotencyRecord };
+
+export interface HumanTaskDecisionInput {
+  tenantId?: string;
+  decidedBy: string;
+  decisionReason?: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface ToolCallLogCreateInput {
+  tool_call_id?: string;
+  task_run_id?: string;
+  workflow_id?: string;
+  tenant_id: string;
+  user_id?: string;
+  tool_name: string;
+  tool_version: string;
+  risk_level: ToolCallLog['risk_level'];
+  policy_decision: ToolCallLog['policy_decision'];
+  status: ToolCallLog['status'];
+  mode?: ToolCallLog['mode'];
+  duration_ms?: number;
+  idempotency_key?: string;
+  input_hash?: string;
+  output_hash?: string;
+  error_code?: string;
+  adapter_type?: string;
+  preview_json?: unknown;
+  result_json?: unknown;
+}
+
+export interface ToolCallLogUpdateInput {
+  status?: ToolCallLog['status'];
+  policy_decision?: ToolCallLog['policy_decision'];
+  mode?: ToolCallLog['mode'];
+  duration_ms?: number;
+  output_hash?: string;
+  error_code?: string;
+  preview_json?: unknown;
+  result_json?: unknown;
+}
 
 export function hashJson(value: unknown): string {
   return createHash('sha256').update(stableStringify(value)).digest('hex');
@@ -407,6 +455,125 @@ export class AuditEventRepository {
   }
 }
 
+export class HumanTaskRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async create(input: HumanTaskCreateRequest & { human_task_id?: string }): Promise<HumanTask> {
+    const parsed = humanTaskCreateRequestSchema.parse(input);
+    const humanTaskId = input.human_task_id ?? `human_${randomUUID()}`;
+    const payload = {
+      ...parsed.payload,
+      ...(parsed.tool_call_id ? { tool_call_id: parsed.tool_call_id } : {}),
+      ...(parsed.tool_name ? { tool_name: parsed.tool_name } : {}),
+      requested_by: parsed.user_id,
+    };
+    const row: Insertable<HumanTaskTable> = {
+      human_task_id: humanTaskId,
+      tenant_id: parsed.tenant_id,
+      task_run_id: parsed.task_run_id,
+      workflow_id: parsed.workflow_id ?? null,
+      status: 'pending',
+      assignee: parsed.assignee ?? null,
+      candidate_groups: parsed.candidate_groups,
+      payload,
+      decision: null,
+      decided_by: null,
+      decided_at: null,
+      decision_reason: null,
+      completed_at: null,
+    };
+
+    const saved = await this.db.insertInto('human_task').values(row).returningAll().executeTakeFirstOrThrow();
+    return mapHumanTask(saved);
+  }
+
+  async get(humanTaskId: string): Promise<HumanTask | undefined> {
+    const row = await this.db
+      .selectFrom('human_task')
+      .selectAll()
+      .where('human_task_id', '=', humanTaskId)
+      .executeTakeFirst();
+
+    return row ? mapHumanTask(row) : undefined;
+  }
+
+  async approve(humanTaskId: string, input: HumanTaskDecisionInput): Promise<HumanTask | undefined> {
+    return this.decide(humanTaskId, 'approved', input);
+  }
+
+  async reject(humanTaskId: string, input: HumanTaskDecisionInput): Promise<HumanTask | undefined> {
+    return this.decide(humanTaskId, 'rejected', input);
+  }
+
+  async cancel(humanTaskId: string, input: HumanTaskDecisionInput): Promise<HumanTask | undefined> {
+    return this.decide(humanTaskId, 'cancelled', input);
+  }
+
+  async expire(humanTaskId: string, input: HumanTaskDecisionInput): Promise<HumanTask | undefined> {
+    return this.decide(humanTaskId, 'expired', input);
+  }
+
+  async listByTaskRunId(taskRunId: string, options: RepositoryTenantOptions = {}): Promise<HumanTask[]> {
+    let query = this.db
+      .selectFrom('human_task')
+      .selectAll()
+      .where('task_run_id', '=', taskRunId);
+
+    if (options.tenantId) {
+      query = query.where('tenant_id', '=', options.tenantId);
+    }
+
+    const rows = await query.orderBy('created_at', 'asc').execute();
+    return rows.map(mapHumanTask);
+  }
+
+  async list(options: { tenantId?: string; taskRunId?: string; status?: HumanTask['status'] } = {}): Promise<HumanTask[]> {
+    let query = this.db.selectFrom('human_task').selectAll();
+    if (options.tenantId) {
+      query = query.where('tenant_id', '=', options.tenantId);
+    }
+    if (options.taskRunId) {
+      query = query.where('task_run_id', '=', options.taskRunId);
+    }
+    if (options.status) {
+      query = query.where('status', '=', options.status);
+    }
+
+    const rows = await query.orderBy('created_at', 'asc').execute();
+    return rows.map(mapHumanTask);
+  }
+
+  private async decide(
+    humanTaskId: string,
+    status: HumanTask['status'],
+    input: HumanTaskDecisionInput,
+  ): Promise<HumanTask | undefined> {
+    const decidedAt = new Date();
+    let query = this.db
+      .updateTable('human_task')
+      .set({
+        status,
+        decision: {
+          status,
+          reason: input.decisionReason,
+          payload: input.payload ?? {},
+        },
+        decided_by: input.decidedBy,
+        decided_at: decidedAt,
+        decision_reason: input.decisionReason ?? null,
+        completed_at: decidedAt,
+      })
+      .where('human_task_id', '=', humanTaskId);
+
+    if (input.tenantId) {
+      query = query.where('tenant_id', '=', input.tenantId);
+    }
+
+    const row = await query.returningAll().executeTakeFirst();
+    return row ? mapHumanTask(row) : undefined;
+  }
+}
+
 export class IdempotencyRecordRepository {
   constructor(private readonly db: Kysely<Database>) {}
 
@@ -457,6 +624,103 @@ export class IdempotencyRecordRepository {
     }
 
     return { decision: 'replay', record };
+  }
+}
+
+export class ToolCallLogRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async create(input: ToolCallLogCreateInput): Promise<ToolCallLog> {
+    const toolCallLog = toolCallLogSchema.parse({
+      ...input,
+      tool_call_id: input.tool_call_id ?? `tool_call_${randomUUID()}`,
+    });
+    const row: Insertable<ToolCallLogTable> = {
+      tool_call_id: toolCallLog.tool_call_id,
+      task_run_id: toolCallLog.task_run_id ?? null,
+      workflow_id: toolCallLog.workflow_id ?? null,
+      tenant_id: toolCallLog.tenant_id,
+      user_id: toolCallLog.user_id ?? null,
+      tool_name: toolCallLog.tool_name,
+      tool_version: toolCallLog.tool_version,
+      risk_level: toolCallLog.risk_level,
+      policy_decision: toolCallLog.policy_decision,
+      status: toolCallLog.status,
+      duration_ms: toolCallLog.duration_ms ?? null,
+      idempotency_key: toolCallLog.idempotency_key ?? null,
+      input_hash: toolCallLog.input_hash ?? null,
+      output_hash: toolCallLog.output_hash ?? null,
+      error_code: toolCallLog.error_code ?? null,
+      adapter_type: toolCallLog.adapter_type ?? null,
+      mode: toolCallLog.mode ?? null,
+      preview_json: toolCallLog.preview_json ?? null,
+      result_json: toolCallLog.result_json ?? null,
+    };
+
+    const saved = await this.db.insertInto('tool_call_log').values(row).returningAll().executeTakeFirstOrThrow();
+    return mapToolCallLog(saved);
+  }
+
+  async get(toolCallId: string): Promise<ToolCallLog | undefined> {
+    const row = await this.db
+      .selectFrom('tool_call_log')
+      .selectAll()
+      .where('tool_call_id', '=', toolCallId)
+      .executeTakeFirst();
+
+    return row ? mapToolCallLog(row) : undefined;
+  }
+
+  async update(toolCallId: string, input: ToolCallLogUpdateInput): Promise<ToolCallLog | undefined> {
+    const rowUpdate: Updateable<ToolCallLogTable> = {
+      updated_at: new Date(),
+    };
+    if (input.status) {
+      rowUpdate.status = input.status;
+    }
+    if (input.policy_decision) {
+      rowUpdate.policy_decision = input.policy_decision;
+    }
+    if (input.mode) {
+      rowUpdate.mode = input.mode;
+    }
+    if (input.duration_ms !== undefined) {
+      rowUpdate.duration_ms = input.duration_ms;
+    }
+    if (input.output_hash !== undefined) {
+      rowUpdate.output_hash = input.output_hash;
+    }
+    if (input.error_code !== undefined) {
+      rowUpdate.error_code = input.error_code;
+    }
+    if (input.preview_json !== undefined) {
+      rowUpdate.preview_json = input.preview_json;
+    }
+    if (input.result_json !== undefined) {
+      rowUpdate.result_json = input.result_json;
+    }
+
+    const row = await this.db
+      .updateTable('tool_call_log')
+      .set(rowUpdate)
+      .where('tool_call_id', '=', toolCallId)
+      .returningAll()
+      .executeTakeFirst();
+
+    return row ? mapToolCallLog(row) : undefined;
+  }
+
+  async list(options: { tenantId?: string; taskRunId?: string } = {}): Promise<ToolCallLog[]> {
+    let query = this.db.selectFrom('tool_call_log').selectAll();
+    if (options.tenantId) {
+      query = query.where('tenant_id', '=', options.tenantId);
+    }
+    if (options.taskRunId) {
+      query = query.where('task_run_id', '=', options.taskRunId);
+    }
+
+    const rows = await query.orderBy('created_at', 'asc').execute();
+    return rows.map(mapToolCallLog);
   }
 }
 
@@ -612,6 +876,95 @@ function mapIdempotencyRecord(row: Selectable<IdempotencyRecordTable>): Idempote
   }
 
   return idempotencyRecordSchema.parse(record);
+}
+
+function mapHumanTask(row: Selectable<HumanTaskTable>): HumanTask {
+  const humanTask: HumanTask = {
+    human_task_id: row.human_task_id,
+    tenant_id: row.tenant_id,
+    task_run_id: row.task_run_id,
+    status: row.status as HumanTask['status'],
+    candidate_groups: Array.isArray(row.candidate_groups) ? row.candidate_groups.map(String) : [],
+    payload: isRecord(row.payload) ? row.payload : {},
+    created_at: toIso(row.created_at),
+  };
+
+  if (row.workflow_id) {
+    humanTask.workflow_id = row.workflow_id;
+  }
+  if (row.assignee) {
+    humanTask.assignee = row.assignee;
+  }
+  if (isRecord(row.decision)) {
+    humanTask.decision = row.decision;
+  }
+  if (row.decided_by) {
+    humanTask.decided_by = row.decided_by;
+  }
+  if (row.decided_at) {
+    humanTask.decided_at = toIso(row.decided_at);
+  }
+  if (row.decision_reason) {
+    humanTask.decision_reason = row.decision_reason;
+  }
+  if (row.completed_at) {
+    humanTask.completed_at = toIso(row.completed_at);
+  }
+
+  return humanTaskSchema.parse(humanTask);
+}
+
+function mapToolCallLog(row: Selectable<ToolCallLogTable>): ToolCallLog {
+  const toolCallLog: ToolCallLog = {
+    tool_call_id: row.tool_call_id,
+    tenant_id: row.tenant_id,
+    tool_name: row.tool_name,
+    tool_version: row.tool_version,
+    risk_level: row.risk_level as ToolCallLog['risk_level'],
+    policy_decision: row.policy_decision as ToolCallLog['policy_decision'],
+    status: row.status as ToolCallLog['status'],
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  };
+
+  if (row.task_run_id) {
+    toolCallLog.task_run_id = row.task_run_id;
+  }
+  if (row.workflow_id) {
+    toolCallLog.workflow_id = row.workflow_id;
+  }
+  if (row.user_id) {
+    toolCallLog.user_id = row.user_id;
+  }
+  if (row.mode) {
+    toolCallLog.mode = row.mode as ToolCallLog['mode'];
+  }
+  if (row.duration_ms !== null) {
+    toolCallLog.duration_ms = row.duration_ms;
+  }
+  if (row.idempotency_key) {
+    toolCallLog.idempotency_key = row.idempotency_key;
+  }
+  if (row.input_hash) {
+    toolCallLog.input_hash = row.input_hash;
+  }
+  if (row.output_hash) {
+    toolCallLog.output_hash = row.output_hash;
+  }
+  if (row.error_code) {
+    toolCallLog.error_code = row.error_code;
+  }
+  if (row.adapter_type) {
+    toolCallLog.adapter_type = row.adapter_type;
+  }
+  if (row.preview_json !== null) {
+    toolCallLog.preview_json = row.preview_json;
+  }
+  if (row.result_json !== null) {
+    toolCallLog.result_json = row.result_json;
+  }
+
+  return toolCallLogSchema.parse(toolCallLog);
 }
 
 function toIso(value: Date | string): string {

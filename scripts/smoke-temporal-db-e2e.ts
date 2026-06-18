@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
-import type { StandardResponse, TaskRun } from '@dar/contracts';
+import type { HumanTask, StandardResponse, TaskRun } from '@dar/contracts';
 import { closeDb, createDb, sql } from '@dar/db';
 
 type DbClient = ReturnType<typeof createDb>;
@@ -43,6 +43,35 @@ interface AuditRow {
   reason: string | null;
   payload: unknown;
   occurred_at: Date;
+}
+
+interface HumanTaskListData {
+  human_tasks: HumanTask[];
+}
+
+interface HumanTaskDecisionData {
+  human_task: HumanTask;
+  audit_event_id?: string;
+}
+
+interface HumanTaskRow {
+  human_task_id: string;
+  task_run_id: string;
+  status: string;
+  payload: unknown;
+  decision: unknown;
+  decided_by: string | null;
+  decision_reason: string | null;
+}
+
+interface ToolCallLogRow {
+  tool_call_id: string;
+  task_run_id: string | null;
+  tool_name: string;
+  status: string;
+  mode: string | null;
+  policy_decision: string;
+  idempotency_key: string | null;
 }
 
 interface IdempotencyRow {
@@ -96,7 +125,7 @@ async function main(): Promise<void> {
     assert.equal(task.flow_id, 'sample_flow');
     assert.equal(task.flow_version, 1);
 
-    const finalTask = await pollTask(taskRunId);
+    const finalTask = await pollTaskAndApprove(taskRunId);
     assert.ok(['completed', 'failed'].includes(finalTask.status), `unexpected final task status: ${finalTask.status}`);
     assert.equal(finalTask.status, 'completed', finalTask.error_message ?? 'workflow should complete');
 
@@ -111,6 +140,30 @@ async function main(): Promise<void> {
     assert.ok(
       auditEvents.some((event) => event.target_id === 'knowledge.search' || event.target_id === 'record.write.mock'),
       'audit_event should include tool-gateway tool invocation',
+    );
+    assert.ok(
+      auditEvents.some((event) => event.action === 'tool.preview' && event.target_id === 'record.write.mock'),
+      'audit_event should include L3 tool preview',
+    );
+    assert.ok(
+      auditEvents.some((event) => event.action === 'human_task.approve' && event.target_type === 'human_task'),
+      'audit_event should include human approval',
+    );
+    assert.ok(
+      auditEvents.some((event) => event.action === 'tool.commit' && event.target_id === 'record.write.mock'),
+      'audit_event should include L3 tool commit',
+    );
+
+    const humanTasks = await loadHumanTasks(db, taskRunId);
+    assert.ok(
+      humanTasks.some((task) => task.status === 'approved'),
+      'human_task should be approved during smoke',
+    );
+
+    const toolCallLogs = await loadToolCallLogs(db, taskRunId);
+    assert.ok(
+      toolCallLogs.some((log) => log.tool_name === 'record.write.mock' && log.status === 'committed'),
+      'tool_call_log should mark L3 record.write.mock as committed',
     );
 
     const idempotencyRecords = await loadIdempotencyRecords(db, taskRunId);
@@ -130,9 +183,23 @@ async function main(): Promise<void> {
           status: dbTaskRun.status,
           audit_events: auditEvents.map((event) => ({
             event_id: event.event_id,
+            action: event.action,
             target_id: event.target_id,
             result: event.result,
             reason: event.reason,
+          })),
+          human_tasks: humanTasks.map((task) => ({
+            human_task_id: task.human_task_id,
+            status: task.status,
+            decided_by: task.decided_by,
+            decision_reason: task.decision_reason,
+          })),
+          tool_call_logs: toolCallLogs.map((log) => ({
+            tool_call_id: log.tool_call_id,
+            tool_name: log.tool_name,
+            status: log.status,
+            mode: log.mode,
+            policy_decision: log.policy_decision,
           })),
           idempotency_records: idempotencyRecords.map((record) => ({
             idempotency_key: record.idempotency_key,
@@ -179,12 +246,14 @@ async function getJson<T>(url: string): Promise<T> {
   return body.data;
 }
 
-async function pollTask(taskRunId: string): Promise<TaskRun> {
+async function pollTaskAndApprove(taskRunId: string): Promise<TaskRun> {
   const deadline = Date.now() + Number(process.env.SMOKE_TIMEOUT_MS ?? 90_000);
   let lastTaskRun: TaskRun | undefined;
+  const approvedHumanTaskIds = new Set<string>();
 
   while (Date.now() < deadline) {
     lastTaskRun = await getJson<TaskRun>(`${runtimeApiUrl}/v1/tasks/${encodeURIComponent(taskRunId)}`);
+    await approvePendingHumanTasks(taskRunId, approvedHumanTaskIds);
     if (lastTaskRun.status === 'completed' || lastTaskRun.status === 'failed') {
       return lastTaskRun;
     }
@@ -192,6 +261,33 @@ async function pollTask(taskRunId: string): Promise<TaskRun> {
   }
 
   throw new Error(`Timed out waiting for task_run ${taskRunId}; last status=${lastTaskRun?.status ?? 'unknown'}`);
+}
+
+async function approvePendingHumanTasks(taskRunId: string, approvedHumanTaskIds: Set<string>): Promise<void> {
+  const params = new URLSearchParams({
+    tenant_id: tenantId,
+    user_id: userId,
+    task_run_id: taskRunId,
+    status: 'pending',
+  });
+  const list = await getJson<HumanTaskListData>(`${runtimeApiUrl}/v1/human-tasks?${params.toString()}`);
+  for (const humanTask of list.human_tasks) {
+    if (approvedHumanTaskIds.has(humanTask.human_task_id)) {
+      continue;
+    }
+    const decision = await postJson<HumanTaskDecisionData>(
+      `${runtimeApiUrl}/v1/human-tasks/${encodeURIComponent(humanTask.human_task_id)}/approve`,
+      {
+        tenant_id: tenantId,
+        user_id: userId,
+        request_id: `${requestId}_approve_${humanTask.human_task_id}`,
+        decision_reason: 'smoke L3 approval',
+        payload: { smoke: true, task_run_id: taskRunId },
+      },
+    );
+    assert.equal(decision.human_task.status, 'approved');
+    approvedHumanTaskIds.add(humanTask.human_task_id);
+  }
 }
 
 async function loadTaskRun(db: DbClient, taskRunId: string): Promise<TaskRun | undefined> {
@@ -225,7 +321,43 @@ async function loadRecentAuditEvents(db: DbClient, taskRunId?: string): Promise<
     query = query.where(sql<boolean>`payload ->> 'task_run_id' = ${taskRunId}`);
   }
 
-  return query.orderBy('occurred_at', 'desc').limit(10).execute() as Promise<AuditRow[]>;
+  return query.orderBy('occurred_at', 'desc').limit(20).execute() as Promise<AuditRow[]>;
+}
+
+async function loadHumanTasks(db: DbClient, taskRunId: string): Promise<HumanTaskRow[]> {
+  return db
+    .selectFrom('human_task')
+    .select([
+      'human_task_id',
+      'task_run_id',
+      'status',
+      'payload',
+      'decision',
+      'decided_by',
+      'decision_reason',
+    ])
+    .where('tenant_id', '=', tenantId)
+    .where('task_run_id', '=', taskRunId)
+    .orderBy('created_at', 'asc')
+    .execute() as Promise<HumanTaskRow[]>;
+}
+
+async function loadToolCallLogs(db: DbClient, taskRunId: string): Promise<ToolCallLogRow[]> {
+  return db
+    .selectFrom('tool_call_log')
+    .select([
+      'tool_call_id',
+      'task_run_id',
+      'tool_name',
+      'status',
+      'mode',
+      'policy_decision',
+      'idempotency_key',
+    ])
+    .where('tenant_id', '=', tenantId)
+    .where('task_run_id', '=', taskRunId)
+    .orderBy('created_at', 'asc')
+    .execute() as Promise<ToolCallLogRow[]>;
 }
 
 async function loadIdempotencyRecords(db: DbClient, taskRunId: string): Promise<IdempotencyRow[]> {
@@ -244,6 +376,8 @@ async function reportFailure(
 ): Promise<void> {
   const recentAuditEvents = await loadRecentAuditEvents(db, input.taskRunId).catch(() => []);
   const dbTaskRun = input.taskRunId ? await loadTaskRun(db, input.taskRunId).catch(() => undefined) : undefined;
+  const humanTasks = input.taskRunId ? await loadHumanTasks(db, input.taskRunId).catch(() => []) : [];
+  const toolCallLogs = input.taskRunId ? await loadToolCallLogs(db, input.taskRunId).catch(() => []) : [];
   console.error(
     JSON.stringify(
       {
@@ -251,6 +385,8 @@ async function reportFailure(
         workflow_id: input.workflowId,
         task_run_id: input.taskRunId,
         task_run: dbTaskRun,
+        human_tasks: humanTasks,
+        tool_call_logs: toolCallLogs,
         recent_audit_events: recentAuditEvents.map((event) => ({
           event_id: event.event_id,
           target_id: event.target_id,

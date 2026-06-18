@@ -27,6 +27,8 @@ TEMPORAL_NAMESPACE=default
 
 `runtime-api` 不直接调用 `tool-gateway`，也不执行工具。它只做路由、创建 `task_run`、启动 Temporal workflow。真实工具调用由 `runtime-worker` Activity 通过 `tool-gateway` 完成。
 
+L3 工具的人审决策也由 `runtime-api` 提供最小 API 写 DB。`runtime-api` 只更新 `human_task` / `audit_event` / `tool_call_log`，不会调用 `tool-gateway` commit；commit 仍由 `runtime-worker` Activity 在观察到 approved 后执行。
+
 `GET /readyz` 会返回当前 `route_source` 和 `workflow_starter`，Docker smoke 中应分别为 `db` 和 `temporal`。
 
 ## Endpoints
@@ -78,6 +80,52 @@ DB source 下的创建顺序：
 
 返回 `taskRunSchema`。DB 模式从 `task_run` 表读取；memory 模式只读取进程内测试/开发 store。
 
+### `GET /v1/human-tasks`
+
+查询人工任务。query 使用 `humanTaskListRequestSchema`：
+
+```text
+tenant_id=default
+user_id=smoke_user
+task_run_id=<optional>
+status=pending|approved|rejected|...
+```
+
+响应体使用 `humanTaskListResponseSchema`。
+
+### `GET /v1/human-tasks/:humanTaskId`
+
+query 使用 `humanTaskGetRequestSchema`，必须带 `tenant_id` 和 `user_id`。tenant 不匹配时返回 `HUMAN_TASK_NOT_FOUND`。
+
+### `POST /v1/human-tasks/:humanTaskId/approve`
+
+请求体使用 `humanTaskDecisionRequestSchema`：
+
+```json
+{
+  "tenant_id": "default",
+  "user_id": "approver_1",
+  "decision_reason": "local approval",
+  "payload": {}
+}
+```
+
+成功后：
+
+- `human_task.status=approved`；
+- 写入 `decided_by`、`decided_at`、`decision_reason`；
+- 写 `audit_event=human_task.approve`；
+- 如果 payload 中有关联 `tool_call_id`，将 `tool_call_log.status=approved`。
+
+### `POST /v1/human-tasks/:humanTaskId/reject`
+
+请求体同 approve。成功后：
+
+- `human_task.status=rejected`；
+- 写 `audit_event=human_task.reject`；
+- 如果有关联 `tool_call_id`，将 `tool_call_log.status=rejected`；
+- worker 观察到 rejected 后不会调用 `tool-gateway` commit，workflow 返回 failed。
+
 ## Environment
 
 - `DATABASE_URL`：DB 模式使用的 PostgreSQL URL。
@@ -102,3 +150,5 @@ corepack pnpm smoke:temporal-db-e2e
 ```
 
 smoke 会调用 `/v1/router/preview` 和 `/v1/tasks`。请求文本包含 `db-smoke`，该关键词只存在于 seed 的 DB RouteSpec 中，用于证明没有命中内置 `defaultRouteSpecs`。
+
+L3 本地测试时，smoke 会在 task_run 进入 `waiting_human` 后调用 `/v1/human-tasks` 找到 pending 任务，并调用 approve API；随后 worker 继续 commit。

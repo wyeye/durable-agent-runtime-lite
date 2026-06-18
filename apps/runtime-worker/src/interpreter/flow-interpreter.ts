@@ -1,22 +1,39 @@
-import type { AgentRunResult, FlowSpec, ToolInvokeResponse } from '@dar/contracts';
-import type { ActivityContext, HumanTaskPlaceholder } from '../activities/index.js';
+import type {
+  AgentRunResult,
+  FlowSpec,
+  HumanTask,
+  ToolCommitResponse,
+  ToolInvokeResponse,
+  ToolPreviewResponse,
+} from '@dar/contracts';
+import type { ActivityContext, CreateHumanTaskActivityInput } from '../activities/index.js';
 import { evaluateCondition } from './condition-evaluator.js';
 
 export interface FlowExecutionActivities {
   normalizeInput(input: unknown): Promise<Record<string, unknown>>;
   invokeTool(context: ActivityContext, toolName: string, args: Record<string, unknown>): Promise<ToolInvokeResponse>;
+  previewTool(context: ActivityContext, toolName: string, args: Record<string, unknown>): Promise<ToolPreviewResponse>;
+  commitTool(
+    context: ActivityContext,
+    toolCallId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<ToolCommitResponse>;
   runAgent(
     context: ActivityContext,
     agentId: string,
     input: Record<string, unknown>,
     allowedTools?: string[],
   ): Promise<AgentRunResult>;
-  createHumanTask(context: ActivityContext): Promise<HumanTaskPlaceholder>;
+  createHumanTask(context: ActivityContext, input?: CreateHumanTaskActivityInput): Promise<HumanTask>;
+  waitForHumanTaskDecision(context: ActivityContext, humanTaskId: string): Promise<HumanTask>;
 }
 
 export interface FlowExecutionResult {
   status: 'completed' | 'waiting_human' | 'failed';
   steps: Record<string, unknown>;
+  error_code?: string;
+  error_message?: string;
 }
 
 export async function executeFlowSpec(
@@ -41,11 +58,91 @@ export async function executeFlowSpec(
       if (!step.tool) {
         throw new Error(`tool step ${step.id} missing tool`);
       }
+      const args = resolveToolArguments(step.input, state, input);
+      if (step.risk_level === 'L3') {
+        const preview = await activities.previewTool(context, step.tool, args);
+        if (preview.status === 'denied') {
+          setStepResult(state, step.id, {
+            status: 'failed',
+            preview,
+          });
+          return {
+            status: 'failed',
+            steps: state,
+            error_code: preview.error?.code ?? 'TOOL_PREVIEW_DENIED',
+            error_message: preview.error?.message ?? `Tool preview denied: ${step.tool}`,
+          };
+        }
+
+        const humanTask = await activities.createHumanTask(context, {
+          tool_call_id: preview.tool_call_id,
+          tool_name: step.tool,
+          payload: {
+            step_id: step.id,
+            tool_call_id: preview.tool_call_id,
+            tool_name: step.tool,
+            tool_version: preview.tool_version,
+            preview,
+            arguments: args,
+          },
+        });
+        setStepResult(state, step.id, {
+          status: 'pending_confirmation',
+          preview,
+          human_task: humanTask,
+        });
+
+        const decision = await activities.waitForHumanTaskDecision(context, humanTask.human_task_id);
+        if (decision.status === 'approved') {
+          const commit = await activities.commitTool(context, preview.tool_call_id, step.tool, args);
+          setStepResult(state, step.id, {
+            status: commit.status === 'committed' || commit.status === 'replayed' ? 'committed' : 'failed',
+            preview,
+            human_task: decision,
+            commit,
+          });
+          if (commit.status !== 'committed' && commit.status !== 'replayed') {
+            return {
+              status: 'failed',
+              steps: state,
+              error_code: commit.error?.code ?? 'TOOL_COMMIT_FAILED',
+              error_message: commit.error?.message ?? `Tool commit failed: ${step.tool}`,
+            };
+          }
+          continue;
+        }
+
+        setStepResult(state, step.id, {
+          status: decision.status === 'pending' ? 'pending_confirmation' : 'rejected',
+          preview,
+          human_task: decision,
+        });
+        return {
+          status: decision.status === 'pending' ? 'waiting_human' : 'failed',
+          steps: state,
+          ...(decision.status !== 'pending'
+            ? {
+                error_code: 'HUMAN_TASK_REJECTED',
+                error_message: `Human task ${decision.status}: ${decision.human_task_id}`,
+              }
+            : {}),
+        };
+      }
+
+      const response = await activities.invokeTool(context, step.tool, args);
       setStepResult(
         state,
         step.id,
-        await activities.invokeTool(context, step.tool, resolveToolArguments(step.input, state, input)),
+        response,
       );
+      if (response.status === 'denied' || response.status === 'failed' || response.status === 'needs_confirmation') {
+        return {
+          status: 'failed',
+          steps: state,
+          error_code: response.error?.code ?? 'TOOL_INVOKE_FAILED',
+          error_message: response.error?.message ?? `Tool invoke failed: ${step.tool}`,
+        };
+      }
       continue;
     }
 
@@ -59,7 +156,13 @@ export async function executeFlowSpec(
     }
 
     if (step.type === 'human_task') {
-      setStepResult(state, step.id, await activities.createHumanTask(context));
+      const humanTask = await activities.createHumanTask(context, {
+        payload: {
+          step_id: step.id,
+          input: resolveStepInput(step.input, state, input),
+        },
+      });
+      setStepResult(state, step.id, await activities.waitForHumanTaskDecision(context, humanTask.human_task_id));
       continue;
     }
 

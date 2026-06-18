@@ -129,7 +129,7 @@ tool-gateway:
 1. `POST /v1/tasks` 到 `runtime-api`，文本包含 `mvp` 或 `知识搜索`。
 2. `runtime-api` 命中 memory `sample_flow`，创建 TaskRun，并使用 mock Workflow Starter 返回 workflow id。
 3. `runtime-worker` 可通过 FlowSpec snapshot/ref 跑通 `input.normalize -> knowledge.search -> agent.plan -> record.write.mock`。
-4. `tool-gateway` 通过 `POST /v1/tools/:toolName/invoke` 执行 `knowledge.search` 或 `record.write.mock`，并记录 audit event。
+4. `record.write.mock` 是 L3 side-effect 工具，真实路径会走 `preview -> human confirm -> commit`；不能通过直接 `invoke` 执行副作用。
 
 DB Registry -> mock execution 窄闭环：
 
@@ -159,11 +159,43 @@ corepack pnpm smoke:temporal-db-e2e
 2. `POST /v1/router/preview` 命中 DB seed 的 `sample_route`，请求文本使用 `db-smoke`，不会被内置 `defaultRouteSpecs` 命中；
 3. `POST /v1/tasks` 返回真实 Temporal `workflow_id` 和 `task_run_id`；
 4. `GET /v1/tasks/:taskRunId` 轮询到 `completed`；
-5. DB `task_run` 状态为 `completed`；
-6. DB `audit_event` 有 `knowledge.search` 或 `record.write.mock` 工具审计；
-7. DB `idempotency_record` 有对应工具调用幂等记录。
+5. 遇到 L3 `record.write.mock` 时查询 pending `human_task`，调用 runtime-api approve；
+6. DB `task_run` 状态为 `completed`；
+7. DB `audit_event` 有 `tool.preview`、`human_task.approve`、`tool.commit`；
+8. DB `tool_call_log` 中 L3 工具从 `pending_confirmation` 进入 `committed`；
+9. DB `idempotency_record` 有对应工具调用幂等记录。
 
-成功时会输出 JSON，包含 `ok: true`、`task_run_id`、`workflow_id`、最终状态、工具 audit events 和 idempotency records。失败时会输出 `workflow_id`、`task_run_id`、DB task_run、最近 audit event 和错误摘要；优先检查 task queue、`TOOL_GATEWAY_URL`、DB seed 是否存在、ToolManifest schema 是否与 FlowSpec step input 匹配。
+成功时会输出 JSON，包含 `ok: true`、`task_run_id`、`workflow_id`、最终状态、human tasks、tool call logs、工具 audit events 和 idempotency records。失败时会输出 `workflow_id`、`task_run_id`、DB task_run、最近 audit event、human task、tool call log 和错误摘要；优先检查 task queue、`TOOL_GATEWAY_URL`、DB seed 是否存在、ToolManifest schema 是否与 FlowSpec step input 匹配。
+
+## L3 高风险工具治理
+
+风险等级：
+
+- `L0`：本地纯计算或无敏感读取。
+- `L1`：只读查询，例如 `knowledge.search`。
+- `L2`：生成建议或草稿，是否需要确认由 ToolManifest 策略决定。
+- `L3`：有副作用工具，例如 `record.write.mock`，必须 `preview -> human confirm/reject -> commit`。
+- `L4`：高敏感工具，默认 deny，并写 audit。
+
+调用模式：
+
+- `invoke`：只适合 L0/L1，L3 直接 invoke 返回 `needs_confirmation`，不会执行副作用。
+- `preview`：校验 ToolManifest 和参数，生成待执行计划，写 `tool_call_log=pending_confirmation` 和 `audit_event=tool.preview`，不执行副作用。
+- `commit`：必须带 `tool_call_id` 和 commit `idempotency_key`；L3 只有在对应 `human_task` 已 approved 后才执行 adapter。成功后写 `tool_call_log=committed`、`audit_event=tool.commit`、`idempotency_record=succeeded`；同 key 同参数 replay，同 key 不同参数 conflict。
+
+人工确认 API：
+
+```bash
+curl "http://localhost:3000/v1/human-tasks?tenant_id=default&user_id=smoke_user&task_run_id=<task_run_id>&status=pending"
+curl -X POST "http://localhost:3000/v1/human-tasks/<human_task_id>/approve" \
+  -H 'content-type: application/json' \
+  -d '{"tenant_id":"default","user_id":"smoke_user","decision_reason":"local approval"}'
+curl -X POST "http://localhost:3000/v1/human-tasks/<human_task_id>/reject" \
+  -H 'content-type: application/json' \
+  -d '{"tenant_id":"default","user_id":"smoke_user","decision_reason":"not safe"}'
+```
+
+`runtime-api` 只写 human task 决策和审计，不调用 `tool-gateway`。`runtime-worker` 的 Activity 会观察 DB 中的 human decision，approved 后再通过 `tool-gateway` commit；rejected 时 workflow 不 commit，并把 `task_run` 标为 failed。
 
 ## 关键命令
 
@@ -190,6 +222,8 @@ pnpm smoke:temporal-db-e2e
 - `TaskRunRepository`：`create/get/updateStatus/updateWorkflowStart`，runtime-api DB 模式写入和查询 TaskRun，runtime-worker Activity 回写 `running` / `completed` / `failed`。
 - `AuditEventRepository`：`append/list`，tool-gateway DB 模式写 audit。
 - `IdempotencyRecordRepository`：`get/insert/replayOrConflict`，tool-gateway DB 模式做 replay/conflict。
+- `HumanTaskRepository`：`create/get/list/approve/reject/cancel/expire`，记录 `decided_by`、`decided_at`、`decision_reason`。
+- `ToolCallLogRepository`：记录 L3 preview/approval/reject/commit 状态和 preview/result JSON。
 
 FlowSpec snapshot ref 格式：
 

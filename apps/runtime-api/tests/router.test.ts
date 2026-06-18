@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { RouteSpec, TaskRun, WorkflowStartResponse } from '@dar/contracts';
+import type { HumanTask, RouteSpec, TaskRun, WorkflowStartResponse } from '@dar/contracts';
 import { buildServer } from '../src/index.js';
+import {
+  HumanTaskService,
+  InMemoryHumanTaskAuditStore,
+  InMemoryHumanTaskStore,
+  InMemoryHumanTaskToolCallLogStore,
+} from '../src/modules/human-task/human-task-service.js';
 import { routeByRules } from '../src/modules/router/rule-router.js';
 import { defaultRouteSpecs } from '../src/modules/router/route-registry.js';
 import type { RouteSpecSource } from '../src/modules/router/route-source.js';
@@ -285,5 +291,100 @@ describe('runtime-api router and task endpoints', () => {
         TOOL_GATEWAY_REGISTRY_SOURCE: 'db',
       }),
     ).toThrow('RUNTIME_API_ROUTE_SOURCE=db is required in production');
+  });
+
+  it('lists, reads, approves, and rejects human tasks with tenant/user context', async () => {
+    const pendingTask: HumanTask = {
+      human_task_id: 'human_l3_1',
+      tenant_id: 'tenant_1',
+      task_run_id: 'task_l3_1',
+      workflow_id: 'workflow_l3_1',
+      status: 'pending',
+      candidate_groups: [],
+      payload: {
+        tool_call_id: 'tool_call_l3_1',
+        tool_name: 'record.write.mock',
+      },
+      created_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    };
+    const rejectedTask: HumanTask = {
+      ...pendingTask,
+      human_task_id: 'human_l3_2',
+      task_run_id: 'task_l3_2',
+      workflow_id: 'workflow_l3_2',
+      payload: {
+        tool_call_id: 'tool_call_l3_2',
+        tool_name: 'record.write.mock',
+      },
+    };
+    const auditStore = new InMemoryHumanTaskAuditStore();
+    const toolCallStore = new InMemoryHumanTaskToolCallLogStore();
+    const humanTaskService = new HumanTaskService({
+      store: new InMemoryHumanTaskStore([pendingTask, rejectedTask]),
+      auditStore,
+      toolCallLogStore: toolCallStore,
+    });
+    const server = buildServer(undefined, undefined, humanTaskService);
+
+    const list = await server.inject({
+      method: 'GET',
+      url: '/v1/human-tasks?tenant_id=tenant_1&user_id=user_1&status=pending',
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().data.human_tasks.map((task: HumanTask) => task.human_task_id)).toEqual([
+      'human_l3_1',
+      'human_l3_2',
+    ]);
+
+    const get = await server.inject({
+      method: 'GET',
+      url: '/v1/human-tasks/human_l3_1?tenant_id=tenant_1&user_id=user_1',
+    });
+    expect(get.statusCode).toBe(200);
+    expect(get.json().data.human_task.payload.tool_call_id).toBe('tool_call_l3_1');
+
+    const approve = await server.inject({
+      method: 'POST',
+      url: '/v1/human-tasks/human_l3_1/approve',
+      payload: {
+        tenant_id: 'tenant_1',
+        user_id: 'approver_1',
+        decision_reason: 'safe in test',
+        payload: { note: 'approved' },
+        request_id: 'req_human_approve',
+      },
+    });
+    expect(approve.statusCode).toBe(200);
+    expect(approve.json().data.human_task).toMatchObject({
+      human_task_id: 'human_l3_1',
+      status: 'approved',
+      decided_by: 'approver_1',
+      decision_reason: 'safe in test',
+    });
+
+    const reject = await server.inject({
+      method: 'POST',
+      url: '/v1/human-tasks/human_l3_2/reject',
+      payload: {
+        tenant_id: 'tenant_1',
+        user_id: 'approver_2',
+        decision_reason: 'not safe',
+        request_id: 'req_human_reject',
+      },
+    });
+    expect(reject.statusCode).toBe(200);
+    expect(reject.json().data.human_task).toMatchObject({
+      human_task_id: 'human_l3_2',
+      status: 'rejected',
+      decided_by: 'approver_2',
+    });
+
+    expect(auditStore.events.map((event) => event.action)).toEqual(['human_task.approve', 'human_task.reject']);
+    expect(toolCallStore.updates).toEqual([
+      { toolCallId: 'tool_call_l3_1', input: { status: 'approved' } },
+      { toolCallId: 'tool_call_l3_2', input: { status: 'rejected' } },
+    ]);
+
+    await server.close();
   });
 });

@@ -20,7 +20,9 @@
     {
       "id": "record_write",
       "type": "tool",
+      "name": "record.write.mock preview -> human_confirm -> commit",
       "tool": "record.write.mock",
+      "mode": "preview_commit",
       "risk_level": "L3",
       "input": {
         "record": "${state.steps.knowledge_search.result}"

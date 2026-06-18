@@ -1,9 +1,19 @@
 import { request } from 'undici';
 import {
+  toolCallLogSchema,
+  toolCommitRequestSchema,
+  toolCommitResponseSchema,
   toolInvokeRequestSchema,
   toolInvokeResponseSchema,
+  toolPreviewRequestSchema,
+  toolPreviewResponseSchema,
+  type ToolCallLog,
+  type ToolCommitRequest,
+  type ToolCommitResponse,
   type ToolInvokeRequest,
   type ToolInvokeResponse,
+  type ToolPreviewRequest,
+  type ToolPreviewResponse,
 } from '@dar/contracts';
 
 export interface ToolGatewayClientOptions {
@@ -22,20 +32,49 @@ export class ToolGatewayClient {
 
   async invoke(payload: ToolInvokeRequest): Promise<ToolInvokeResponse> {
     const parsed = toolInvokeRequestSchema.parse(payload);
-    const body = JSON.stringify(parsed);
-    const url = new URL(`/v1/tools/${encodeURIComponent(parsed.tool_name)}/invoke`, this.baseUrl);
+    return toolInvokeResponseSchema.parse(
+      await this.post(`/v1/tools/${encodeURIComponent(parsed.tool_name)}/invoke`, parsed),
+    );
+  }
+
+  async preview(payload: ToolPreviewRequest): Promise<ToolPreviewResponse> {
+    const parsed = toolPreviewRequestSchema.parse(payload);
+    return toolPreviewResponseSchema.parse(
+      await this.post(`/v1/tools/${encodeURIComponent(parsed.tool_name)}/preview`, parsed),
+    );
+  }
+
+  async commit(payload: ToolCommitRequest): Promise<ToolCommitResponse> {
+    const parsed = toolCommitRequestSchema.parse(payload);
+    return toolCommitResponseSchema.parse(
+      await this.post(`/v1/tools/${encodeURIComponent(parsed.tool_name)}/commit`, parsed),
+    );
+  }
+
+  async getToolCall(toolCallId: string): Promise<ToolCallLog> {
+    const url = new URL(`/v1/tool-calls/${encodeURIComponent(toolCallId)}`, this.baseUrl);
     const response = await request(url, {
+      method: 'GET',
+      headers: this.defaultHeaders,
+    });
+    const text = await response.body.text();
+    const json: unknown = text ? JSON.parse(text) : {};
+    return toolCallLogSchema.parse(unwrapStandardResponse(json));
+  }
+
+  private async post(path: string, payload: unknown): Promise<unknown> {
+    const response = await request(new URL(path, this.baseUrl), {
       method: 'POST',
       headers: {
         ...this.defaultHeaders,
         'content-type': 'application/json',
       },
-      body,
+      body: JSON.stringify(payload),
     });
 
     const text = await response.body.text();
     const json: unknown = text ? JSON.parse(text) : {};
-    return toolInvokeResponseSchema.parse(unwrapStandardResponse(json));
+    return unwrapStandardResponse(json);
   }
 }
 

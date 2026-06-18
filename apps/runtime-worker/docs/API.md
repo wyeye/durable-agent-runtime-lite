@@ -95,13 +95,42 @@ Seed 的 sample FlowSpec 显式映射：
 
 这样真实 ToolManifest schema 校验会使用实际 workflow input 和上一步工具结果，不依赖默认参数或 mock fallback。
 
+## L3 Tool Governance
+
+普通 L0/L1 tool step 通过 `invokeToolActivity` 调用 `tool-gateway /invoke`。
+
+当 FlowSpec tool step 标记 `risk_level: "L3"` 时，`ConfigDrivenWorkflow` 的解释器改走治理流程：
+
+1. `previewToolActivity` 调 `tool-gateway /preview`，生成 `tool_call_id`，不执行副作用；
+2. `createHumanTaskActivity` 通过 `HumanTaskRepository` 写入 pending `human_task`，同时把 `task_run` 标为 `waiting_human`；
+3. `waitForHumanTaskDecisionActivity` 轮询 DB 中的 human decision；
+4. approved 后，`commitToolActivity` 调 `tool-gateway /commit`；
+5. rejected/cancelled/expired 后不 commit，workflow 返回 failed；
+6. commit failed/denied 时 workflow 返回 failed。
+
+Workflow 本体只调用 Activity proxy，不直接访问 DB、HTTP、Pi、LLM、`Date.now` 或 `Math.random`。HTTP 调用 tool-gateway、DB 写 human task、DB 查询 decision 都在 Activity 中执行。
+
+Seed 的 `sample_flow` 中 `record.write.mock` 是 L3：
+
+```json
+{
+  "id": "record_write",
+  "type": "tool",
+  "name": "record.write.mock preview -> human_confirm -> commit",
+  "tool": "record.write.mock",
+  "mode": "preview_commit",
+  "risk_level": "L3"
+}
+```
+
 ## TaskRun status writeback
 
 `ConfigDrivenWorkflow` 和 `GenericAgentWorkflow` 通过 `updateTaskRunStatusActivity` 回写 DB：
 
 - workflow 开始执行后：`running`
-- workflow 成功完成后：`completed`
 - workflow 等待人工时：`waiting_human`
+- 人工决策已返回、继续执行时：`running`
+- workflow 成功完成后：`completed`
 - workflow 失败后：`failed`，并记录 `error_code` / `error_message`
 
 状态回写在 Activity 中通过 `TaskRunRepository` 完成，Workflow 本体不直接访问 DB、HTTP、LLM、Pi、`Date.now` 或 `Math.random`。

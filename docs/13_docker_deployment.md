@@ -77,7 +77,25 @@ TOOL_GATEWAY_URL=http://tool-gateway:3200
 
 Production-like Docker paths must not use memory sources, `defaultRouteSpecs`, `sample_flow@1`, or memory tool registry. `runtime-api` only starts Temporal workflows; tool invocation happens in `runtime-worker` activities through `tool-gateway`.
 
-Successful smoke output includes `ok: true`, a `task_run_id`, a `workflow_id`, `completed` task status, DB audit events for `knowledge.search` or `record.write.mock`, and DB idempotency records for the tool calls.
+Successful smoke output includes `ok: true`, a `task_run_id`, a `workflow_id`, `completed` task status, approved `human_task`, committed `tool_call_log`, DB audit events for `knowledge.search`, `tool.preview`, `human_task.approve`, `tool.commit`, and DB idempotency records for tool invoke/commit.
+
+The seeded flow uses L3 governance for `record.write.mock`:
+
+```text
+input.normalize
+  -> knowledge.search invoke
+  -> agent.plan
+  -> record.write.mock preview
+  -> human_task approve/reject through runtime-api
+  -> record.write.mock commit
+```
+
+Risk policy summary:
+
+- L0/L1 can be invoked directly.
+- L2 can preview; commit behavior depends on policy.
+- L3 cannot directly invoke side effects; preview writes `tool_call_log=pending_confirmation`, approve/reject writes `human_task` and audit, commit writes `tool_call_log=committed` and `idempotency_record`.
+- L4 is denied by default and audited.
 
 If smoke fails, inspect:
 
@@ -86,7 +104,9 @@ If smoke fails, inspect:
 3. whether `corepack pnpm seed:examples` inserted the sample FlowSpec, RouteSpec, and ToolManifest rows;
 4. whether runtime-api and worker use the same Temporal task queue, `runtime-worker-main`;
 5. whether worker uses `TOOL_GATEWAY_URL=http://tool-gateway:3200` inside Docker;
-6. whether `task_run.error_code` / `task_run.error_message` explains a workflow failure.
+6. whether `/v1/human-tasks?tenant_id=default&user_id=smoke_user&task_run_id=<id>&status=pending` returns a task if workflow is waiting;
+7. whether `tool_call_log` has a `pending_confirmation`, `approved`, `rejected`, or `committed` L3 record;
+8. whether `task_run.error_code` / `task_run.error_message` explains a workflow failure.
 
 ## Notes for Codex
 

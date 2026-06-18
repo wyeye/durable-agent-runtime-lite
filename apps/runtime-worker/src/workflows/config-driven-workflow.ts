@@ -11,15 +11,21 @@ export interface ConfigDrivenWorkflowArgs extends ConfigDrivenWorkflowInput {
 const {
   normalizeInput,
   invokeToolActivity,
+  previewToolActivity,
+  commitToolActivity,
   runAgentActivity,
   createHumanTaskActivity,
+  waitForHumanTaskDecisionActivity,
   loadFlowSpecByRefActivity,
   updateTaskRunStatusActivity,
 } = proxyActivities<{
   normalizeInput: FlowExecutionActivities['normalizeInput'];
   invokeToolActivity: FlowExecutionActivities['invokeTool'];
+  previewToolActivity: FlowExecutionActivities['previewTool'];
+  commitToolActivity: FlowExecutionActivities['commitTool'];
   runAgentActivity: FlowExecutionActivities['runAgent'];
   createHumanTaskActivity: FlowExecutionActivities['createHumanTask'];
+  waitForHumanTaskDecisionActivity: FlowExecutionActivities['waitForHumanTaskDecision'];
   loadFlowSpecByRefActivity(flowSnapshotRef: string): Promise<FlowSpec>;
   updateTaskRunStatusActivity(input: {
     tenant_id: string;
@@ -32,7 +38,7 @@ const {
     error_message?: string;
   }): Promise<void>;
 }>({
-  startToCloseTimeout: '1 minute',
+  startToCloseTimeout: '6 minutes',
 });
 
 export async function configDrivenWorkflow(input: ConfigDrivenWorkflowArgs): Promise<FlowExecutionResult> {
@@ -51,11 +57,19 @@ export async function configDrivenWorkflow(input: ConfigDrivenWorkflowArgs): Pro
     const result = await executeFlowSpec(flowSpec, context, input.input ?? {}, {
       normalizeInput,
       invokeTool: invokeToolActivity,
+      previewTool: previewToolActivity,
+      commitTool: commitToolActivity,
       runAgent: runAgentActivity,
       createHumanTask: createHumanTaskActivity,
+      waitForHumanTaskDecision: waitForHumanTaskDecisionActivity,
     });
 
-    await updateTaskRunStatusActivity({ ...context, status: result.status });
+    await updateTaskRunStatusActivity({
+      ...context,
+      status: result.status,
+      ...(result.error_code ? { error_code: result.error_code } : {}),
+      ...(result.error_message ? { error_message: result.error_message } : {}),
+    });
     return result;
   } catch (error) {
     await updateTaskRunStatusActivity({

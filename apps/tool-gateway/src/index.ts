@@ -1,21 +1,30 @@
 import { pathToFileURL } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
-import type { RuntimeError, StandardErrorResponse, StandardSuccessResponse, ToolInvokeResponse } from '@dar/contracts';
+import type {
+  RuntimeError,
+  StandardErrorResponse,
+  StandardSuccessResponse,
+  ToolCommitResponse,
+  ToolInvokeResponse,
+  ToolPreviewResponse,
+} from '@dar/contracts';
 import { getAppPort, loadConfig } from '@dar/config';
 import { createLogger } from '@dar/logger';
 import {
   AuditEventRepository,
   closeDb,
   createDb,
+  HumanTaskRepository,
   IdempotencyRecordRepository,
+  ToolCallLogRepository,
   type Database,
 } from '@dar/db';
 import type { RuntimeConfig } from '@dar/config';
 import type { Kysely } from 'kysely';
 import { DbAuditStore } from './modules/audit.js';
 import { DbToolManifestRegistry } from './modules/tool-registry.js';
-import { ToolService } from './modules/tool-service.js';
+import { DbHumanTaskLookupStore, ToolService } from './modules/tool-service.js';
 
 const appName = 'tool-gateway' as const;
 const logger = createLogger(appName);
@@ -52,7 +61,7 @@ function deniedStatusCode(result: ToolInvokeResponse): number {
   return result.error?.code === 'TOOL_NOT_FOUND' ? 404 : 400;
 }
 
-function deniedError(result: ToolInvokeResponse): RuntimeError {
+function deniedError(result: ToolInvokeResponse | ToolPreviewResponse | ToolCommitResponse): RuntimeError {
   return {
     code: result.error?.code ?? 'TOOL_INVOKE_DENIED',
     message: result.error?.message ?? '工具调用被拒绝',
@@ -61,6 +70,7 @@ function deniedError(result: ToolInvokeResponse): RuntimeError {
       idempotency_key: result.idempotency_key,
       tool_name: result.tool_name,
       tool_version: result.tool_version,
+      ...('tool_call_id' in result ? { tool_call_id: result.tool_call_id } : {}),
     },
   };
 }
@@ -135,7 +145,65 @@ export function buildServer(toolService = new ToolService()): FastifyInstance {
     }
   });
 
+  server.post('/v1/tools/:toolName/preview', async (request, reply) => {
+    const { toolName } = request.params as { toolName: string };
+    try {
+      const result = await toolService.preview(toolName, request.body);
+      if (result.status === 'denied') {
+        reply.code(deniedStatusCode(result as unknown as ToolInvokeResponse));
+        return runtimeFailure(deniedError(result));
+      }
+      return success(result);
+    } catch (error) {
+      reply.code(error instanceof ZodError ? 400 : 500);
+      return failure(error);
+    }
+  });
+
+  server.post('/v1/tools/:toolName/commit', async (request, reply) => {
+    const { toolName } = request.params as { toolName: string };
+    try {
+      const result = await toolService.commit(toolName, request.body);
+      if (result.status === 'denied' || result.status === 'failed') {
+        reply.code(result.error?.code === 'TOOL_NOT_FOUND' || result.error?.code === 'TOOL_CALL_NOT_FOUND' ? 404 : 400);
+        return runtimeFailure(deniedError(result));
+      }
+      return success(result);
+    } catch (error) {
+      reply.code(error instanceof ZodError ? 400 : 500);
+      return failure(error);
+    }
+  });
+
   server.get('/v1/audit-events', async () => success(await toolService.listAuditEvents()));
+
+  server.get('/v1/tool-calls/:toolCallId', async (request, reply) => {
+    const { toolCallId } = request.params as { toolCallId: string };
+    const toolCall = await toolService.getToolCall(toolCallId);
+    if (!toolCall) {
+      reply.code(404);
+      return {
+        success: false,
+        data: null,
+        error: { code: 'TOOL_CALL_NOT_FOUND', message: '工具调用记录不存在' },
+      };
+    }
+    return success(toolCall);
+  });
+
+  server.get('/v1/idempotency-records/:idempotencyKey', async (request, reply) => {
+    const { idempotencyKey } = request.params as { idempotencyKey: string };
+    const record = await toolService.getIdempotencyRecord(idempotencyKey);
+    if (!record) {
+      reply.code(404);
+      return {
+        success: false,
+        data: null,
+        error: { code: 'IDEMPOTENCY_RECORD_NOT_FOUND', message: '幂等记录不存在' },
+      };
+    }
+    return success(record);
+  });
 
   return server;
 }
@@ -157,6 +225,8 @@ export function createToolGatewayService(config: RuntimeConfig = loadConfig()): 
         registry: new DbToolManifestRegistry(db),
         auditStore: new DbAuditStore(new AuditEventRepository(db)),
         idempotencyRepository: new IdempotencyRecordRepository(db),
+        toolCallLogStore: new ToolCallLogRepository(db),
+        humanTaskStore: new DbHumanTaskLookupStore(new HumanTaskRepository(db)),
       }),
       close: async () => closeDb(db),
     };

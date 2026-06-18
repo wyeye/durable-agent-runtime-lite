@@ -1,6 +1,9 @@
 import { z } from 'zod';
 
-export const riskLevelSchema = z.enum(['L0', 'L1', 'L2', 'L3', 'L4']);
+export const toolRiskLevelSchema = z.enum(['L0', 'L1', 'L2', 'L3', 'L4']);
+export const riskLevelSchema = toolRiskLevelSchema;
+export const toolInvokeModeSchema = z.enum(['preview', 'commit']);
+export const toolPolicyDecisionSchema = z.enum(['allow', 'deny', 'require_human_confirm']);
 export const specStatusSchema = z.enum(['draft', 'published', 'gray', 'disabled', 'archived']);
 export const flowStepTypeSchema = z.enum(['activity', 'tool', 'agent', 'human_task', 'condition']);
 export const piResultStatusSchema = z.enum([
@@ -244,10 +247,69 @@ export const toolInvokeRequestSchema = z.object({
   request_id: z.string().min(1).optional(),
 });
 
+export const policyEvaluationResultSchema = z.object({
+  decision: toolPolicyDecisionSchema,
+  risk_level: toolRiskLevelSchema,
+  reason: z.string().min(1),
+  requires_human_confirm: z.boolean().default(false),
+  error: runtimeErrorSchema.optional(),
+});
+
 export const toolInvokeResponseSchema = z.object({
   tool_name: z.string().min(1),
   tool_version: z.string().min(1),
   status: z.enum(['allowed', 'denied', 'needs_confirmation', 'failed', 'succeeded', 'replayed']),
+  result: z.unknown().optional(),
+  error: runtimeErrorSchema.optional(),
+  audit_event_id: z.string().optional(),
+  idempotency_key: z.string().optional(),
+  tool_call_id: z.string().optional(),
+  policy: policyEvaluationResultSchema.optional(),
+});
+
+export const toolPreviewRequestSchema = z.object({
+  tool_name: z.string().min(1),
+  tool_version: z.string().min(1).default('1.0.0'),
+  tenant_id: z.string().min(1),
+  user_context: jsonObjectSchema.default({}),
+  task_context: jsonObjectSchema.default({}),
+  arguments: jsonObjectSchema.default({}),
+  idempotency_key: z.string().min(1),
+  risk_level: toolRiskLevelSchema.optional(),
+  request_id: z.string().min(1).optional(),
+});
+
+export const toolPreviewResponseSchema = z.object({
+  tool_call_id: z.string().min(1),
+  tool_name: z.string().min(1),
+  tool_version: z.string().min(1),
+  mode: z.literal('preview'),
+  status: z.enum(['allowed', 'pending_confirmation', 'denied']),
+  policy: policyEvaluationResultSchema,
+  preview: z.unknown().optional(),
+  error: runtimeErrorSchema.optional(),
+  audit_event_id: z.string().optional(),
+  idempotency_key: z.string().optional(),
+});
+
+export const toolCommitRequestSchema = z.object({
+  tool_call_id: z.string().min(1),
+  tool_name: z.string().min(1),
+  tool_version: z.string().min(1).default('1.0.0'),
+  tenant_id: z.string().min(1),
+  user_context: jsonObjectSchema.default({}),
+  task_context: jsonObjectSchema.default({}),
+  arguments: jsonObjectSchema.default({}),
+  idempotency_key: z.string().min(1),
+  request_id: z.string().min(1).optional(),
+});
+
+export const toolCommitResponseSchema = z.object({
+  tool_call_id: z.string().min(1),
+  tool_name: z.string().min(1),
+  tool_version: z.string().min(1),
+  mode: z.literal('commit'),
+  status: z.enum(['committed', 'denied', 'failed', 'replayed']),
   result: z.unknown().optional(),
   error: runtimeErrorSchema.optional(),
   audit_event_id: z.string().optional(),
@@ -257,6 +319,8 @@ export const toolInvokeResponseSchema = z.object({
 export const humanTaskStatusSchema = z.enum([
   'created',
   'assigned',
+  'pending',
+  'approved',
   'resolved',
   'rejected',
   'cancelled',
@@ -273,8 +337,57 @@ export const humanTaskSchema = z.object({
   candidate_groups: z.array(z.string()).default([]),
   payload: jsonObjectSchema.default({}),
   decision: jsonObjectSchema.optional(),
+  decided_by: z.string().optional(),
+  decided_at: z.string().datetime().optional(),
+  decision_reason: z.string().optional(),
   created_at: z.string().datetime().optional(),
   completed_at: z.string().datetime().optional(),
+});
+
+export const humanTaskCreateRequestSchema = z.object({
+  tenant_id: z.string().min(1),
+  user_id: z.string().min(1),
+  task_run_id: z.string().min(1),
+  workflow_id: z.string().optional(),
+  tool_call_id: z.string().optional(),
+  tool_name: z.string().optional(),
+  assignee: z.string().optional(),
+  candidate_groups: z.array(z.string()).default([]),
+  payload: jsonObjectSchema.default({}),
+  request_id: z.string().min(1).optional(),
+});
+
+export const humanTaskDecisionRequestSchema = z.object({
+  tenant_id: z.string().min(1),
+  user_id: z.string().min(1),
+  decision_reason: z.string().optional(),
+  payload: jsonObjectSchema.default({}),
+  request_id: z.string().min(1).optional(),
+});
+
+export const humanTaskListRequestSchema = z.object({
+  tenant_id: z.string().min(1),
+  user_id: z.string().min(1),
+  task_run_id: z.string().min(1).optional(),
+  status: humanTaskStatusSchema.optional(),
+});
+
+export const humanTaskGetRequestSchema = z.object({
+  tenant_id: z.string().min(1),
+  user_id: z.string().min(1),
+});
+
+export const humanTaskDecisionResponseSchema = z.object({
+  human_task: humanTaskSchema,
+  audit_event_id: z.string().optional(),
+});
+
+export const humanTaskListResponseSchema = z.object({
+  human_tasks: z.array(humanTaskSchema),
+});
+
+export const humanTaskGetResponseSchema = z.object({
+  human_task: humanTaskSchema,
 });
 
 export const auditEventSchema = z.object({
@@ -301,6 +414,40 @@ export const idempotencyRecordSchema = z.object({
   request_hash: z.string().min(1),
   response_json: z.unknown().optional(),
   status: idempotencyRecordStatusSchema,
+  created_at: z.string().datetime().optional(),
+  updated_at: z.string().datetime().optional(),
+});
+
+export const toolCallLogStatusSchema = z.enum([
+  'previewed',
+  'pending_confirmation',
+  'approved',
+  'rejected',
+  'committed',
+  'denied',
+  'failed',
+]);
+
+export const toolCallLogSchema = z.object({
+  tool_call_id: z.string().min(1),
+  task_run_id: z.string().optional(),
+  workflow_id: z.string().optional(),
+  tenant_id: z.string().min(1),
+  user_id: z.string().optional(),
+  tool_name: z.string().min(1),
+  tool_version: z.string().min(1),
+  risk_level: toolRiskLevelSchema,
+  policy_decision: toolPolicyDecisionSchema,
+  status: toolCallLogStatusSchema,
+  mode: toolInvokeModeSchema.optional(),
+  duration_ms: z.number().int().nonnegative().optional(),
+  idempotency_key: z.string().optional(),
+  input_hash: z.string().optional(),
+  output_hash: z.string().optional(),
+  error_code: z.string().optional(),
+  adapter_type: z.string().optional(),
+  preview_json: z.unknown().optional(),
+  result_json: z.unknown().optional(),
   created_at: z.string().datetime().optional(),
   updated_at: z.string().datetime().optional(),
 });
@@ -390,7 +537,10 @@ export const agentRunResultSchema = z.object({
   error: runtimeErrorSchema.optional(),
 });
 
-export type RiskLevel = z.infer<typeof riskLevelSchema>;
+export type ToolRiskLevel = z.infer<typeof toolRiskLevelSchema>;
+export type RiskLevel = ToolRiskLevel;
+export type ToolInvokeMode = z.infer<typeof toolInvokeModeSchema>;
+export type ToolPolicyDecision = z.infer<typeof toolPolicyDecisionSchema>;
 export type RuntimeError = z.infer<typeof runtimeErrorSchema>;
 export type TenantContext = z.infer<typeof tenantContextSchema>;
 export type UserContext = z.infer<typeof userContextSchema>;
@@ -409,11 +559,25 @@ export type AgentSpec = z.infer<typeof agentSpecSchema>;
 export type PromptDefinition = z.infer<typeof promptDefinitionSchema>;
 export type ToolManifest = z.infer<typeof toolManifestSchema>;
 export type TaskRun = z.infer<typeof taskRunSchema>;
+export type PolicyEvaluationResult = z.infer<typeof policyEvaluationResultSchema>;
 export type ToolInvokeRequest = z.infer<typeof toolInvokeRequestSchema>;
 export type ToolInvokeResponse = z.infer<typeof toolInvokeResponseSchema>;
+export type ToolPreviewRequest = z.infer<typeof toolPreviewRequestSchema>;
+export type ToolPreviewResponse = z.infer<typeof toolPreviewResponseSchema>;
+export type ToolCommitRequest = z.infer<typeof toolCommitRequestSchema>;
+export type ToolCommitResponse = z.infer<typeof toolCommitResponseSchema>;
 export type HumanTask = z.infer<typeof humanTaskSchema>;
+export type HumanTaskCreateRequest = z.infer<typeof humanTaskCreateRequestSchema>;
+export type HumanTaskListRequest = z.infer<typeof humanTaskListRequestSchema>;
+export type HumanTaskGetRequest = z.infer<typeof humanTaskGetRequestSchema>;
+export type HumanTaskDecisionRequest = z.infer<typeof humanTaskDecisionRequestSchema>;
+export type HumanTaskDecisionResponse = z.infer<typeof humanTaskDecisionResponseSchema>;
+export type HumanTaskListResponse = z.infer<typeof humanTaskListResponseSchema>;
+export type HumanTaskGetResponse = z.infer<typeof humanTaskGetResponseSchema>;
 export type AuditEvent = z.infer<typeof auditEventSchema>;
 export type IdempotencyRecord = z.infer<typeof idempotencyRecordSchema>;
+export type ToolCallLogStatus = z.infer<typeof toolCallLogStatusSchema>;
+export type ToolCallLog = z.infer<typeof toolCallLogSchema>;
 export type TaskInput = z.infer<typeof taskInputSchema>;
 export type RunTaskRequest = z.infer<typeof runTaskRequestSchema>;
 export type RouterPreviewRequest = z.infer<typeof routerPreviewRequestSchema>;

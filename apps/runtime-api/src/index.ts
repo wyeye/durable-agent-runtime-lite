@@ -4,6 +4,7 @@ import { ZodError } from 'zod';
 import type { StandardErrorResponse, StandardSuccessResponse } from '@dar/contracts';
 import { getAppPort, loadConfig } from '@dar/config';
 import { createLogger } from '@dar/logger';
+import { HumanTaskService } from './modules/human-task/human-task-service.js';
 import { createRuntimeApiTaskService, TaskService } from './modules/task/task-service.js';
 
 const appName = 'runtime-api' as const;
@@ -67,6 +68,7 @@ export interface RuntimeApiReadiness {
 export function buildServer(
   taskService = new TaskService(),
   readiness: RuntimeApiReadiness = { routeSource: 'memory', workflowStarter: 'mock' },
+  humanTaskService = new HumanTaskService(),
 ): FastifyInstance {
   const server = Fastify({ logger: false });
 
@@ -123,16 +125,84 @@ export function buildServer(
     return toSuccessResponse(taskRun);
   });
 
+  server.get('/v1/human-tasks', async (request, reply) => {
+    try {
+      return toSuccessResponse(await humanTaskService.list(request.query));
+    } catch (error) {
+      reply.code(error instanceof ZodError ? 400 : 500);
+      return toErrorResponse(error);
+    }
+  });
+
+  server.get('/v1/human-tasks/:humanTaskId', async (request, reply) => {
+    const { humanTaskId } = request.params as { humanTaskId: string };
+    try {
+      const result = await humanTaskService.get(humanTaskId, request.query);
+      if (!result) {
+        reply.code(404);
+        return {
+          success: false,
+          data: null,
+          error: { code: 'HUMAN_TASK_NOT_FOUND', message: '人工任务不存在' },
+        };
+      }
+      return toSuccessResponse(result);
+    } catch (error) {
+      reply.code(error instanceof ZodError ? 400 : 500);
+      return toErrorResponse(error);
+    }
+  });
+
+  server.post('/v1/human-tasks/:humanTaskId/approve', async (request, reply) => {
+    const { humanTaskId } = request.params as { humanTaskId: string };
+    const traceId = getTraceId(request.body);
+    try {
+      const result = await humanTaskService.approve(humanTaskId, request.body);
+      if (!result) {
+        reply.code(404);
+        return {
+          success: false,
+          data: null,
+          error: { code: 'HUMAN_TASK_NOT_FOUND', message: '人工任务不存在' },
+        };
+      }
+      return toSuccessResponse(result, traceId);
+    } catch (error) {
+      reply.code(error instanceof ZodError ? 400 : 500);
+      return toErrorResponse(error, traceId);
+    }
+  });
+
+  server.post('/v1/human-tasks/:humanTaskId/reject', async (request, reply) => {
+    const { humanTaskId } = request.params as { humanTaskId: string };
+    const traceId = getTraceId(request.body);
+    try {
+      const result = await humanTaskService.reject(humanTaskId, request.body);
+      if (!result) {
+        reply.code(404);
+        return {
+          success: false,
+          data: null,
+          error: { code: 'HUMAN_TASK_NOT_FOUND', message: '人工任务不存在' },
+        };
+      }
+      return toSuccessResponse(result, traceId);
+    } catch (error) {
+      reply.code(error instanceof ZodError ? 400 : 500);
+      return toErrorResponse(error, traceId);
+    }
+  });
+
   return server;
 }
 
 export async function start(): Promise<void> {
   const config = loadConfig();
-  const { taskService, close } = createRuntimeApiTaskService(config);
+  const { taskService, humanTaskService, close } = createRuntimeApiTaskService(config);
   const server = buildServer(taskService, {
     routeSource: config.RUNTIME_API_ROUTE_SOURCE,
     workflowStarter: config.RUNTIME_API_WORKFLOW_STARTER,
-  });
+  }, humanTaskService);
   const port = getAppPort(appName, config);
 
   server.addHook('onClose', async () => {

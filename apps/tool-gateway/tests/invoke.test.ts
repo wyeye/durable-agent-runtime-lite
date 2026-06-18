@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { AuditEvent, IdempotencyRecord, ToolManifest } from '@dar/contracts';
+import type { AuditEvent, HumanTask, IdempotencyRecord, ToolManifest } from '@dar/contracts';
 import { buildServer, createToolGatewayService } from '../src/index.js';
 import type { ToolManifestRegistry } from '../src/modules/tool-registry.js';
-import { ToolService } from '../src/modules/tool-service.js';
+import {
+  InMemoryHumanTaskLookupStore,
+  InMemoryToolCallLogStore,
+  ToolService,
+} from '../src/modules/tool-service.js';
 
 class MutableRegistry implements ToolManifestRegistry {
   readonly calls: Array<{ toolName?: string; tenantId?: string }> = [];
@@ -103,6 +107,21 @@ const dbKnowledgeSearchTool: ToolManifest = {
   status: 'published',
 };
 
+const l4Tool: ToolManifest = {
+  tool_name: 'secret.rotate',
+  version: '1.0.0',
+  description: 'L4 sensitive tool',
+  risk_level: 'L4',
+  side_effect: true,
+  adapter: { type: 'mock', endpoint_ref: 'mock/secret-rotate' },
+  input_schema: {
+    type: 'object',
+    properties: {},
+  },
+  required_permissions: [],
+  status: 'published',
+};
+
 const productionConfig = {
   NODE_ENV: 'production',
   APP_ENV: 'production',
@@ -148,25 +167,25 @@ describe('tool-gateway invoke', () => {
     await server.close();
   });
 
-  it('replays same idempotency key and writes audit event', async () => {
+  it('replays same readonly idempotency key and writes audit event', async () => {
     const server = buildServer();
     const payload = {
       tool_version: '1.0.0',
       tenant_id: 'tenant_1',
       user_context: { user_id: 'user_1' },
       task_context: { task_run_id: 'task_2' },
-      arguments: { record: { title: 'demo' } },
-      idempotency_key: 'task_2:record.write.mock',
+      arguments: { query: 'demo' },
+      idempotency_key: 'task_2:knowledge.search',
       request_id: 'req_2',
     };
     const first = await server.inject({
       method: 'POST',
-      url: '/v1/tools/record.write.mock/invoke',
+      url: '/v1/tools/knowledge.search/invoke',
       payload,
     });
     const second = await server.inject({
       method: 'POST',
-      url: '/v1/tools/record.write.mock/invoke',
+      url: '/v1/tools/knowledge.search/invoke',
       payload,
     });
     expect(first.json().data.status).toBe('succeeded');
@@ -185,21 +204,21 @@ describe('tool-gateway invoke', () => {
       tenant_id: 'tenant_1',
       user_context: { user_id: 'user_1' },
       task_context: { task_run_id: 'task_conflict' },
-      arguments: { record: { title: 'demo' } },
-      idempotency_key: 'task_conflict:record.write.mock',
+      arguments: { query: 'demo' },
+      idempotency_key: 'task_conflict:knowledge.search',
       request_id: 'req_conflict_1',
     };
     const first = await server.inject({
       method: 'POST',
-      url: '/v1/tools/record.write.mock/invoke',
+      url: '/v1/tools/knowledge.search/invoke',
       payload,
     });
     const second = await server.inject({
       method: 'POST',
-      url: '/v1/tools/record.write.mock/invoke',
+      url: '/v1/tools/knowledge.search/invoke',
       payload: {
         ...payload,
-        arguments: { record: { title: 'changed' } },
+        arguments: { query: 'changed' },
         request_id: 'req_conflict_2',
       },
     });
@@ -215,6 +234,243 @@ describe('tool-gateway invoke', () => {
     const audit = await server.inject({ method: 'GET', url: '/v1/audit-events' });
     expect(audit.json().data).toHaveLength(2);
     expect(audit.json().data[1].reason).toBe('IDEMPOTENCY_CONFLICT');
+    await server.close();
+  });
+
+  it('requires L3 tools to use preview before commit instead of direct invoke', async () => {
+    const server = buildServer();
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/record.write.mock/invoke',
+      payload: {
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_l3_invoke' },
+        arguments: { record: { title: 'demo' } },
+        idempotency_key: 'task_l3_invoke:record.write.mock',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      status: 'needs_confirmation',
+      error: { code: 'HUMAN_CONFIRMATION_REQUIRED' },
+      policy: { decision: 'require_human_confirm', risk_level: 'L3' },
+    });
+    expect(response.json().data.result).toBeUndefined();
+    await server.close();
+  });
+
+  it('previews L3 tools without executing side effects and records tool_call_log plus audit', async () => {
+    const toolCallLogStore = new InMemoryToolCallLogStore();
+    const server = buildServer(new ToolService({ toolCallLogStore }));
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/record.write.mock/preview',
+      payload: {
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_l3_preview', workflow_id: 'wf_1' },
+        arguments: { record: { title: 'demo' } },
+        idempotency_key: 'task_l3_preview:record.write.mock:preview',
+        request_id: 'req_l3_preview',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      tool_name: 'record.write.mock',
+      mode: 'preview',
+      status: 'pending_confirmation',
+      policy: { decision: 'require_human_confirm', risk_level: 'L3' },
+      preview: { planned: true, side_effect: true },
+    });
+    expect(response.json().data.preview.written).toBeUndefined();
+
+    const toolCall = await server.inject({
+      method: 'GET',
+      url: `/v1/tool-calls/${response.json().data.tool_call_id}`,
+    });
+    expect(toolCall.statusCode).toBe(200);
+    expect(toolCall.json().data).toMatchObject({
+      status: 'pending_confirmation',
+      policy_decision: 'require_human_confirm',
+      mode: 'preview',
+      tool_name: 'record.write.mock',
+    });
+
+    const audit = await server.inject({ method: 'GET', url: '/v1/audit-events' });
+    expect(audit.json().data).toHaveLength(1);
+    expect(audit.json().data[0]).toMatchObject({
+      action: 'tool.preview',
+      result: 'pending',
+      target_id: 'record.write.mock',
+    });
+    await server.close();
+  });
+
+  it('rejects L3 commit before human approval and commits after approval', async () => {
+    const toolCallLogStore = new InMemoryToolCallLogStore();
+    const humanTaskStore = new InMemoryHumanTaskLookupStore();
+    const server = buildServer(new ToolService({ toolCallLogStore, humanTaskStore }));
+
+    const preview = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/record.write.mock/preview',
+      payload: {
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_l3_commit', workflow_id: 'wf_1' },
+        arguments: { record: { title: 'demo' } },
+        idempotency_key: 'task_l3_commit:record.write.mock:preview',
+      },
+    });
+    const toolCallId = preview.json().data.tool_call_id as string;
+
+    const denied = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/record.write.mock/commit',
+      payload: {
+        tool_call_id: toolCallId,
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_l3_commit', workflow_id: 'wf_1' },
+        arguments: { record: { title: 'demo' } },
+        idempotency_key: 'task_l3_commit:record.write.mock:commit',
+      },
+    });
+    expect(denied.statusCode).toBe(400);
+    expect(denied.json().error.code).toBe('HUMAN_CONFIRMATION_REQUIRED');
+
+    humanTaskStore.add({
+      human_task_id: 'human_1',
+      tenant_id: 'tenant_1',
+      task_run_id: 'task_l3_commit',
+      workflow_id: 'wf_1',
+      status: 'approved',
+      candidate_groups: [],
+      payload: { tool_call_id: toolCallId },
+      decision: { status: 'approved' },
+      decided_by: 'approver_1',
+      decided_at: '2025-01-01T00:00:00.000Z',
+      created_at: '2025-01-01T00:00:00.000Z',
+    } satisfies HumanTask);
+
+    const committed = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/record.write.mock/commit',
+      payload: {
+        tool_call_id: toolCallId,
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_l3_commit', workflow_id: 'wf_1' },
+        arguments: { record: { title: 'demo' } },
+        idempotency_key: 'task_l3_commit:record.write.mock:commit:approved',
+      },
+    });
+    expect(committed.statusCode).toBe(200);
+    expect(committed.json().data).toMatchObject({
+      status: 'committed',
+      result: { written: true, preview: false },
+    });
+
+    const toolCall = await server.inject({ method: 'GET', url: `/v1/tool-calls/${toolCallId}` });
+    expect(toolCall.json().data).toMatchObject({
+      status: 'committed',
+      mode: 'commit',
+      result_json: { written: true },
+    });
+    await server.close();
+  });
+
+  it('replays and conflicts L3 commit idempotency after approval', async () => {
+    const toolCallLogStore = new InMemoryToolCallLogStore();
+    const humanTaskStore = new InMemoryHumanTaskLookupStore();
+    const server = buildServer(new ToolService({ toolCallLogStore, humanTaskStore }));
+
+    const preview = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/record.write.mock/preview',
+      payload: {
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_l3_idem', workflow_id: 'wf_1' },
+        arguments: { record: { title: 'demo' } },
+        idempotency_key: 'task_l3_idem:record.write.mock:preview',
+      },
+    });
+    const toolCallId = preview.json().data.tool_call_id as string;
+    humanTaskStore.add({
+      human_task_id: 'human_idem',
+      tenant_id: 'tenant_1',
+      task_run_id: 'task_l3_idem',
+      workflow_id: 'wf_1',
+      status: 'approved',
+      candidate_groups: [],
+      payload: { tool_call_id: toolCallId },
+      decided_by: 'approver_1',
+      decided_at: '2025-01-01T00:00:00.000Z',
+      created_at: '2025-01-01T00:00:00.000Z',
+    });
+
+    const payload = {
+      tool_call_id: toolCallId,
+      tool_version: '1.0.0',
+      tenant_id: 'tenant_1',
+      user_context: { user_id: 'user_1' },
+      task_context: { task_run_id: 'task_l3_idem', workflow_id: 'wf_1' },
+      arguments: { record: { title: 'demo' } },
+      idempotency_key: 'task_l3_idem:record.write.mock:commit',
+    };
+
+    const first = await server.inject({ method: 'POST', url: '/v1/tools/record.write.mock/commit', payload });
+    const replay = await server.inject({ method: 'POST', url: '/v1/tools/record.write.mock/commit', payload });
+    const conflict = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/record.write.mock/commit',
+      payload: { ...payload, arguments: { record: { title: 'changed' } } },
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(first.json().data.status).toBe('committed');
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().data).toMatchObject({ status: 'replayed', result: first.json().data.result });
+    expect(conflict.statusCode).toBe(400);
+    expect(conflict.json().error.code).toBe('IDEMPOTENCY_CONFLICT');
+    await server.close();
+  });
+
+  it('denies L4 tools and writes audit event', async () => {
+    const registry = new MutableRegistry([l4Tool]);
+    const auditStore = new FakeAuditStore();
+    const server = buildServer(new ToolService({ registry, auditStore }));
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/secret.rotate/preview',
+      payload: {
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_l4' },
+        arguments: {},
+        idempotency_key: 'task_l4:secret.rotate:preview',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      success: false,
+      error: { code: 'TOOL_RISK_L4_DENIED' },
+    });
+    expect(auditStore.events).toHaveLength(1);
+    expect(auditStore.events[0]).toMatchObject({ result: 'denied', reason: 'TOOL_RISK_L4_DENIED' });
     await server.close();
   });
 
