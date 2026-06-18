@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HumanTask, RouteSpec, TaskRun, WorkflowStartResponse } from '@dar/contracts';
-import type { HumanTaskDecisionSignalInput } from '@dar/temporal';
+import type { HumanTaskDecisionSignalInput, UserInputResponseSignalInput } from '@dar/temporal';
 import { buildServer } from '../src/index.js';
 import {
   HumanTaskService,
@@ -339,6 +339,46 @@ describe('runtime-api router and task endpoints', () => {
     expect(taskStore.calls).toEqual(['create', 'updateWorkflowStart']);
   });
 
+  it('starts explicit agent task with immutable AgentExecutionPlan ref', async () => {
+    const workflowStarts: unknown[] = [];
+    const server = buildServer(
+      new TaskService({
+        workflowStarter: {
+          async start(request) {
+            workflowStarts.push(request);
+            return {
+              workflow_id: request.workflow_id,
+              task_run_id: request.task_run_id,
+              started: true,
+              mode: 'mock',
+            };
+          },
+        },
+      }),
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/agent-tasks',
+      payload: {
+        tenant_id: 'tenant_1',
+        user_id: 'user_1',
+        agent_execution_plan_ref: 'db://agent-execution-plan/agent_plan_1',
+        request_id: 'req_agent_task',
+        input: { text: 'run exact agent' },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.workflow_start).toMatchObject({ mode: 'mock', started: true });
+    expect(workflowStarts[0]).toMatchObject({
+      workflow_type: 'GenericAgentWorkflow',
+      agent_execution_plan_ref: 'db://agent-execution-plan/agent_plan_1',
+    });
+
+    await server.close();
+  });
+
   it('requires DB RouteSpec source in production', () => {
     expect(() =>
       createRuntimeApiTaskService({
@@ -352,6 +392,13 @@ describe('runtime-api router and task endpoints', () => {
         TEMPORAL_NAMESPACE: 'default',
         MODEL_GATEWAY_BASE_URL: 'http://localhost:4100',
         MODEL_GATEWAY_API_KEY: 'dev-only-placeholder',
+        MODEL_GATEWAY_MODEL: 'dar-local-model',
+        MODEL_GATEWAY_TIMEOUT_MS: 30_000,
+        MODEL_GATEWAY_MAX_RETRIES: 1,
+        PI_AGENT_MODE: 'disabled',
+        PI_CONTEXT_MAX_BYTES: 262_144,
+        PI_SEGMENT_TIMEOUT_MS: 120_000,
+        PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW: 20,
         JWT_ISSUER: 'http://localhost:3000',
         JWT_AUDIENCE: 'durable-agent-runtime-lite',
         LOG_LEVEL: 'info',
@@ -373,6 +420,7 @@ describe('runtime-api router and task endpoints', () => {
       tenant_id: 'tenant_1',
       task_run_id: 'task_l3_1',
       workflow_id: 'workflow_l3_1',
+      kind: 'approval',
       status: 'pending',
       candidate_groups: [],
       payload: {
@@ -479,6 +527,79 @@ describe('runtime-api router and task endpoints', () => {
       expect.objectContaining({ human_task_id: 'human_l3_1', status: 'approved', workflow_id: 'workflow_l3_1' }),
       expect.objectContaining({ human_task_id: 'human_l3_2', status: 'rejected', workflow_id: 'workflow_l3_2' }),
     ]);
+
+    await server.close();
+  });
+
+  it('responds to user_input human task and sends dedicated Temporal signal', async () => {
+    const userInputTask: HumanTask = {
+      human_task_id: 'human_user_1',
+      tenant_id: 'tenant_1',
+      task_run_id: 'task_user_1',
+      workflow_id: 'workflow_user_1',
+      kind: 'user_input',
+      status: 'pending',
+      candidate_groups: [],
+      payload: { question: 'value?' },
+      requested_schema: { type: 'object', properties: { value: { type: 'string' } } },
+      created_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    };
+    const signals: UserInputResponseSignalInput[] = [];
+    const humanTaskService = new HumanTaskService({
+      store: new InMemoryHumanTaskStore([userInputTask]),
+      auditStore: new InMemoryHumanTaskAuditStore(),
+      signalSender: {
+        async send() {
+          throw new Error('approval signal should not be used for user input');
+        },
+        async sendUserInput(input) {
+          signals.push(input);
+        },
+      },
+    });
+    const server = buildServer(undefined, undefined, humanTaskService);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/human-tasks/human_user_1/respond',
+      payload: {
+        tenant_id: 'tenant_1',
+        user_id: 'user_1',
+        response: { value: 'answer' },
+        response_idempotency_key: 'idem_user_1',
+        request_id: 'req_user_input',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.human_task).toMatchObject({
+      human_task_id: 'human_user_1',
+      kind: 'user_input',
+      status: 'resolved',
+      response: { value: 'answer' },
+      response_idempotency_key: 'idem_user_1',
+    });
+    expect(signals).toEqual([
+      expect.objectContaining({
+        human_task_id: 'human_user_1',
+        workflow_id: 'workflow_user_1',
+        response: { value: 'answer' },
+      }),
+    ]);
+
+    const replay = await server.inject({
+      method: 'POST',
+      url: '/v1/human-tasks/human_user_1/respond',
+      payload: {
+        tenant_id: 'tenant_1',
+        user_id: 'user_1',
+        response: { value: 'answer' },
+        response_idempotency_key: 'idem_user_1',
+      },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().data.idempotent_replay).toBe(true);
+    expect(signals).toHaveLength(1);
 
     await server.close();
   });

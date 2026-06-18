@@ -1,5 +1,7 @@
 import type {
   AuditEvent,
+  AgentRunRecord,
+  AgentStepRecord,
   DashboardSummaryResponse,
   HumanTaskGetResponse,
   HumanTaskListResponse,
@@ -25,6 +27,14 @@ export interface TaskRunFilters {
   status?: string;
   flow_id?: string;
   workflow_id?: string;
+  page?: number;
+  page_size?: number;
+}
+
+export interface AgentRunFilters {
+  status?: string;
+  task_run_id?: string;
+  agent_id?: string;
   page?: number;
   page_size?: number;
 }
@@ -88,6 +98,21 @@ export function listTaskRuns(client: ApiClient, filters: TaskRunFilters): Promis
 
 export function getTaskRun(client: ApiClient, taskRunId: string): Promise<TaskRun> {
   return client.request(`/api/v1/operations/task-runs/${encodeURIComponent(taskRunId)}`);
+}
+
+export async function listAgentRuns(client: ApiClient, filters: AgentRunFilters): Promise<AgentRunRecord[]> {
+  const response = await client.request<{ agent_runs: AgentRunRecord[] }>('/api/v1/operations/agent-runs', { query: filters });
+  return response.agent_runs;
+}
+
+export async function getAgentRun(client: ApiClient, agentRunId: string): Promise<AgentRunRecord> {
+  const response = await client.request<{ agent_run: AgentRunRecord }>(`/api/v1/operations/agent-runs/${encodeURIComponent(agentRunId)}`);
+  return response.agent_run;
+}
+
+export async function listAgentSteps(client: ApiClient, agentRunId: string, filters: { page?: number; page_size?: number } = {}): Promise<AgentStepRecord[]> {
+  const response = await client.request<{ agent_steps: AgentStepRecord[] }>(`/api/v1/operations/agent-runs/${encodeURIComponent(agentRunId)}/steps`, { query: filters });
+  return response.agent_steps;
 }
 
 export function listAuditEvents(client: ApiClient, filters: AuditFilters): Promise<AuditEvent[]> {

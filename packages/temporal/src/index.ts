@@ -4,6 +4,7 @@ export const TASK_QUEUES = {
 
 export const WORKFLOW_SIGNALS = {
   humanTaskDecision: 'humanTaskDecisionSignal',
+  userInputResponse: 'userInputResponseSignal',
 } as const;
 
 export type TaskQueueName = (typeof TASK_QUEUES)[keyof typeof TASK_QUEUES];
@@ -28,7 +29,8 @@ export interface GenericAgentWorkflowInput {
   user_id: string;
   task_run_id: string;
   workflow_id?: string;
-  agent_id: string;
+  agent_execution_plan_ref?: string;
+  agent_id?: string;
   agent_version?: number;
   prompt_ref?: string;
   model_policy?: string;
@@ -41,6 +43,19 @@ export interface GenericAgentWorkflowInput {
   input?: unknown;
 }
 
+export interface PiDurableAgentWorkflowInput {
+  tenant_id: string;
+  user_id: string;
+  task_run_id: string;
+  workflow_id?: string;
+  parent_workflow_id?: string;
+  agent_execution_plan_ref: string;
+  execution_mode?: 'answer_only' | 'plan_only' | 'mediated_tool_call';
+  initial_user_input?: string;
+  request_id: string;
+  trace_id?: string;
+}
+
 export interface HumanTaskDecisionSignalInput {
   human_task_id: string;
   tenant_id: string;
@@ -51,6 +66,17 @@ export interface HumanTaskDecisionSignalInput {
   decided_by?: string;
   decided_at?: string;
   decision_reason?: string;
+}
+
+export interface UserInputResponseSignalInput {
+  human_task_id: string;
+  tenant_id: string;
+  task_run_id: string;
+  workflow_id?: string;
+  response: Record<string, unknown>;
+  responded_by: string;
+  responded_at: string;
+  response_idempotency_key: string;
 }
 
 function sanitizeWorkflowSegment(value: string): string {

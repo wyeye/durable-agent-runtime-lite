@@ -75,6 +75,7 @@ const agent: AgentSpec = {
   prompt_ref: 'sample_prompt@1',
   model_policy: 'mock',
   allowed_tools: ['knowledge.search@1.0.0', 'record.write.mock@1.0.0'],
+  allowed_handoffs: [],
   max_steps: 4,
   max_tokens: 2000,
   status: 'published',

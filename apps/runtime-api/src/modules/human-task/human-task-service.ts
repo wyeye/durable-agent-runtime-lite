@@ -2,6 +2,8 @@ import {
   auditEventSchema,
   humanTaskDecisionRequestSchema,
   humanTaskDecisionResponseSchema,
+  humanTaskRespondRequestSchema,
+  humanTaskRespondResponseSchema,
   humanTaskGetRequestSchema,
   humanTaskGetResponseSchema,
   humanTaskListRequestSchema,
@@ -10,18 +12,20 @@ import {
   type AuditEvent,
   type HumanTask,
   type HumanTaskDecisionResponse,
+  type HumanTaskRespondResponse,
   type HumanTaskGetResponse,
   type HumanTaskListResponse,
   type ToolCallLog,
 } from '@dar/contracts';
-import type { HumanTaskDecisionInput, ListHumanTasksOptions, ToolCallLogUpdateInput } from '@dar/db';
-import type { HumanTaskDecisionSignalInput } from '@dar/temporal';
+import type { HumanTaskDecisionInput, HumanTaskRespondInput, ListHumanTasksOptions, ToolCallLogUpdateInput } from '@dar/db';
+import type { HumanTaskDecisionSignalInput, UserInputResponseSignalInput } from '@dar/temporal';
 
 export interface HumanTaskStore {
   get(humanTaskId: string): Promise<HumanTask | undefined>;
   list(options?: ListHumanTasksOptions): Promise<HumanTask[]>;
   approve(humanTaskId: string, input: HumanTaskDecisionInput): Promise<HumanTask | undefined>;
   reject(humanTaskId: string, input: HumanTaskDecisionInput): Promise<HumanTask | undefined>;
+  respond?(humanTaskId: string, input: HumanTaskRespondInput): Promise<{ humanTask?: HumanTask; conflict: boolean; idempotentReplay: boolean }>;
 }
 
 export interface HumanTaskAuditStore {
@@ -34,6 +38,7 @@ export interface HumanTaskToolCallLogStore {
 
 export interface HumanTaskDecisionSignalSender {
   send(input: HumanTaskDecisionSignalInput): Promise<void>;
+  sendUserInput?(input: UserInputResponseSignalInput): Promise<void>;
 }
 
 export interface HumanTaskServiceOptions {
@@ -85,6 +90,61 @@ export class HumanTaskService {
 
   async reject(humanTaskId: string, input: unknown): Promise<HumanTaskDecisionResponse | undefined> {
     return this.decide(humanTaskId, input, 'rejected');
+  }
+
+  async respond(humanTaskId: string, input: unknown): Promise<HumanTaskRespondResponse | undefined> {
+    const parsed = humanTaskRespondRequestSchema.parse(input);
+    const before = await this.store.get(humanTaskId);
+    const wasPending = before?.status === 'pending' || before?.status === 'created' || before?.status === 'assigned';
+    if (!this.store.respond) {
+      return undefined;
+    }
+    const result = await this.store.respond(humanTaskId, {
+      tenantId: parsed.tenant_id,
+      userId: parsed.user_id,
+      response: parsed.response,
+      responseIdempotencyKey: parsed.response_idempotency_key,
+    });
+    if (!result.humanTask) {
+      return undefined;
+    }
+    if (result.conflict) {
+      throw new Error(`HumanTask response conflict: ${humanTaskId}`);
+    }
+    if (wasPending && !result.idempotentReplay && this.signalSender?.sendUserInput && result.humanTask.workflow_id) {
+      await this.signalSender.sendUserInput({
+        human_task_id: result.humanTask.human_task_id,
+        tenant_id: result.humanTask.tenant_id,
+        task_run_id: result.humanTask.task_run_id,
+        workflow_id: result.humanTask.workflow_id,
+        response: result.humanTask.response ?? parsed.response,
+        responded_by: result.humanTask.responded_by ?? parsed.user_id,
+        responded_at: result.humanTask.responded_at ?? new Date().toISOString(),
+        response_idempotency_key: result.humanTask.response_idempotency_key ?? parsed.response_idempotency_key,
+      });
+    }
+
+    const auditEvent = wasPending && !result.idempotentReplay
+      ? await this.auditStore.append({
+          tenant_id: result.humanTask.tenant_id,
+          actor_id: parsed.user_id,
+          action: 'human_task.respond',
+          target_type: 'human_task',
+          target_id: result.humanTask.human_task_id,
+          result: 'succeeded',
+          ...(parsed.request_id ? { trace_id: parsed.request_id } : {}),
+          payload: {
+            task_run_id: result.humanTask.task_run_id,
+            ...(result.humanTask.workflow_id ? { workflow_id: result.humanTask.workflow_id } : {}),
+          },
+        })
+      : undefined;
+
+    return humanTaskRespondResponseSchema.parse({
+      human_task: result.humanTask,
+      audit_event_id: auditEvent?.event_id,
+      idempotent_replay: result.idempotentReplay,
+    });
   }
 
   private async decide(
@@ -191,6 +251,36 @@ export class InMemoryHumanTaskStore implements HumanTaskStore {
 
   async reject(humanTaskId: string, input: HumanTaskDecisionInput): Promise<HumanTask | undefined> {
     return this.decide(humanTaskId, 'rejected', input);
+  }
+
+  async respond(humanTaskId: string, input: HumanTaskRespondInput): Promise<{ humanTask?: HumanTask; conflict: boolean; idempotentReplay: boolean }> {
+    const existing = this.tasks.get(humanTaskId);
+    if (!existing || (input.tenantId && existing.tenant_id !== input.tenantId)) {
+      return { conflict: false, idempotentReplay: false };
+    }
+    if (existing.kind !== 'user_input') {
+      throw new Error(`HumanTask is not user_input kind: ${humanTaskId}`);
+    }
+    if (existing.response_idempotency_key) {
+      return existing.response_idempotency_key === input.responseIdempotencyKey
+        ? { humanTask: existing, conflict: false, idempotentReplay: true }
+        : { humanTask: existing, conflict: true, idempotentReplay: false };
+    }
+    const respondedAt = new Date().toISOString();
+    const updated = humanTaskSchema.parse({
+      ...existing,
+      status: 'resolved',
+      response: input.response,
+      responded_by: input.userId,
+      responded_at: respondedAt,
+      response_idempotency_key: input.responseIdempotencyKey,
+      decision: { status: 'resolved', payload: input.response },
+      decided_by: input.userId,
+      decided_at: respondedAt,
+      completed_at: respondedAt,
+    });
+    this.tasks.set(humanTaskId, updated);
+    return { humanTask: updated, conflict: false, idempotentReplay: false };
   }
 
   private decide(

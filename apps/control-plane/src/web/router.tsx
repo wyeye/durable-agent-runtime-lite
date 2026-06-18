@@ -9,6 +9,7 @@ import { PromptsPage } from './pages/prompts/PromptsPage.js';
 import { ReleasesPage } from './pages/releases/ReleasesPage.js';
 import { HumanTasksPage } from './pages/human-tasks/HumanTasksPage.js';
 import { TaskRunsPage } from './pages/task-runs/TaskRunsPage.js';
+import { AgentRunsPage } from './pages/agent-runs/AgentRunsPage.js';
 import { AuditEventsPage } from './pages/audit/AuditEventsPage.js';
 import { ToolCallsPage } from './pages/tool-calls/ToolCallsPage.js';
 
@@ -27,6 +28,7 @@ export const router = createBrowserRouter([
       { path: 'releases', element: <ReleasesPage /> },
       { path: 'human-tasks', element: <HumanTasksPage /> },
       { path: 'task-runs', element: <TaskRunsPage /> },
+      { path: 'agent-runs', element: <AgentRunsPage /> },
       { path: 'audit-events', element: <AuditEventsPage /> },
       { path: 'tool-calls', element: <ToolCallsPage /> },
       { path: '*', element: <Navigate to="/dashboard" replace /> },

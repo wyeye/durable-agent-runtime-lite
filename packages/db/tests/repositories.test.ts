@@ -10,7 +10,10 @@ import type {
   ToolManifest,
 } from '@dar/contracts';
 import {
+  AgentContextSnapshotRepository,
+  AgentExecutionPlanRepository,
   buildExecutionPlanRef,
+  buildAgentExecutionPlanRef,
   buildDbFlowSnapshotRef,
   FlowDefinitionRepository,
   FlowExecutionPlanRepository,
@@ -246,6 +249,108 @@ describe('db repositories', () => {
     await expect(new FlowExecutionPlanRepository(db as never).getByRef(plan.execution_plan_ref, { tenantId: 'tenant_1' })).resolves.toEqual(plan);
   });
 
+  it('stores and verifies AgentExecutionPlan by immutable ref without adapter secrets', async () => {
+    const now = '2026-01-01T00:00:00.000Z';
+    const hash = 'd'.repeat(64);
+    const executionPlanRef = buildAgentExecutionPlanRef('agent_plan_1');
+    const planWithoutHash = {
+      execution_plan_id: 'agent_plan_1',
+      execution_plan_ref: executionPlanRef,
+      tenant_id: 'tenant_1',
+      agent_id: 'agent_1',
+      agent_version: 1,
+      agent_sha256: hash,
+      prompt_id: 'prompt_1',
+      prompt_version: 1,
+      prompt_sha256: hash,
+      model_policy: 'deterministic:final_only',
+      allowed_tools: [{
+        tool_name: 'knowledge.search',
+        tool_version: '1.0.0',
+        tool_sha256: hash,
+        description: 'Search',
+        risk_level: 'L1',
+        input_schema: { type: 'object' },
+      }],
+      allowed_handoffs: [],
+      budget: {
+        max_segments: 3,
+        max_model_turns: 6,
+        max_tool_calls: 1,
+        max_input_tokens: 0,
+        max_output_tokens: 0,
+        max_total_tokens: 1000,
+        max_duration_ms: 300000,
+        max_handoffs: 0,
+        max_context_bytes: 262144,
+      },
+      plan: {
+        agent_id: 'agent_1',
+        agent_version: 1,
+        agent_sha256: hash,
+        prompt_id: 'prompt_1',
+        prompt_version: 1,
+        prompt_sha256: hash,
+        system_prompt: 'safe prompt',
+        model_policy: 'deterministic:final_only',
+        allowed_tools: [{
+          tool_name: 'knowledge.search',
+          tool_version: '1.0.0',
+          tool_sha256: hash,
+          description: 'Search',
+          risk_level: 'L1',
+          input_schema: { type: 'object' },
+        }],
+        allowed_handoffs: [],
+        budget: {
+          max_segments: 3,
+          max_model_turns: 6,
+          max_tool_calls: 1,
+          max_input_tokens: 0,
+          max_output_tokens: 0,
+          max_total_tokens: 1000,
+          max_duration_ms: 300000,
+          max_handoffs: 0,
+          max_context_bytes: 262144,
+        },
+      },
+      generated_at: now,
+    };
+    const plan = {
+      ...planWithoutHash,
+      execution_plan_hash: hashJson(planWithoutHash),
+    };
+    const db = new FakeDb({
+      agent_execution_plan: [{
+        execution_plan_id: plan.execution_plan_id,
+        execution_plan_ref: plan.execution_plan_ref,
+        tenant_id: plan.tenant_id,
+        agent_id: plan.agent_id,
+        agent_version: plan.agent_version,
+        agent_sha256: plan.agent_sha256,
+        prompt_id: plan.prompt_id,
+        prompt_version: plan.prompt_version,
+        prompt_sha256: plan.prompt_sha256,
+        model_policy_json: { value: plan.model_policy },
+        allowed_tools_json: plan.allowed_tools,
+        allowed_handoffs_json: plan.allowed_handoffs,
+        output_schema_json: null,
+        budget_json: plan.budget,
+        plan_json: plan,
+        execution_plan_hash: plan.execution_plan_hash,
+        generated_at: now,
+        created_at: now,
+      }],
+    });
+
+    await expect(new AgentExecutionPlanRepository(db as never).getByRef(executionPlanRef, { tenantId: 'tenant_1' })).resolves.toMatchObject({
+      execution_plan_ref: executionPlanRef,
+      allowed_tools: [{ tool_name: 'knowledge.search' }],
+    });
+    await expect(new AgentExecutionPlanRepository(db as never).verifyHash(executionPlanRef, plan.execution_plan_hash, { tenantId: 'tenant_1' })).resolves.toBe(true);
+    expect(JSON.stringify(plan.allowed_tools)).not.toMatch(/authorization|api_key|endpoint_ref/i);
+  });
+
   it('returns idempotency replay or conflict from stored request hash', async () => {
     const record: IdempotencyRecord = {
       idempotency_key: 'tenant_1:tool:idem_1',
@@ -318,6 +423,7 @@ describe('db repositories', () => {
       tenant_id: 'tenant_1',
       task_run_id: 'task_1',
       workflow_id: 'workflow_1',
+      kind: 'approval',
       status: 'pending',
       candidate_groups: [],
       payload: { tool_call_id: 'tool_call_1' },
@@ -350,6 +456,24 @@ describe('db repositories', () => {
       status: 'rejected',
       decided_by: 'approver_2',
       decision_reason: 'not safe',
+    });
+  });
+
+  it('stores context snapshot refs by stable hash', async () => {
+    const db = new FakeDb({ agent_context_snapshot: [] });
+    const repository = new AgentContextSnapshotRepository(db as never);
+
+    await expect(
+      repository.create({
+        snapshotId: 'snapshot_1',
+        agentRunId: 'agent_run_1',
+        schemaVersion: 'pi-context/v1',
+        sanitizedMessages: [{ role: 'user', content: 'hello', timestamp: 1 }],
+      }),
+    ).resolves.toMatchObject({
+      snapshot_id: 'snapshot_1',
+      schema_version: 'pi-context/v1',
+      message_count: 1,
     });
   });
 

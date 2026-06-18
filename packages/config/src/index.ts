@@ -23,6 +23,8 @@ const optionalPortSchema = z.preprocess(
 );
 const portSchema = (defaultValue: number) =>
   z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).max(65_535).default(defaultValue));
+const positiveIntSchema = (defaultValue: number) =>
+  z.preprocess(emptyToUndefined, z.coerce.number().int().positive().default(defaultValue));
 
 export const runtimeConfigSchema = z.object({
   NODE_ENV: z.preprocess(
@@ -41,6 +43,16 @@ export const runtimeConfigSchema = z.object({
   TEMPORAL_NAMESPACE: stringSchema('default'),
   MODEL_GATEWAY_BASE_URL: urlSchema('http://localhost:4100'),
   MODEL_GATEWAY_API_KEY: stringSchema('dev-only-placeholder'),
+  MODEL_GATEWAY_MODEL: stringSchema('dar-local-model'),
+  MODEL_GATEWAY_TIMEOUT_MS: positiveIntSchema(30_000),
+  MODEL_GATEWAY_MAX_RETRIES: z.preprocess(emptyToUndefined, z.coerce.number().int().min(0).max(5).default(1)),
+  PI_AGENT_MODE: z.preprocess(
+    emptyToUndefined,
+    z.enum(['disabled', 'deterministic', 'model_gateway']).default('disabled'),
+  ),
+  PI_CONTEXT_MAX_BYTES: positiveIntSchema(262_144),
+  PI_SEGMENT_TIMEOUT_MS: positiveIntSchema(120_000),
+  PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW: positiveIntSchema(20),
   TOOL_GATEWAY_BASE_URL: optionalUrlSchema,
   TOOL_GATEWAY_URL: optionalUrlSchema,
   RUNTIME_API_URL: optionalUrlSchema,

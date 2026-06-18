@@ -11,6 +11,7 @@ const items = [
   { key: '/releases', label: <Link to="/releases">Release Center</Link> },
   { key: '/human-tasks', label: <Link to="/human-tasks">Human Tasks</Link> },
   { key: '/task-runs', label: <Link to="/task-runs">TaskRuns</Link> },
+  { key: '/agent-runs', label: <Link to="/agent-runs">AgentRuns</Link> },
   { key: '/audit-events', label: <Link to="/audit-events">Audit</Link> },
   { key: '/tool-calls', label: <Link to="/tool-calls">ToolCalls</Link> },
 ];

@@ -230,6 +230,7 @@ function agentSpec(ids: { agent: string; prompt: string; tool: string }, version
     prompt_ref: `${ids.prompt}@1`,
     model_policy: 'mock',
     allowed_tools: [`${ids.tool}@1.0.0`],
+    allowed_handoffs: [],
     max_steps: 3,
     max_tokens: 1000,
     output_schema: 'ui_smoke_agent_result_v1',

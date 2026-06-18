@@ -12,32 +12,34 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@dar/contracts": "workspace:*",
     "@dar/config": "workspace:*",
-    "@dar/logger": "workspace:*",
-    "@dar/telemetry": "workspace:*",
-    "@dar/security": "workspace:*",
-    "fastify": "^5.0.0",
-    "zod": "^4.0.0",
-    "pino": "^9.0.0",
-    "jose": "^6.0.0",
-    "undici": "^7.0.0",
+    "@dar/contracts": "workspace:*",
     "@dar/db": "workspace:*",
+    "@dar/logger": "workspace:*",
+    "@dar/model-client": "workspace:*",
+    "@dar/security": "workspace:*",
+    "@dar/telemetry": "workspace:*",
     "@dar/temporal": "workspace:*",
     "@dar/tool-client": "workspace:*",
-    "@dar/model-client": "workspace:*",
+    "@earendil-works/pi-agent-core": "0.79.6",
+    "@earendil-works/pi-ai": "0.79.6",
     "@temporalio/activity": "^1.11.0",
     "@temporalio/client": "^1.11.0",
     "@temporalio/worker": "^1.11.0",
     "@temporalio/workflow": "^1.11.0",
+    "fastify": "^5.0.0",
+    "jose": "^6.0.0",
     "kysely": "^0.28.0",
     "pg": "^8.0.0",
-    "yaml": "^2.0.0"
+    "pino": "^9.0.0",
+    "undici": "^7.0.0",
+    "yaml": "^2.0.0",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@temporalio/testing": "^1.11.0",
     "tsx": "^4.0.0",
     "typescript": "~5.8.3",
-    "vitest": "^3.0.0",
-    "@temporalio/testing": "^1.11.0"
+    "vitest": "^3.0.0"
   }
 }

@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import {
   humanTaskDecisionRequestSchema,
   humanTaskQuerySchema,
+  agentRunQuerySchema,
+  agentStepQuerySchema,
   operationAuditQuerySchema,
   taskRunQuerySchema,
   toolCallQuerySchema,
@@ -95,6 +97,29 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
     const auth = requirePermission(request, 'operations:read');
     const { taskRunId } = request.params as { taskRunId: string };
     return ok(await options.runtimeApiClient.getTaskRun(taskRunId, forward(auth, requestIdOf(request)), auth.tenant_id), auth.request_id);
+  });
+
+  server.get('/api/v1/operations/agent-runs', {
+    schema: { querystring: jsonSchema(agentRunQuerySchema) },
+  }, async (request) => {
+    const auth = requirePermission(request, 'operations:read');
+    const query = agentRunQuerySchema.parse(request.query);
+    return ok(await options.runtimeApiClient.listAgentRuns(withTenant({ ...query, tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request))), auth.request_id);
+  });
+
+  server.get('/api/v1/operations/agent-runs/:agentRunId', async (request) => {
+    const auth = requirePermission(request, 'operations:read');
+    const { agentRunId } = request.params as { agentRunId: string };
+    return ok(await options.runtimeApiClient.getAgentRun(agentRunId, withTenant({ tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request))), auth.request_id);
+  });
+
+  server.get('/api/v1/operations/agent-runs/:agentRunId/steps', {
+    schema: { querystring: jsonSchema(agentStepQuerySchema.omit({ agent_run_id: true })) },
+  }, async (request) => {
+    const auth = requirePermission(request, 'operations:read');
+    const { agentRunId } = request.params as { agentRunId: string };
+    const query = agentStepQuerySchema.omit({ agent_run_id: true }).parse(request.query);
+    return ok(await options.runtimeApiClient.listAgentSteps(agentRunId, withTenant({ ...query, tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request))), auth.request_id);
   });
 
   server.get('/api/v1/operations/audit-events', {

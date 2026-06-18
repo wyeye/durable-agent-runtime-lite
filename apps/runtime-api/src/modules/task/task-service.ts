@@ -4,6 +4,7 @@ import {
   routerPreviewResponseSchema,
   taskRunSchema,
   taskRunQuerySchema,
+  workflowStartRequestSchema,
   type RouteSpec,
   type RunTaskRequest,
   type RunTaskResponse,
@@ -13,6 +14,8 @@ import {
 } from '@dar/contracts';
 import {
   AuditEventRepository,
+  AgentRunRepository,
+  AgentStepRepository,
   buildDbFlowSnapshotRef,
   closeDb,
   createDb,
@@ -30,6 +33,7 @@ import { routeByRules } from '../router/rule-router.js';
 import { DbRouteSpecSource, MemoryRouteSpecSource, type RouteSpecSource } from '../router/route-source.js';
 import { createWorkflowStarter, TemporalHumanTaskSignalSender, type WorkflowStarter } from '../workflow/workflow-starter.js';
 import { HumanTaskService } from '../human-task/human-task-service.js';
+import { AgentRunService, DbAgentRunStore, DbAgentStepStore } from './agent-run-service.js';
 import { createRequestId, createTaskRunId } from './task-id.js';
 import { DbTaskRunStore, InMemoryTaskRunStore, type TaskRunStore } from './task-store.js';
 
@@ -205,6 +209,83 @@ export class TaskService {
     }
   }
 
+  async createAgentTask(input: unknown): Promise<RunTaskResponse> {
+    const parsed = workflowStartRequestSchema.pick({
+      tenant_id: true,
+      user_id: true,
+      agent_execution_plan_ref: true,
+      input: true,
+      request_id: true,
+      trace_id: true,
+      execution_mode: true,
+    }).parse({
+      ...(typeof input === 'object' && input ? input : {}),
+      request_id: (typeof input === 'object' && input && 'request_id' in input && typeof input.request_id === 'string')
+        ? input.request_id
+        : createRequestId(),
+    });
+    if (!parsed.agent_execution_plan_ref) {
+      throw new Error('agent_execution_plan_ref is required for /v1/agent-tasks');
+    }
+    const taskRunId = createTaskRunId();
+    const workflowId = buildTaskWorkflowId(parsed.tenant_id, taskRunId);
+    const workflowRequest: WorkflowStartRequest = {
+      tenant_id: parsed.tenant_id,
+      user_id: parsed.user_id,
+      task_run_id: taskRunId,
+      workflow_type: 'GenericAgentWorkflow',
+      workflow_id: workflowId,
+      agent_execution_plan_ref: parsed.agent_execution_plan_ref,
+      input: parsed.input,
+      request_id: parsed.request_id,
+      ...(parsed.trace_id ? { trace_id: parsed.trace_id } : {}),
+      ...(parsed.execution_mode ? { execution_mode: parsed.execution_mode } : {}),
+    };
+    const routeDecision = {
+      decision: 'agent_fallback' as const,
+      agent_id: parsed.agent_execution_plan_ref,
+      confidence: 1,
+      reason: 'explicit_agent_execution_plan_ref',
+    };
+    const queuedResponse = runTaskResponseSchema.parse({
+      task_run_id: taskRunId,
+      workflow_id: workflowId,
+      status: 'queued',
+      route_decision: routeDecision,
+      agent_id: parsed.agent_execution_plan_ref,
+    });
+
+    await this.taskStore.create({
+      taskRun: taskRunSchema.parse({
+        task_run_id: taskRunId,
+        tenant_id: parsed.tenant_id,
+        user_id: parsed.user_id,
+        route_type: 'agent_fallback',
+        workflow_id: workflowId,
+        status: 'queued',
+        execution_plan_ref: parsed.agent_execution_plan_ref,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }),
+      input: parsed.input,
+      routeResult: { route_decision: routeDecision, candidates: [] },
+      executionPlanRef: parsed.agent_execution_plan_ref,
+    });
+
+    try {
+      const workflowStart = await this.workflowStarter.start(workflowRequest);
+      await this.taskStore.updateWorkflowStart(taskRunId, workflowStart);
+      return runTaskResponseSchema.parse({ ...queuedResponse, workflow_start: workflowStart });
+    } catch (error) {
+      await this.taskStore.updateStatus(taskRunId, {
+        status: 'failed_to_start',
+        errorCode: 'WORKFLOW_START_FAILED',
+        errorMessage: errorMessage(error),
+      });
+      throw error;
+    }
+  }
+
   private async resolveExecutionPlan(
     tenantId: string,
     userId: string,
@@ -321,6 +402,7 @@ export function createTaskRunPreview(
 export interface RuntimeApiTaskServiceHandle {
   taskService: TaskService;
   humanTaskService: HumanTaskService;
+  agentRunService: AgentRunService;
   close(): Promise<void>;
 }
 
@@ -348,6 +430,10 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
           ? { signalSender: new TemporalHumanTaskSignalSender(config) }
           : {}),
       }),
+      agentRunService: new AgentRunService(
+        new DbAgentRunStore(new AgentRunRepository(db)),
+        new DbAgentStepStore(new AgentStepRepository(db)),
+      ),
       close: async () => closeDb(db),
     };
   }
@@ -358,6 +444,7 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
       allowMockRouteFallback: true,
     }),
     humanTaskService: new HumanTaskService(),
+    agentRunService: new AgentRunService(),
     close: async () => undefined,
   };
 }

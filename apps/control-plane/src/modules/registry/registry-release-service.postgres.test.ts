@@ -64,6 +64,7 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
         prompt_ref: `${promptId}@1`,
         model_policy: 'mock',
         allowed_tools: [`${toolName}@1.0.0`],
+        allowed_handoffs: [],
         max_steps: 4,
         max_tokens: 1000,
         status: 'published',

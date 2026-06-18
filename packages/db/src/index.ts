@@ -87,10 +87,16 @@ export interface HumanTaskTable {
   tenant_id: string;
   task_run_id: string;
   workflow_id: string | null;
+  kind: string;
   status: string;
   assignee: string | null;
   candidate_groups: Json;
   payload: Json;
+  requested_schema_json: Json | null;
+  response_json: Json | null;
+  responded_by: string | null;
+  responded_at: Timestamp | null;
+  response_idempotency_key: string | null;
   decision: Json | null;
   decided_by: string | null;
   decided_at: Timestamp | null;
@@ -178,6 +184,89 @@ export interface FlowExecutionPlanTable {
   generated_at: Timestamp;
 }
 
+export interface AgentExecutionPlanTable {
+  execution_plan_id: string;
+  execution_plan_ref: string;
+  tenant_id: string;
+  agent_id: string;
+  agent_version: number;
+  agent_sha256: string;
+  prompt_id: string;
+  prompt_version: number;
+  prompt_sha256: string;
+  model_policy_json: Json;
+  allowed_tools_json: Json;
+  allowed_handoffs_json: Json;
+  output_schema_json: Json | null;
+  budget_json: Json;
+  plan_json: Json;
+  execution_plan_hash: string;
+  generated_at: Timestamp;
+  created_at: Timestamp;
+}
+
+export interface AgentRunTable {
+  agent_run_id: string;
+  tenant_id: string;
+  user_id: string;
+  task_run_id: string;
+  workflow_id: string;
+  parent_workflow_id: string | null;
+  execution_plan_ref: string;
+  execution_plan_hash: string;
+  agent_id: string;
+  agent_version: number;
+  prompt_id: string;
+  prompt_version: number;
+  model: string;
+  execution_mode: string;
+  status: string;
+  current_segment_index: number;
+  model_turn_count: number;
+  tool_call_count: number;
+  handoff_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  estimated_cost: number | null;
+  started_at: Timestamp | null;
+  completed_at: Timestamp | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface AgentStepTable {
+  agent_step_id: string;
+  agent_run_id: string;
+  segment_index: number;
+  stable_step_key: string;
+  segment_status: string;
+  decision_summary: string | null;
+  proposed_tool_calls_json: Json;
+  tool_result_refs_json: Json;
+  context_snapshot_ref: Json | null;
+  output_ref: string | null;
+  usage_json: Json;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface AgentContextSnapshotTable {
+  snapshot_id: string;
+  agent_run_id: string;
+  previous_snapshot_id: string | null;
+  schema_version: string;
+  sanitized_messages_json: Json;
+  snapshot_hash: string;
+  message_count: number;
+  byte_size: number;
+  created_at: Timestamp;
+}
+
 export interface Database {
   flow_definition: FlowDefinitionTable;
   flow_route_config: FlowRouteConfigTable;
@@ -192,6 +281,10 @@ export interface Database {
   idempotency_record: IdempotencyRecordTable;
   capability_release: CapabilityReleaseTable;
   flow_execution_plan: FlowExecutionPlanTable;
+  agent_execution_plan: AgentExecutionPlanTable;
+  agent_run: AgentRunTable;
+  agent_step: AgentStepTable;
+  agent_context_snapshot: AgentContextSnapshotTable;
 }
 
 export interface CreateDbOptions {

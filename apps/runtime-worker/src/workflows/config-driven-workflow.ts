@@ -1,8 +1,9 @@
-import { condition, defineSignal, proxyActivities, setHandler } from '@temporalio/workflow';
+import { condition, defineSignal, executeChild, proxyActivities, setHandler } from '@temporalio/workflow';
 import type { ConfigDrivenWorkflowInput, HumanTaskDecisionSignalInput } from '@dar/temporal';
 import { WORKFLOW_SIGNALS } from '@dar/temporal';
-import type { FlowExecutionPlan, HumanTask } from '@dar/contracts';
+import type { AgentRunResult, FlowExecutionPlan, FlowExecutionPlanAgent, HumanTask, PiDurableAgentWorkflowResult } from '@dar/contracts';
 import { executeFlowSpec, type FlowExecutionActivities, type FlowExecutionResult } from '../interpreter/flow-interpreter.js';
+import type { piDurableAgentWorkflow } from './pi-durable-agent-workflow.js';
 
 export interface ConfigDrivenWorkflowArgs extends ConfigDrivenWorkflowInput {
   input?: unknown;
@@ -15,7 +16,6 @@ const {
   invokeToolActivity,
   previewToolActivity,
   commitToolActivity,
-  runAgentActivity,
   createHumanTaskActivity,
   loadExecutionPlanByRefActivity,
   updateTaskRunStatusActivity,
@@ -24,7 +24,6 @@ const {
   invokeToolActivity: FlowExecutionActivities['invokeTool'];
   previewToolActivity: FlowExecutionActivities['previewTool'];
   commitToolActivity: FlowExecutionActivities['commitTool'];
-  runAgentActivity: FlowExecutionActivities['runAgent'];
   createHumanTaskActivity: FlowExecutionActivities['createHumanTask'];
   loadExecutionPlanByRefActivity(executionPlanRef: string): Promise<FlowExecutionPlan>;
   updateTaskRunStatusActivity(input: {
@@ -79,7 +78,7 @@ export async function configDrivenWorkflow(input: ConfigDrivenWorkflowArgs): Pro
       invokeTool: invokeToolActivity,
       previewTool: previewToolActivity,
       commitTool: commitToolActivity,
-      runAgent: runAgentActivity,
+      runAgent: async (_context, plannedAgent, agentInput) => runAgentChildWorkflow(context, plannedAgent, agentInput),
       createHumanTask: createHumanTaskActivity,
       waitForHumanTaskDecision: async (_context, humanTaskId) => {
         await condition(() => decisions.has(humanTaskId));
@@ -115,6 +114,7 @@ function signalDecisionToHumanTask(decision: HumanTaskDecisionSignalInput): Huma
     tenant_id: decision.tenant_id,
     task_run_id: decision.task_run_id,
     ...(decision.workflow_id ? { workflow_id: decision.workflow_id } : {}),
+    kind: 'approval',
     status: decision.status,
     candidate_groups: [],
     payload: {},
@@ -124,6 +124,57 @@ function signalDecisionToHumanTask(decision: HumanTaskDecisionSignalInput): Huma
     ...(decision.decision_reason ? { decision_reason: decision.decision_reason } : {}),
     ...(decision.decided_at ? { completed_at: decision.decided_at } : {}),
   };
+}
+
+async function runAgentChildWorkflow(
+  context: {
+    tenant_id: string;
+    user_id: string;
+    task_run_id: string;
+    workflow_id: string;
+    request_id: string;
+  },
+  plannedAgent: FlowExecutionPlanAgent,
+  input: Record<string, unknown>,
+): Promise<AgentRunResult> {
+  if (!plannedAgent.agent_execution_plan_ref) {
+    throw new Error(`FlowExecutionPlan agent missing agent_execution_plan_ref: ${plannedAgent.agent_id}@${plannedAgent.agent_version}`);
+  }
+  const result = await executeChild<typeof piDurableAgentWorkflow>('piDurableAgentWorkflow', {
+    workflowId: `${context.workflow_id}-agent-${sanitizeWorkflowId(plannedAgent.step_id)}`,
+    args: [{
+      tenant_id: context.tenant_id,
+      user_id: context.user_id,
+      task_run_id: context.task_run_id,
+      parent_workflow_id: context.workflow_id,
+      agent_execution_plan_ref: plannedAgent.agent_execution_plan_ref,
+      execution_mode: 'mediated_tool_call',
+      initial_user_input: JSON.stringify(input),
+      request_id: context.request_id,
+    }],
+  });
+  return agentResultFromDurableResult(result);
+}
+
+function agentResultFromDurableResult(result: PiDurableAgentWorkflowResult): AgentRunResult {
+  if (result.status === 'completed') {
+    return {
+      status: 'final',
+      ...(result.final_answer ? { final_answer: result.final_answer } : {}),
+      proposed_tool_calls: [],
+      usage: result.usage,
+    };
+  }
+  return {
+    status: result.status === 'waiting_user' || result.status === 'waiting_human' ? 'need_user' : 'failed',
+    proposed_tool_calls: [],
+    usage: result.usage,
+    error: result.error ?? { code: 'AGENT_RUN_FAILED', message: `Agent run ended with ${result.status}` },
+  };
+}
+
+function sanitizeWorkflowId(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, '-');
 }
 
 function workflowErrorMessage(error: unknown): string {

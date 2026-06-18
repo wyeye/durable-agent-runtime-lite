@@ -6,6 +6,7 @@ import { getAppPort, loadConfig } from '@dar/config';
 import { createLogger } from '@dar/logger';
 import { HumanTaskService } from './modules/human-task/human-task-service.js';
 import { createRuntimeApiTaskService, TaskService } from './modules/task/task-service.js';
+import { AgentRunService } from './modules/task/agent-run-service.js';
 
 const appName = 'runtime-api' as const;
 const logger = createLogger(appName);
@@ -69,6 +70,7 @@ export function buildServer(
   taskService = new TaskService(),
   readiness: RuntimeApiReadiness = { routeSource: 'memory', workflowStarter: 'mock' },
   humanTaskService = new HumanTaskService(),
+  agentRunService = new AgentRunService(),
 ): FastifyInstance {
   const server = Fastify({ logger: false });
 
@@ -133,6 +135,67 @@ export function buildServer(
     }
 
     return toSuccessResponse(taskRun);
+  });
+
+  server.post('/v1/agent-tasks', async (request, reply) => {
+    const traceId = getTraceId(request.body);
+    try {
+      return toSuccessResponse(await taskService.createAgentTask({
+        ...(request.body as Record<string, unknown>),
+        user_id: headerValue(request, 'x-user-id') ?? stringValue((request.body as { user_id?: unknown }).user_id),
+        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.body as { tenant_id?: unknown }).tenant_id) ?? 'default',
+      }), traceId);
+    } catch (error) {
+      reply.code(error instanceof ZodError ? 400 : 500);
+      return toErrorResponse(error, traceId);
+    }
+  });
+
+  server.get('/v1/agent-runs', async (request, reply) => {
+    try {
+      return toSuccessResponse(await agentRunService.list({
+        ...(request.query as Record<string, unknown>),
+        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.query as { tenant_id?: unknown }).tenant_id) ?? 'default',
+      }));
+    } catch (error) {
+      reply.code(error instanceof ZodError ? 400 : 500);
+      return toErrorResponse(error);
+    }
+  });
+
+  server.get('/v1/agent-runs/:agentRunId', async (request, reply) => {
+    const { agentRunId } = request.params as { agentRunId: string };
+    try {
+      const result = await agentRunService.get(agentRunId, {
+        ...(request.query as Record<string, unknown>),
+        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.query as { tenant_id?: unknown }).tenant_id) ?? 'default',
+      });
+      if (!result) {
+        reply.code(404);
+        return {
+          success: false,
+          data: null,
+          error: { code: 'AGENT_RUN_NOT_FOUND', message: 'Agent run 不存在' },
+        };
+      }
+      return toSuccessResponse(result);
+    } catch (error) {
+      reply.code(error instanceof ZodError ? 400 : 500);
+      return toErrorResponse(error);
+    }
+  });
+
+  server.get('/v1/agent-runs/:agentRunId/steps', async (request, reply) => {
+    const { agentRunId } = request.params as { agentRunId: string };
+    try {
+      return toSuccessResponse(await agentRunService.listSteps(agentRunId, {
+        ...(request.query as Record<string, unknown>),
+        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.query as { tenant_id?: unknown }).tenant_id) ?? 'default',
+      }));
+    } catch (error) {
+      reply.code(error instanceof ZodError ? 400 : 500);
+      return toErrorResponse(error);
+    }
   });
 
   server.get('/v1/human-tasks', async (request, reply) => {
@@ -219,16 +282,40 @@ export function buildServer(
     }
   });
 
+  server.post('/v1/human-tasks/:humanTaskId/respond', async (request, reply) => {
+    const { humanTaskId } = request.params as { humanTaskId: string };
+    const traceId = getTraceId(request.body);
+    try {
+      const result = await humanTaskService.respond(humanTaskId, {
+        ...(request.body as Record<string, unknown>),
+        user_id: headerValue(request, 'x-user-id') ?? stringValue((request.body as { user_id?: unknown }).user_id),
+        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.body as { tenant_id?: unknown }).tenant_id) ?? 'default',
+      });
+      if (!result) {
+        reply.code(404);
+        return {
+          success: false,
+          data: null,
+          error: { code: 'HUMAN_TASK_NOT_FOUND', message: '人工任务不存在' },
+        };
+      }
+      return toSuccessResponse(result, traceId);
+    } catch (error) {
+      reply.code(error instanceof ZodError ? 400 : 500);
+      return toErrorResponse(error, traceId);
+    }
+  });
+
   return server;
 }
 
 export async function start(): Promise<void> {
   const config = loadConfig();
-  const { taskService, humanTaskService, close } = createRuntimeApiTaskService(config);
+  const { taskService, humanTaskService, agentRunService, close } = createRuntimeApiTaskService(config);
   const server = buildServer(taskService, {
     routeSource: config.RUNTIME_API_ROUTE_SOURCE,
     workflowStarter: config.RUNTIME_API_WORKFLOW_STARTER,
-  }, humanTaskService);
+  }, humanTaskService, agentRunService);
   const port = getAppPort(appName, config);
 
   server.addHook('onClose', async () => {

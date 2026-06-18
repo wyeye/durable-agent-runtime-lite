@@ -1,10 +1,9 @@
-import { proxyActivities } from '@temporalio/workflow';
+import { executeChild, proxyActivities } from '@temporalio/workflow';
 import type { GenericAgentWorkflowInput } from '@dar/temporal';
-import type { AgentRunResult, FlowExecutionPlanAgent } from '@dar/contracts';
-import type { FlowExecutionActivities } from '../interpreter/flow-interpreter.js';
+import type { AgentRunResult, PiDurableAgentWorkflowResult } from '@dar/contracts';
+import type { piDurableAgentWorkflow } from './pi-durable-agent-workflow.js';
 
-const { runAgentActivity, updateTaskRunStatusActivity } = proxyActivities<{
-  runAgentActivity: FlowExecutionActivities['runAgent'];
+const { updateTaskRunStatusActivity } = proxyActivities<{
   updateTaskRunStatusActivity(input: {
     tenant_id: string;
     user_id: string;
@@ -31,37 +30,30 @@ export async function genericAgentWorkflow(input: GenericAgentWorkflowInput): Pr
   await updateTaskRunStatusActivity({ ...context, status: 'running' });
 
   try {
-    if (!input.agent_version || !input.prompt_ref || !input.model_policy || !input.allowed_tools) {
-      throw new Error('GenericAgentWorkflow requires explicit agent execution metadata');
+    if (!input.agent_execution_plan_ref) {
+      throw new Error('GenericAgentWorkflow requires agent_execution_plan_ref');
     }
-    const promptRef = parsePromptRef(input.prompt_ref);
-    const agent: FlowExecutionPlanAgent = {
-      step_id: 'generic_agent',
-      agent_id: input.agent_id,
-      agent_version: input.agent_version,
-      agent_sha256: '0'.repeat(64),
-      prompt_id: promptRef.id,
-      prompt_version: promptRef.version,
-      prompt_sha256: '0'.repeat(64),
-      model_policy: input.model_policy,
-      allowed_tools: input.allowed_tools,
-      budget: {
-        max_steps: input.max_steps ?? 6,
-        max_tokens: input.max_tokens ?? 12_000,
-      },
-    };
-    const result = await runAgentActivity(
-      context,
-      agent,
-      { input_ref: input.input_ref, input: input.input ?? {} },
-    );
+    const result = await executeChild<typeof piDurableAgentWorkflow>('piDurableAgentWorkflow', {
+      workflowId: `${context.workflow_id}-agent-generic`,
+      args: [{
+        tenant_id: input.tenant_id,
+        user_id: input.user_id,
+        task_run_id: input.task_run_id,
+        parent_workflow_id: context.workflow_id,
+        agent_execution_plan_ref: input.agent_execution_plan_ref,
+        execution_mode: 'mediated_tool_call',
+        initial_user_input: typeof input.input === 'string' ? input.input : JSON.stringify(input.input ?? {}),
+        request_id: input.request_id,
+        ...(input.trace_id ? { trace_id: input.trace_id } : {}),
+      }],
+    });
     await updateTaskRunStatusActivity({
       ...context,
-      status: result.status === 'need_user' ? 'waiting_human' : result.status === 'failed' ? 'failed' : 'completed',
+      status: result.status === 'completed' ? 'completed' : result.status === 'waiting_user' || result.status === 'waiting_human' ? 'waiting_human' : 'failed',
       ...(result.error?.code ? { error_code: result.error.code } : {}),
       ...(result.error?.message ? { error_message: result.error.message } : {}),
     });
-    return result;
+    return agentResultFromDurableResult(result);
   } catch (error) {
     await updateTaskRunStatusActivity({
       ...context,
@@ -73,12 +65,21 @@ export async function genericAgentWorkflow(input: GenericAgentWorkflowInput): Pr
   }
 }
 
-function parsePromptRef(value: string): { id: string; version: number } {
-  const match = /^(.+)@([1-9]\d*)$/u.exec(value);
-  if (!match) {
-    throw new Error(`Invalid prompt_ref for GenericAgentWorkflow: ${value}`);
+function agentResultFromDurableResult(result: PiDurableAgentWorkflowResult): AgentRunResult {
+  if (result.status === 'completed') {
+    return {
+      status: 'final',
+      ...(result.final_answer ? { final_answer: result.final_answer } : {}),
+      proposed_tool_calls: [],
+      usage: result.usage,
+    };
   }
-  return { id: match[1] ?? '', version: Number(match[2]) };
+  return {
+    status: result.status === 'waiting_user' || result.status === 'waiting_human' ? 'need_user' : 'failed',
+    proposed_tool_calls: [],
+    usage: result.usage,
+    error: result.error ?? { code: 'AGENT_RUN_FAILED', message: `Agent run ended with ${result.status}` },
+  };
 }
 
 function workflowErrorMessage(error: unknown): string {

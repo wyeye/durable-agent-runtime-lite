@@ -1,6 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { getAppPort, loadConfig } from '@dar/config';
+import { getAppPort, loadConfig, type RuntimeConfig } from '@dar/config';
 import { createLogger } from '@dar/logger';
 import { startTemporalWorker, type TemporalWorkerHandle } from './worker.js';
 
@@ -10,7 +10,7 @@ const logger = createLogger(appName);
 export function buildServer(worker: Pick<TemporalWorkerHandle, 'mode' | 'state'> = {
   mode: 'mock',
   state: { status: 'running', ready: true },
-}): FastifyInstance {
+}, config: RuntimeConfig = loadConfig()): FastifyInstance {
   const server = Fastify({ logger: false });
 
   server.get('/healthz', async () => ({
@@ -19,17 +19,21 @@ export function buildServer(worker: Pick<TemporalWorkerHandle, 'mode' | 'state'>
   }));
 
   server.get('/readyz', async (_request, reply) => {
-    if (!worker.state.ready) {
+    const piReady = piReadiness(config);
+    if (!worker.state.ready || !piReady.ready) {
       reply.code(503);
     }
     return {
-      status: worker.state.ready ? 'ready' : 'not_ready',
+      status: worker.state.ready && piReady.ready ? 'ready' : 'not_ready',
       app: appName,
       checks: {
         config: 'ok',
         temporal_worker: worker.mode,
         worker_status: worker.state.status,
+        pi_agent_mode: config.PI_AGENT_MODE,
+        pi_agent: piReady.status,
         ...(worker.state.error ? { worker_error: worker.state.error } : {}),
+        ...(piReady.error ? { pi_error: piReady.error } : {}),
       },
     };
   });
@@ -40,7 +44,7 @@ export function buildServer(worker: Pick<TemporalWorkerHandle, 'mode' | 'state'>
 export async function start(): Promise<void> {
   const config = loadConfig();
   const workerHandle = await startTemporalWorker(config);
-  const server = buildServer(workerHandle);
+  const server = buildServer(workerHandle, config);
   const port = getAppPort(appName, config);
   let shuttingDown = false;
 
@@ -70,6 +74,17 @@ export async function start(): Promise<void> {
       process.exitCode = 1;
     });
   });
+}
+
+function piReadiness(config: RuntimeConfig): { ready: boolean; status: string; error?: string } {
+  const production = config.NODE_ENV === 'production' || config.APP_ENV === 'production';
+  if (production && config.PI_AGENT_MODE !== 'model_gateway') {
+    return { ready: false, status: 'not_ready', error: 'PI_AGENT_MODE=model_gateway is required in production' };
+  }
+  if (config.PI_AGENT_MODE === 'model_gateway' && (!config.MODEL_GATEWAY_BASE_URL || !config.MODEL_GATEWAY_API_KEY || !config.MODEL_GATEWAY_MODEL)) {
+    return { ready: false, status: 'not_ready', error: 'Model Gateway configuration is incomplete' };
+  }
+  return { ready: true, status: config.PI_AGENT_MODE };
 }
 
 const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;

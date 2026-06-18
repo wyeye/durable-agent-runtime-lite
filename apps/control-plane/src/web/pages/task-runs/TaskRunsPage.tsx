@@ -77,6 +77,7 @@ export function TaskRunsPage() {
             <Typography.Title level={4}>{detailQuery.data.task_run_id}</Typography.Title>
             <Space wrap>
               <Link to={`/human-tasks?task_run_id=${encodeURIComponent(detailQuery.data.task_run_id)}`}>Human Tasks</Link>
+              <Link to={`/agent-runs?task_run_id=${encodeURIComponent(detailQuery.data.task_run_id)}`}>AgentRuns</Link>
               <Link to={`/audit-events?task_run_id=${encodeURIComponent(detailQuery.data.task_run_id)}`}>Audit</Link>
               <Link to={`/tool-calls?task_run_id=${encodeURIComponent(detailQuery.data.task_run_id)}`}>ToolCalls</Link>
             </Space>

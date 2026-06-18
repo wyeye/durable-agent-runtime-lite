@@ -1,12 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type {
+  AgentExecutionMode,
+  AgentExecutionPlan,
+  AgentRunRecord,
+  AgentStepRecord,
+  AgentUsage,
   AuditEvent,
   FlowExecutionPlan,
   FlowSpec,
   HumanTask,
   HumanTaskCreateRequest,
   IdempotencyRecord,
+  PiContextSnapshotRef,
   PromptDefinition,
+  ResolvedAgentPlan,
   RouteSpec,
   TaskRun,
   ToolCallLog,
@@ -14,15 +21,24 @@ import type {
 } from '@dar/contracts';
 import {
   type CapabilityRelease,
+  agentBudgetSchema,
+  agentExecutionPlanSchema,
+  agentRunRecordSchema,
+  agentRunStatusSchema,
   agentSpecSchema,
+  agentStepRecordSchema,
+  agentUsageSchema,
   auditEventSchema,
   flowExecutionPlanSchema,
   flowSpecSchema,
   grayPolicySchema,
   humanTaskCreateRequestSchema,
+  humanTaskRespondRequestSchema,
   humanTaskSchema,
   idempotencyRecordSchema,
+  piContextSnapshotRefSchema,
   promptDefinitionSchema,
+  resolvedAgentPlanSchema,
   routeSpecSchema,
   type SpecStatus,
   taskRunSchema,
@@ -38,6 +54,10 @@ import {
 import { sql, type Insertable, type Kysely, type Selectable, type Updateable } from 'kysely';
 import type {
   AgentSpecTable,
+  AgentContextSnapshotTable,
+  AgentExecutionPlanTable,
+  AgentRunTable,
+  AgentStepTable,
   AuditEventTable,
   Database,
   FlowExecutionPlanTable,
@@ -115,6 +135,13 @@ export interface HumanTaskDecisionInput {
   payload?: Record<string, unknown>;
 }
 
+export interface HumanTaskRespondInput {
+  tenantId?: string;
+  userId: string;
+  response: Record<string, unknown>;
+  responseIdempotencyKey: string;
+}
+
 export interface ToolCallLogCreateInput {
   tool_call_id?: string;
   task_run_id?: string;
@@ -175,6 +202,56 @@ export interface ListToolCallLogsOptions extends RepositoryTenantOptions {
   offset?: number;
 }
 
+export interface BuildAgentExecutionPlanInput extends RepositoryTenantOptions {
+  agentId: string;
+  agentVersion: number;
+  operatorId?: string;
+  generatedAt?: string;
+}
+
+export interface CreateAgentRunInput {
+  agentRunId?: string;
+  tenantId: string;
+  userId: string;
+  taskRunId: string;
+  workflowId: string;
+  parentWorkflowId?: string;
+  executionMode?: AgentExecutionMode;
+  executionPlan: AgentExecutionPlan;
+}
+
+export interface UpdateAgentRunInput {
+  status?: AgentRunRecord['status'];
+  currentSegmentIndex?: number;
+  modelTurnCount?: number;
+  toolCallCount?: number;
+  handoffCount?: number;
+  usage?: Partial<AgentUsage>;
+  completed?: boolean;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+export interface ListAgentRunsOptions extends RepositoryTenantOptions {
+  taskRunId?: string;
+  agentId?: string;
+  status?: AgentRunRecord['status'];
+  limit?: number;
+  offset?: number;
+}
+
+export interface CreateAgentStepInput extends Omit<AgentStepRecord, 'agent_step_id' | 'created_at' | 'updated_at'> {
+  agent_step_id?: string;
+}
+
+export interface CreateAgentContextSnapshotInput {
+  snapshotId?: string;
+  agentRunId: string;
+  previousSnapshotId?: string;
+  schemaVersion: 'pi-context/v1';
+  sanitizedMessages: unknown[];
+}
+
 export function hashJson(value: unknown): string {
   return createHash('sha256').update(stableStringify(value)).digest('hex');
 }
@@ -209,6 +286,19 @@ export function buildExecutionPlanRef(executionPlanId: string): string {
 
 export function parseExecutionPlanRef(ref: string): { executionPlanId: string } | undefined {
   const match = /^db:\/\/flow-execution-plan\/([^/]+)$/u.exec(ref);
+  if (!match) {
+    return undefined;
+  }
+
+  return { executionPlanId: decodeURIComponent(match[1] ?? '') };
+}
+
+export function buildAgentExecutionPlanRef(executionPlanId: string): string {
+  return `db://agent-execution-plan/${encodeURIComponent(executionPlanId)}`;
+}
+
+export function parseAgentExecutionPlanRef(ref: string): { executionPlanId: string } | undefined {
+  const match = /^db:\/\/agent-execution-plan\/([^/]+)$/u.exec(ref);
   if (!match) {
     return undefined;
   }
@@ -467,6 +557,14 @@ export async function buildFlowExecutionPlan(
         allowedTools.push(tool.tool_name);
       }
 
+      const agentExecutionPlan = await new AgentExecutionPlanRepository(db).createForAgent({
+        agentId: agentRecord.spec.agent_id,
+        agentVersion: agentRecord.spec.version,
+        tenantId,
+        ...(input.operatorId ? { operatorId: input.operatorId } : {}),
+        generatedAt,
+      });
+
       agents.push({
         step_id: step.id,
         agent_id: agentRecord.spec.agent_id,
@@ -477,6 +575,8 @@ export async function buildFlowExecutionPlan(
         prompt_sha256: promptRecord.sha256,
         model_policy: agentRecord.spec.model_policy,
         allowed_tools: allowedTools,
+        agent_execution_plan_ref: agentExecutionPlan.execution_plan_ref,
+        allowed_handoffs: agentRecord.spec.allowed_handoffs,
         budget: {
           max_steps: agentRecord.spec.max_steps,
           max_tokens: agentRecord.spec.max_tokens,
@@ -579,6 +679,193 @@ export class FlowExecutionPlanRepository {
       .executeTakeFirst();
 
     return row ? mapFlowExecutionPlan(row) : undefined;
+  }
+}
+
+export async function buildAgentExecutionPlan(
+  db: Kysely<Database>,
+  input: BuildAgentExecutionPlanInput,
+): Promise<AgentExecutionPlan> {
+  const tenantId = tenant(input);
+  const agentRecord = await new AgentSpecRepository(db).getByIdAndVersion(input.agentId, input.agentVersion, { tenantId });
+  if (!agentRecord) {
+    throw new Error(`AgentSpec exact version not found: ${input.agentId}@${input.agentVersion}`);
+  }
+  if (!isDependencyPublishable(agentRecord.status)) {
+    throw new Error(`AgentSpec is not executable for plan generation: ${input.agentId}@${input.agentVersion}`);
+  }
+
+  const promptRef = parseVersionRef(agentRecord.spec.prompt_ref);
+  if (!promptRef) {
+    throw new Error(`Agent prompt_ref must use prompt_id@version: ${agentRecord.spec.agent_id}@${agentRecord.spec.version}`);
+  }
+  const promptRecord = await new PromptDefinitionRepository(db).getByIdAndVersion(promptRef.id, promptRef.version, { tenantId });
+  if (!promptRecord) {
+    throw new Error(`PromptDefinition exact version not found: ${agentRecord.spec.prompt_ref}`);
+  }
+  if (!isDependencyPublishable(promptRecord.status)) {
+    throw new Error(`PromptDefinition is not executable for plan generation: ${agentRecord.spec.prompt_ref}`);
+  }
+
+  const allowedTools = [];
+  for (const toolRef of parseToolVersionRefs(agentRecord.spec.allowed_tools, 'AgentSpec.allowed_tools')) {
+    const toolRecord = await new ToolManifestRepository(db).getByIdAndVersion(toolRef.name, manifestVersionToRegistryVersion(toolRef.version), { tenantId });
+    if (!toolRecord) {
+      throw new Error(`ToolManifest exact version not found: ${toolRef.name}@${toolRef.version}`);
+    }
+    if (toolRecord.spec.version !== toolRef.version) {
+      throw new Error(`ToolManifest version mismatch: requested ${toolRef.name}@${toolRef.version}, got ${toolRecord.spec.version}`);
+    }
+    if (!isDependencyPublishable(toolRecord.status)) {
+      throw new Error(`ToolManifest is not executable for plan generation: ${toolRef.name}@${toolRef.version}`);
+    }
+    allowedTools.push({
+      tool_name: toolRecord.spec.tool_name,
+      tool_version: toolRecord.spec.version,
+      tool_sha256: toolRecord.sha256,
+      ...(toolRecord.spec.description ? { description: toolRecord.spec.description } : {}),
+      risk_level: toolRecord.spec.risk_level,
+      input_schema: toolRecord.spec.input_schema ?? {},
+    });
+  }
+
+  const budget = agentBudgetSchema.parse({
+    max_segments: agentRecord.spec.max_steps,
+    max_model_turns: agentRecord.spec.max_steps,
+    max_tool_calls: agentRecord.spec.allowed_tools.length,
+    max_total_tokens: agentRecord.spec.max_tokens,
+  });
+  const outputSchema = parseOptionalJsonObject(agentRecord.spec.output_schema);
+  const generatedAt = input.generatedAt ?? new Date().toISOString();
+  const executionPlanId = `agent_plan_${randomUUID()}`;
+  const executionPlanRef = buildAgentExecutionPlanRef(executionPlanId);
+  const plan: ResolvedAgentPlan = resolvedAgentPlanSchema.parse({
+    agent_id: agentRecord.spec.agent_id,
+    agent_version: agentRecord.spec.version,
+    agent_sha256: agentRecord.sha256,
+    prompt_id: promptRecord.spec.prompt_id,
+    prompt_version: promptRecord.spec.version,
+    prompt_sha256: promptRecord.sha256,
+    system_prompt: promptRecord.spec.content,
+    model_policy: agentRecord.spec.model_policy,
+    allowed_tools: allowedTools,
+    allowed_handoffs: agentRecord.spec.allowed_handoffs,
+    ...(outputSchema ? { output_schema: outputSchema } : {}),
+    budget,
+  });
+  const planWithoutHash = {
+    execution_plan_id: executionPlanId,
+    execution_plan_ref: executionPlanRef,
+    tenant_id: tenantId,
+    agent_id: agentRecord.spec.agent_id,
+    agent_version: agentRecord.spec.version,
+    agent_sha256: agentRecord.sha256,
+    prompt_id: promptRecord.spec.prompt_id,
+    prompt_version: promptRecord.spec.version,
+    prompt_sha256: promptRecord.sha256,
+    model_policy: agentRecord.spec.model_policy,
+    allowed_tools: allowedTools,
+    allowed_handoffs: agentRecord.spec.allowed_handoffs,
+    ...(outputSchema ? { output_schema: outputSchema } : {}),
+    budget,
+    plan,
+    generated_at: generatedAt,
+  };
+
+  return agentExecutionPlanSchema.parse({
+    ...planWithoutHash,
+    execution_plan_hash: hashJson(planWithoutHash),
+  });
+}
+
+export class AgentExecutionPlanRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async createForAgent(input: BuildAgentExecutionPlanInput): Promise<AgentExecutionPlan> {
+    const plan = await buildAgentExecutionPlan(this.db, input);
+    const existing = await this.getByAgentVersion(plan.agent_id, plan.agent_version, { tenantId: plan.tenant_id });
+    if (existing && existing.execution_plan_hash === plan.execution_plan_hash) {
+      return existing;
+    }
+    if (existing && existing.execution_plan_hash !== plan.execution_plan_hash) {
+      throw new Error(`AgentExecutionPlan hash conflict for ${plan.agent_id}@${plan.agent_version}`);
+    }
+
+    const row: Insertable<AgentExecutionPlanTable> = {
+      execution_plan_id: plan.execution_plan_id,
+      execution_plan_ref: plan.execution_plan_ref,
+      tenant_id: plan.tenant_id,
+      agent_id: plan.agent_id,
+      agent_version: plan.agent_version,
+      agent_sha256: plan.agent_sha256,
+      prompt_id: plan.prompt_id,
+      prompt_version: plan.prompt_version,
+      prompt_sha256: plan.prompt_sha256,
+      model_policy_json: { value: plan.model_policy },
+      allowed_tools_json: plan.allowed_tools,
+      allowed_handoffs_json: plan.allowed_handoffs,
+      output_schema_json: plan.output_schema ?? null,
+      budget_json: plan.budget,
+      plan_json: plan,
+      execution_plan_hash: plan.execution_plan_hash,
+      generated_at: plan.generated_at,
+    };
+
+    const saved = await this.db
+      .insertInto('agent_execution_plan')
+      .values(row)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return mapAgentExecutionPlan(saved);
+  }
+
+  async getByRef(ref: string, options: RepositoryTenantOptions = {}): Promise<AgentExecutionPlan | undefined> {
+    const parsed = parseAgentExecutionPlanRef(ref);
+    if (!parsed) {
+      return undefined;
+    }
+    let query = this.db
+      .selectFrom('agent_execution_plan')
+      .selectAll()
+      .where('execution_plan_id', '=', parsed.executionPlanId);
+    if (options.tenantId) {
+      query = query.where('tenant_id', '=', options.tenantId);
+    }
+    const row = await query.executeTakeFirst();
+    return row ? mapAgentExecutionPlan(row) : undefined;
+  }
+
+  async getByAgentVersion(agentId: string, version: number, options: RepositoryTenantOptions = {}): Promise<AgentExecutionPlan | undefined> {
+    const row = await this.db
+      .selectFrom('agent_execution_plan')
+      .selectAll()
+      .where('tenant_id', '=', tenant(options))
+      .where('agent_id', '=', agentId)
+      .where('agent_version', '=', version)
+      .orderBy('generated_at', 'desc')
+      .executeTakeFirst();
+    return row ? mapAgentExecutionPlan(row) : undefined;
+  }
+
+  async verifyHash(ref: string, expectedHash: string, options: RepositoryTenantOptions = {}): Promise<boolean> {
+    const plan = await this.getByRef(ref, options);
+    return Boolean(plan && plan.execution_plan_hash === expectedHash);
+  }
+
+  async list(options: ListAgentRunsOptions = {}): Promise<AgentExecutionPlan[]> {
+    let query = this.db.selectFrom('agent_execution_plan').selectAll();
+    if (options.tenantId) {
+      query = query.where('tenant_id', '=', options.tenantId);
+    }
+    if (options.agentId) {
+      query = query.where('agent_id', '=', options.agentId);
+    }
+    const rows = await query
+      .orderBy('generated_at', 'desc')
+      .limit(limit(options.limit))
+      .offset(offset(options.offset))
+      .execute();
+    return rows.map(mapAgentExecutionPlan);
   }
 }
 
@@ -1003,6 +1290,248 @@ export class TaskRunRepository {
   }
 }
 
+export class AgentRunRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async create(input: CreateAgentRunInput): Promise<AgentRunRecord> {
+    const agentRunId = input.agentRunId ?? `agent_run_${randomUUID()}`;
+    const now = new Date();
+    const plan = input.executionPlan;
+    const row: Insertable<AgentRunTable> = {
+      agent_run_id: agentRunId,
+      tenant_id: input.tenantId,
+      user_id: input.userId,
+      task_run_id: input.taskRunId,
+      workflow_id: input.workflowId,
+      parent_workflow_id: input.parentWorkflowId ?? null,
+      execution_plan_ref: plan.execution_plan_ref,
+      execution_plan_hash: plan.execution_plan_hash,
+      agent_id: plan.agent_id,
+      agent_version: plan.agent_version,
+      prompt_id: plan.prompt_id,
+      prompt_version: plan.prompt_version,
+      model: plan.model_policy,
+      execution_mode: input.executionMode ?? 'mediated_tool_call',
+      status: 'queued',
+      current_segment_index: 0,
+      model_turn_count: 0,
+      tool_call_count: 0,
+      handoff_count: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      estimated_cost: null,
+      started_at: now,
+      completed_at: null,
+      error_code: null,
+      error_message: null,
+    };
+    const saved = await this.db.insertInto('agent_run').values(row).returningAll().executeTakeFirstOrThrow();
+    return mapAgentRun(saved);
+  }
+
+  async get(agentRunId: string, options: RepositoryTenantOptions = {}): Promise<AgentRunRecord | undefined> {
+    let query = this.db.selectFrom('agent_run').selectAll().where('agent_run_id', '=', agentRunId);
+    if (options.tenantId) {
+      query = query.where('tenant_id', '=', options.tenantId);
+    }
+    const row = await query.executeTakeFirst();
+    return row ? mapAgentRun(row) : undefined;
+  }
+
+  async list(options: ListAgentRunsOptions = {}): Promise<AgentRunRecord[]> {
+    let query = this.db.selectFrom('agent_run').selectAll();
+    if (options.tenantId) {
+      query = query.where('tenant_id', '=', options.tenantId);
+    }
+    if (options.taskRunId) {
+      query = query.where('task_run_id', '=', options.taskRunId);
+    }
+    if (options.agentId) {
+      query = query.where('agent_id', '=', options.agentId);
+    }
+    if (options.status) {
+      query = query.where('status', '=', options.status);
+    }
+    const rows = await query
+      .orderBy('created_at', 'desc')
+      .limit(limit(options.limit))
+      .offset(offset(options.offset))
+      .execute();
+    return rows.map(mapAgentRun);
+  }
+
+  async update(agentRunId: string, input: UpdateAgentRunInput): Promise<AgentRunRecord | undefined> {
+    const rowUpdate: Updateable<AgentRunTable> = { updated_at: new Date() };
+    if (input.status) {
+      rowUpdate.status = agentRunStatusSchema.parse(input.status);
+    }
+    if (input.currentSegmentIndex !== undefined) {
+      rowUpdate.current_segment_index = input.currentSegmentIndex;
+    }
+    if (input.modelTurnCount !== undefined) {
+      rowUpdate.model_turn_count = input.modelTurnCount;
+    }
+    if (input.toolCallCount !== undefined) {
+      rowUpdate.tool_call_count = input.toolCallCount;
+    }
+    if (input.handoffCount !== undefined) {
+      rowUpdate.handoff_count = input.handoffCount;
+    }
+    if (input.usage) {
+      if (input.usage.input_tokens !== undefined) {
+        rowUpdate.input_tokens = input.usage.input_tokens;
+      }
+      if (input.usage.output_tokens !== undefined) {
+        rowUpdate.output_tokens = input.usage.output_tokens;
+      }
+      if (input.usage.total_tokens !== undefined) {
+        rowUpdate.total_tokens = input.usage.total_tokens;
+      }
+      if (input.usage.estimated_cost !== undefined) {
+        rowUpdate.estimated_cost = input.usage.estimated_cost;
+      }
+    }
+    if (input.completed) {
+      rowUpdate.completed_at = new Date();
+    }
+    if (input.errorCode !== undefined) {
+      rowUpdate.error_code = input.errorCode;
+    }
+    if (input.errorMessage !== undefined) {
+      rowUpdate.error_message = input.errorMessage;
+    }
+    const row = await this.db
+      .updateTable('agent_run')
+      .set(rowUpdate)
+      .where('agent_run_id', '=', agentRunId)
+      .returningAll()
+      .executeTakeFirst();
+    return row ? mapAgentRun(row) : undefined;
+  }
+}
+
+export class AgentStepRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async create(input: CreateAgentStepInput): Promise<AgentStepRecord> {
+    const parsed = agentStepRecordSchema.parse({
+      ...input,
+      agent_step_id: input.agent_step_id ?? `agent_step_${randomUUID()}`,
+    });
+    const row: Insertable<AgentStepTable> = {
+      agent_step_id: parsed.agent_step_id,
+      agent_run_id: parsed.agent_run_id,
+      segment_index: parsed.segment_index,
+      stable_step_key: parsed.stable_step_key,
+      segment_status: parsed.segment_status,
+      decision_summary: parsed.decision_summary ?? null,
+      proposed_tool_calls_json: parsed.proposed_tool_calls,
+      tool_result_refs_json: parsed.tool_result_refs,
+      context_snapshot_ref: parsed.context_snapshot_ref ?? null,
+      output_ref: parsed.output_ref ?? null,
+      usage_json: parsed.usage,
+      error_code: parsed.error_code ?? null,
+      error_message: parsed.error_message ?? null,
+    };
+
+    const saved = await this.db
+      .insertInto('agent_step')
+      .values(row)
+      .onConflict((oc) => oc.column('stable_step_key').doNothing())
+      .returningAll()
+      .executeTakeFirst();
+
+    if (saved) {
+      return mapAgentStep(saved);
+    }
+    const existing = await this.getByStableKey(parsed.stable_step_key);
+    if (!existing) {
+      throw new Error(`AgentStep insert conflict but existing step was not found: ${parsed.stable_step_key}`);
+    }
+    return existing;
+  }
+
+  async getByStableKey(stableStepKey: string): Promise<AgentStepRecord | undefined> {
+    const row = await this.db
+      .selectFrom('agent_step')
+      .selectAll()
+      .where('stable_step_key', '=', stableStepKey)
+      .executeTakeFirst();
+    return row ? mapAgentStep(row) : undefined;
+  }
+
+  async listByRun(agentRunId: string, options: { limit?: number; offset?: number } = {}): Promise<AgentStepRecord[]> {
+    const rows = await this.db
+      .selectFrom('agent_step')
+      .selectAll()
+      .where('agent_run_id', '=', agentRunId)
+      .orderBy('segment_index', 'asc')
+      .limit(limit(options.limit))
+      .offset(offset(options.offset))
+      .execute();
+    return rows.map(mapAgentStep);
+  }
+}
+
+export class AgentContextSnapshotRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async create(input: CreateAgentContextSnapshotInput): Promise<PiContextSnapshotRef> {
+    const snapshotId = input.snapshotId ?? `snapshot_${randomUUID()}`;
+    const schemaVersion = input.schemaVersion;
+    const byteSize = Buffer.byteLength(stableStringify(input.sanitizedMessages), 'utf8');
+    const messageCount = input.sanitizedMessages.length;
+    const snapshotHash = hashJson({
+      schema_version: schemaVersion,
+      messages: input.sanitizedMessages,
+      previous_snapshot_id: input.previousSnapshotId ?? null,
+    });
+    const row: Insertable<AgentContextSnapshotTable> = {
+      snapshot_id: snapshotId,
+      agent_run_id: input.agentRunId,
+      previous_snapshot_id: input.previousSnapshotId ?? null,
+      schema_version: schemaVersion,
+      sanitized_messages_json: input.sanitizedMessages,
+      snapshot_hash: snapshotHash,
+      message_count: messageCount,
+      byte_size: byteSize,
+    };
+    const saved = await this.db
+      .insertInto('agent_context_snapshot')
+      .values(row)
+      .onConflict((oc) => oc.column('snapshot_hash').doNothing())
+      .returningAll()
+      .executeTakeFirst();
+    if (saved) {
+      return snapshotRefFromSnapshotRow(saved);
+    }
+    const existing = await this.getByHash(snapshotHash);
+    if (!existing) {
+      throw new Error(`AgentContextSnapshot insert conflict but existing snapshot was not found: ${snapshotHash}`);
+    }
+    return existing.ref;
+  }
+
+  async get(snapshotId: string): Promise<{ ref: PiContextSnapshotRef; messages: unknown[]; previousSnapshotId?: string } | undefined> {
+    const row = await this.db
+      .selectFrom('agent_context_snapshot')
+      .selectAll()
+      .where('snapshot_id', '=', snapshotId)
+      .executeTakeFirst();
+    return row ? snapshotFromRow(row) : undefined;
+  }
+
+  async getByHash(snapshotHash: string): Promise<{ ref: PiContextSnapshotRef; messages: unknown[]; previousSnapshotId?: string } | undefined> {
+    const row = await this.db
+      .selectFrom('agent_context_snapshot')
+      .selectAll()
+      .where('snapshot_hash', '=', snapshotHash)
+      .executeTakeFirst();
+    return row ? snapshotFromRow(row) : undefined;
+  }
+}
+
 export class AuditEventRepository {
   constructor(private readonly db: Kysely<Database>) {}
 
@@ -1083,10 +1612,16 @@ export class HumanTaskRepository {
       tenant_id: parsed.tenant_id,
       task_run_id: parsed.task_run_id,
       workflow_id: parsed.workflow_id ?? null,
+      kind: parsed.kind,
       status: 'pending',
       assignee: parsed.assignee ?? null,
       candidate_groups: parsed.candidate_groups,
       payload,
+      requested_schema_json: parsed.requested_schema ?? null,
+      response_json: null,
+      responded_by: null,
+      responded_at: null,
+      response_idempotency_key: null,
       decision: null,
       decided_by: null,
       decided_at: null,
@@ -1122,6 +1657,60 @@ export class HumanTaskRepository {
 
   async expire(humanTaskId: string, input: HumanTaskDecisionInput): Promise<HumanTask | undefined> {
     return this.decide(humanTaskId, 'expired', input);
+  }
+
+  async respond(humanTaskId: string, input: HumanTaskRespondInput): Promise<{ humanTask?: HumanTask; conflict: boolean; idempotentReplay: boolean }> {
+    const parsed = humanTaskRespondRequestSchema.parse({
+      tenant_id: input.tenantId ?? 'default',
+      user_id: input.userId,
+      response: input.response,
+      response_idempotency_key: input.responseIdempotencyKey,
+    });
+    const existing = await this.get(humanTaskId);
+    if (!existing || (input.tenantId && existing.tenant_id !== input.tenantId)) {
+      return { conflict: false, idempotentReplay: false };
+    }
+    if (existing.kind !== 'user_input') {
+      throw new Error(`HumanTask is not user_input kind: ${humanTaskId}`);
+    }
+    if (existing.response_idempotency_key) {
+      if (existing.response_idempotency_key === parsed.response_idempotency_key && hashJson(existing.response ?? {}) === hashJson(parsed.response)) {
+        return { humanTask: existing, conflict: false, idempotentReplay: true };
+      }
+      return { humanTask: existing, conflict: true, idempotentReplay: false };
+    }
+    if (existing.status !== 'pending' && existing.status !== 'created' && existing.status !== 'assigned') {
+      return { humanTask: existing, conflict: true, idempotentReplay: false };
+    }
+
+    const respondedAt = new Date();
+    let query = this.db
+      .updateTable('human_task')
+      .set({
+        status: 'resolved',
+        response_json: parsed.response,
+        responded_by: parsed.user_id,
+        responded_at: respondedAt,
+        response_idempotency_key: parsed.response_idempotency_key,
+        decision: {
+          status: 'resolved',
+          payload: parsed.response,
+        },
+        decided_by: parsed.user_id,
+        decided_at: respondedAt,
+        completed_at: respondedAt,
+      })
+      .where('human_task_id', '=', humanTaskId);
+
+    if (input.tenantId) {
+      query = query.where('tenant_id', '=', input.tenantId);
+    }
+
+    const row = await query.returningAll().executeTakeFirst();
+    const humanTask = row ? mapHumanTask(row) : undefined;
+    return humanTask
+      ? { humanTask, conflict: false, idempotentReplay: false }
+      : { conflict: false, idempotentReplay: false };
   }
 
   async listByTaskRunId(taskRunId: string, options: RepositoryTenantOptions = {}): Promise<HumanTask[]> {
@@ -1745,6 +2334,17 @@ function manifestSpecVersion(manifest: ToolManifest): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
 }
 
+function parseOptionalJsonObject(value: string | undefined): Record<string, unknown> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed: unknown = JSON.parse(value);
+  if (!isRecord(parsed)) {
+    throw new Error('AgentSpec output_schema must be a JSON object string');
+  }
+  return parsed;
+}
+
 function normalizeWriteStatus(status: SpecStatus | undefined): SpecStatus {
   return status ?? 'published';
 }
@@ -1822,6 +2422,117 @@ function mapFlowExecutionPlan(row: Selectable<FlowExecutionPlanTable>): FlowExec
   return plan;
 }
 
+function mapAgentExecutionPlan(row: Selectable<AgentExecutionPlanTable>): AgentExecutionPlan {
+  const plan = agentExecutionPlanSchema.parse({
+    ...(isRecord(row.plan_json) ? row.plan_json : {}),
+    execution_plan_id: row.execution_plan_id,
+    execution_plan_ref: row.execution_plan_ref,
+    tenant_id: row.tenant_id,
+    agent_id: row.agent_id,
+    agent_version: row.agent_version,
+    agent_sha256: row.agent_sha256,
+    prompt_id: row.prompt_id,
+    prompt_version: row.prompt_version,
+    prompt_sha256: row.prompt_sha256,
+    execution_plan_hash: row.execution_plan_hash,
+    generated_at: toIso(row.generated_at),
+  });
+  const expectedHash = hashJson({
+    execution_plan_id: plan.execution_plan_id,
+    execution_plan_ref: plan.execution_plan_ref,
+    tenant_id: plan.tenant_id,
+    agent_id: plan.agent_id,
+    agent_version: plan.agent_version,
+    agent_sha256: plan.agent_sha256,
+    prompt_id: plan.prompt_id,
+    prompt_version: plan.prompt_version,
+    prompt_sha256: plan.prompt_sha256,
+    model_policy: plan.model_policy,
+    allowed_tools: plan.allowed_tools,
+    allowed_handoffs: plan.allowed_handoffs,
+    ...(plan.output_schema ? { output_schema: plan.output_schema } : {}),
+    budget: plan.budget,
+    plan: plan.plan,
+    generated_at: plan.generated_at,
+  });
+  if (expectedHash !== plan.execution_plan_hash) {
+    throw new Error(`AgentExecutionPlan hash mismatch: ${plan.execution_plan_ref}`);
+  }
+  return plan;
+}
+
+function mapAgentRun(row: Selectable<AgentRunTable>): AgentRunRecord {
+  return agentRunRecordSchema.parse({
+    agent_run_id: row.agent_run_id,
+    tenant_id: row.tenant_id,
+    user_id: row.user_id,
+    task_run_id: row.task_run_id,
+    workflow_id: row.workflow_id,
+    ...(row.parent_workflow_id ? { parent_workflow_id: row.parent_workflow_id } : {}),
+    execution_plan_ref: row.execution_plan_ref,
+    execution_plan_hash: row.execution_plan_hash,
+    agent_id: row.agent_id,
+    agent_version: row.agent_version,
+    prompt_id: row.prompt_id,
+    prompt_version: row.prompt_version,
+    model: row.model,
+    execution_mode: row.execution_mode,
+    status: row.status,
+    current_segment_index: row.current_segment_index,
+    model_turn_count: row.model_turn_count,
+    tool_call_count: row.tool_call_count,
+    handoff_count: row.handoff_count,
+    input_tokens: row.input_tokens,
+    output_tokens: row.output_tokens,
+    total_tokens: row.total_tokens,
+    ...(row.estimated_cost !== null ? { estimated_cost: Number(row.estimated_cost) } : {}),
+    ...(row.started_at ? { started_at: toIso(row.started_at) } : {}),
+    ...(row.completed_at ? { completed_at: toIso(row.completed_at) } : {}),
+    ...(row.error_code ? { error_code: row.error_code } : {}),
+    ...(row.error_message ? { error_message: row.error_message } : {}),
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  });
+}
+
+function mapAgentStep(row: Selectable<AgentStepTable>): AgentStepRecord {
+  return agentStepRecordSchema.parse({
+    agent_step_id: row.agent_step_id,
+    agent_run_id: row.agent_run_id,
+    segment_index: row.segment_index,
+    stable_step_key: row.stable_step_key,
+    segment_status: row.segment_status,
+    ...(row.decision_summary ? { decision_summary: row.decision_summary } : {}),
+    proposed_tool_calls: Array.isArray(row.proposed_tool_calls_json) ? row.proposed_tool_calls_json : [],
+    tool_result_refs: Array.isArray(row.tool_result_refs_json) ? row.tool_result_refs_json : [],
+    ...(isRecord(row.context_snapshot_ref) ? { context_snapshot_ref: row.context_snapshot_ref } : {}),
+    ...(row.output_ref ? { output_ref: row.output_ref } : {}),
+    usage: isRecord(row.usage_json) ? agentUsageSchema.parse(row.usage_json) : {},
+    ...(row.error_code ? { error_code: row.error_code } : {}),
+    ...(row.error_message ? { error_message: row.error_message } : {}),
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  });
+}
+
+function snapshotRefFromSnapshotRow(row: Selectable<AgentContextSnapshotTable>): PiContextSnapshotRef {
+  return piContextSnapshotRefSchema.parse({
+    snapshot_id: row.snapshot_id,
+    schema_version: row.schema_version,
+    snapshot_hash: row.snapshot_hash,
+    message_count: row.message_count,
+    byte_size: row.byte_size,
+  });
+}
+
+function snapshotFromRow(row: Selectable<AgentContextSnapshotTable>): { ref: PiContextSnapshotRef; messages: unknown[]; previousSnapshotId?: string } {
+  return {
+    ref: snapshotRefFromSnapshotRow(row),
+    messages: Array.isArray(row.sanitized_messages_json) ? row.sanitized_messages_json : [],
+    ...(row.previous_snapshot_id ? { previousSnapshotId: row.previous_snapshot_id } : {}),
+  };
+}
+
 function mapAuditEvent(row: Selectable<AuditEventTable>): AuditEvent {
   const auditEvent: AuditEvent = {
     event_id: row.event_id,
@@ -1871,6 +2582,7 @@ function mapHumanTask(row: Selectable<HumanTaskTable>): HumanTask {
     human_task_id: row.human_task_id,
     tenant_id: row.tenant_id,
     task_run_id: row.task_run_id,
+    kind: row.kind as HumanTask['kind'],
     status: row.status as HumanTask['status'],
     candidate_groups: Array.isArray(row.candidate_groups) ? row.candidate_groups.map(String) : [],
     payload: isRecord(row.payload) ? row.payload : {},
@@ -1882,6 +2594,21 @@ function mapHumanTask(row: Selectable<HumanTaskTable>): HumanTask {
   }
   if (row.assignee) {
     humanTask.assignee = row.assignee;
+  }
+  if (isRecord(row.requested_schema_json)) {
+    humanTask.requested_schema = row.requested_schema_json;
+  }
+  if (isRecord(row.response_json)) {
+    humanTask.response = row.response_json;
+  }
+  if (row.responded_by) {
+    humanTask.responded_by = row.responded_by;
+  }
+  if (row.responded_at) {
+    humanTask.responded_at = toIso(row.responded_at);
+  }
+  if (row.response_idempotency_key) {
+    humanTask.response_idempotency_key = row.response_idempotency_key;
   }
   if (isRecord(row.decision)) {
     humanTask.decision = row.decision;

@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated for AR-0: executable runtime plan and Temporal durable wait hardening.
+Last updated for AR-1: Pi segmented agent loop and Temporal durable supervisor.
 
 ## Completed Platform Capabilities
 
@@ -27,6 +27,13 @@ Last updated for AR-0: executable runtime plan and Temporal durable wait hardeni
 21. Docker + PostgreSQL + Temporal smoke path: `smoke:temporal-db-e2e`.
 22. control-plane API smoke: `smoke:control-plane-api-e2e`.
 23. control-plane UI smoke: `smoke:control-plane-ui-e2e`.
+24. Real Pi Agent Core inner loop in runtime-worker.
+25. Temporal `piDurableAgentWorkflow` supervisor for Pi segment boundaries.
+26. Persistent `agent_execution_plan`, `agent_run`, `agent_step`, and `agent_context_snapshot`.
+27. Safe Pi context snapshot serialization without hidden reasoning or secret-like fields.
+28. Deferred Pi tools that propose tool calls without executing side effects.
+29. Agent L3 governance path through Tool Gateway preview, Human Task Signal, commit, and Pi context resume.
+30. Explicit `/v1/agent-tasks`, `/v1/agent-runs`, `/v1/agent-runs/:id/steps`, and user-input Human Task response APIs.
 
 ## Completed In AR-0
 
@@ -88,6 +95,8 @@ runtime-api avoids DB production fallback to memory/default/sample routes. Non-m
 
 Temporal workflow inputs use immutable `execution_plan_ref` values. The execution plan contains the FlowSpec snapshot plus exact Agent, Prompt and Tool version/hash references, so running workflows are not changed by later publish, gray, rollback, disable, deprecate or tool version changes.
 
+Agent runtime inputs use immutable `agent_execution_plan_ref` values. `GenericAgentWorkflow` no longer constructs runtime agent metadata from loose `agent_id` fields; it delegates to `piDurableAgentWorkflow`.
+
 control-plane does not execute tools and does not copy the Human Task state machine. UI operations go through control-plane API/BFF.
 
 ## Security Model
@@ -121,6 +130,7 @@ CONTROL_PLANE_AUTH_MODE=header
 - `docs/16_control_plane_api.md`
 - `docs/17_control_plane_security.md`
 - `docs/18_control_plane_ui.md`
+- `docs/19_pi_segmented_agent_runtime.md`
 - `apps/control-plane/docs/API.md`
 - `apps/control-plane/docs/DEV_PLAN.md`
 - `apps/control-plane/docs/DEV_SPEC.md`
@@ -151,16 +161,16 @@ corepack pnpm smoke:control-plane-ui-e2e
 This stage intentionally does not implement:
 
 1. Low-code flow canvas or drag-and-drop designer.
-2. Real Pi integration.
-3. Real model calls.
-4. Real business system adapters.
+2. Live production model-gateway smoke with real credentials.
+3. Real business system adapters.
+4. Full workflow handoff child execution policy beyond fail-closed validation.
 5. Enterprise SSO.
 6. Random gray traffic splitting.
 7. Any fifth production app or production container.
 
 ## Suggested Next Batch
 
-1. Improve UI ergonomics around large JSON editing and schema hints.
-2. Add evaluation/test-set operations for Route and Flow releases.
-3. Add production identity integration behind the existing Header Auth boundary.
-4. Add richer diff visualization if reviewers need semantic spec diffs.
+1. Add full Pi smoke scripts for readonly tool, L3 resume, user input, handoff and restart recovery.
+2. Improve UI ergonomics around AgentRun/AgentStep inspection and context refs.
+3. Add evaluation/test-set operations for Route and Flow releases.
+4. Add production identity integration behind the existing Header Auth boundary.

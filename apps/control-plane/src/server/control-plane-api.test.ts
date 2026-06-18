@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import type {
+  AgentRunRecord,
+  AgentStepRecord,
   CapabilityRelease,
   FlowSpec,
   HumanTaskDecisionResponse,
@@ -372,17 +374,17 @@ class FakeRuntimeApiClient {
   }
 
   async getHumanTask(): Promise<HumanTaskGetResponse> {
-    return { human_task: { human_task_id: 'human_1', tenant_id: 'tenant_1', task_run_id: 'task_1', status: 'pending', candidate_groups: [], payload: {} } };
+    return { human_task: { human_task_id: 'human_1', tenant_id: 'tenant_1', task_run_id: 'task_1', kind: 'approval', status: 'pending', candidate_groups: [], payload: {} } };
   }
 
   async approveHumanTask(_id: string, body: unknown): Promise<HumanTaskDecisionResponse> {
     this.lastDecisionBody = body;
-    return { human_task: { human_task_id: 'human_1', tenant_id: 'tenant_1', task_run_id: 'task_1', status: 'approved', candidate_groups: [], payload: {} } };
+    return { human_task: { human_task_id: 'human_1', tenant_id: 'tenant_1', task_run_id: 'task_1', kind: 'approval', status: 'approved', candidate_groups: [], payload: {} } };
   }
 
   async rejectHumanTask(_id: string, body: unknown): Promise<HumanTaskDecisionResponse> {
     this.lastDecisionBody = body;
-    return { human_task: { human_task_id: 'human_1', tenant_id: 'tenant_1', task_run_id: 'task_1', status: 'rejected', candidate_groups: [], payload: {} } };
+    return { human_task: { human_task_id: 'human_1', tenant_id: 'tenant_1', task_run_id: 'task_1', kind: 'approval', status: 'rejected', candidate_groups: [], payload: {} } };
   }
 
   async listTaskRuns(): Promise<TaskRun[]> {
@@ -391,6 +393,42 @@ class FakeRuntimeApiClient {
 
   async getTaskRun(): Promise<TaskRun> {
     return { task_run_id: 'task_1', tenant_id: 'tenant_1', user_id: 'user_1', route_type: 'matched', status: 'running' };
+  }
+
+  async listAgentRuns(): Promise<{ agent_runs: AgentRunRecord[] }> {
+    return { agent_runs: [] };
+  }
+
+  async getAgentRun(): Promise<{ agent_run: AgentRunRecord }> {
+    return {
+      agent_run: {
+        agent_run_id: 'agent_run_1',
+        tenant_id: 'tenant_1',
+        user_id: 'user_1',
+        task_run_id: 'task_1',
+        workflow_id: 'workflow_1',
+        execution_plan_ref: 'db://agent-execution-plan/agent_plan_1',
+        execution_plan_hash: 'a'.repeat(64),
+        agent_id: 'agent_1',
+        agent_version: 1,
+        prompt_id: 'prompt_1',
+        prompt_version: 1,
+        model: 'deterministic:final_only',
+        execution_mode: 'mediated_tool_call',
+        status: 'running',
+        current_segment_index: 0,
+        model_turn_count: 0,
+        tool_call_count: 0,
+        handoff_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+      },
+    };
+  }
+
+  async listAgentSteps(): Promise<{ agent_steps: AgentStepRecord[] }> {
+    return { agent_steps: [] };
   }
 }
 

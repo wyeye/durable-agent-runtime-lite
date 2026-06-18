@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   agentRunRequestSchema,
   agentRunResultSchema,
+  agentBudgetSchema,
+  agentExecutionPlanSchema,
+  agentRunRecordSchema,
+  agentStepRecordSchema,
   capabilityReleaseResponseSchema,
   cloneVersionRequestSchema,
   createDraftRequestSchema,
@@ -13,6 +17,7 @@ import {
   humanTaskCreateRequestSchema,
   humanTaskDecisionRequestSchema,
   humanTaskDecisionResponseSchema,
+  humanTaskRespondRequestSchema,
   humanTaskGetRequestSchema,
   humanTaskGetResponseSchema,
   humanTaskListRequestSchema,
@@ -41,6 +46,9 @@ import {
   validateSpecStatusTransition,
   toolPreviewRequestSchema,
   toolPreviewResponseSchema,
+  piSegmentResultSchema,
+  proposedToolCallSchema,
+  resolvedAgentPlanSchema,
   workflowStartRequestSchema,
 } from '../src/index.js';
 
@@ -301,6 +309,146 @@ describe('contracts schemas', () => {
     expect(plan.agents[0]?.prompt_version).toBe(3);
     expect(plan.tools[0]?.tool_sha256).toBe(hash);
     expect(() => flowExecutionPlanSchema.parse({ ...plan, flow_sha256: 'not-a-sha' })).toThrow();
+  });
+
+  it('validates Pi agent runtime DTOs without hidden reasoning fields', () => {
+    const hash = 'b'.repeat(64);
+    const budget = agentBudgetSchema.parse({ max_segments: 3, max_model_turns: 6, max_tool_calls: 2, max_total_tokens: 1000 });
+    const allowedTool = {
+      tool_name: 'knowledge.search',
+      tool_version: '1.0.0',
+      tool_sha256: hash,
+      description: 'Search knowledge',
+      risk_level: 'L1',
+      input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+    };
+    const plan = resolvedAgentPlanSchema.parse({
+      agent_id: 'agent_1',
+      agent_version: 1,
+      agent_sha256: hash,
+      prompt_id: 'prompt_1',
+      prompt_version: 1,
+      prompt_sha256: hash,
+      system_prompt: 'Answer with tools when useful.',
+      model_policy: 'deterministic:readonly_tool',
+      allowed_tools: [allowedTool],
+      allowed_handoffs: ['db://flow-execution-plan/child'],
+      budget,
+    });
+    const executionPlan = agentExecutionPlanSchema.parse({
+      execution_plan_id: 'agent_plan_1',
+      execution_plan_ref: 'db://agent-execution-plan/agent_plan_1',
+      tenant_id: 'tenant_1',
+      agent_id: 'agent_1',
+      agent_version: 1,
+      agent_sha256: hash,
+      prompt_id: 'prompt_1',
+      prompt_version: 1,
+      prompt_sha256: hash,
+      model_policy: 'deterministic:readonly_tool',
+      allowed_tools: [allowedTool],
+      allowed_handoffs: ['db://flow-execution-plan/child'],
+      budget,
+      plan,
+      generated_at: '2026-01-01T00:00:00.000Z',
+      execution_plan_hash: hash,
+    });
+    expect(JSON.stringify(executionPlan)).not.toMatch(/api[_-]?key|authorization|chain_of_thought|hidden_reasoning|internal_reasoning/i);
+
+    expect(proposedToolCallSchema.parse({
+      call_id: 'call_1',
+      tool_name: 'knowledge.search',
+      tool_version: '1.0.0',
+      tool_sha256: hash,
+      arguments: { query: 'durable runtime' },
+      risk_level: 'L1',
+      requires_confirmation: false,
+      source_order: 0,
+    }).arguments).toEqual({ query: 'durable runtime' });
+    expect(() => proposedToolCallSchema.parse({
+      call_id: 'call_1',
+      tool_name: 'knowledge.search',
+      tool_version: '1.0.0',
+      tool_sha256: hash,
+      arguments: 'not-object',
+      risk_level: 'L1',
+      source_order: 0,
+    })).toThrow();
+    expect(() => proposedToolCallSchema.parse({
+      call_id: 'call_1',
+      tool_name: 'knowledge.search',
+      tool_version: '1.0.0',
+      tool_sha256: hash,
+      arguments: {},
+      reason_summary: 'x'.repeat(2001),
+      risk_level: 'L1',
+      source_order: 0,
+    })).toThrow();
+
+    expect(piSegmentResultSchema.parse({
+      status: 'tool_requested',
+      proposed_tool_calls: [{
+        call_id: 'call_1',
+        tool_name: 'knowledge.search',
+        tool_version: '1.0.0',
+        tool_sha256: hash,
+        arguments: { query: 'durable runtime' },
+        risk_level: 'L1',
+        requires_confirmation: false,
+        source_order: 0,
+      }],
+      context_snapshot_ref: {
+        snapshot_id: 'snapshot_1',
+        schema_version: 'pi-context/v1',
+        snapshot_hash: hash,
+        message_count: 3,
+        byte_size: 400,
+      },
+      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      model_turn_count: 1,
+    }).status).toBe('tool_requested');
+
+    expect(agentRunRecordSchema.parse({
+      agent_run_id: 'agent_run_1',
+      tenant_id: 'tenant_1',
+      user_id: 'user_1',
+      task_run_id: 'task_1',
+      workflow_id: 'wf_1',
+      execution_plan_ref: executionPlan.execution_plan_ref,
+      execution_plan_hash: hash,
+      agent_id: 'agent_1',
+      agent_version: 1,
+      prompt_id: 'prompt_1',
+      prompt_version: 1,
+      model: 'deterministic:readonly_tool',
+      execution_mode: 'mediated_tool_call',
+      status: 'running',
+    }).current_segment_index).toBe(0);
+
+    expect(agentStepRecordSchema.parse({
+      agent_step_id: 'step_1',
+      agent_run_id: 'agent_run_1',
+      segment_index: 0,
+      stable_step_key: 'agent_run_1:0',
+      segment_status: 'tool_requested',
+      decision_summary: 'Need a read-only lookup.',
+      proposed_tool_calls: [{
+        call_id: 'call_1',
+        tool_name: 'knowledge.search',
+        tool_version: '1.0.0',
+        tool_sha256: hash,
+        arguments: { query: 'durable runtime' },
+        risk_level: 'L1',
+        source_order: 0,
+      }],
+    }).segment_status).toBe('tool_requested');
+
+    expect(humanTaskRespondRequestSchema.parse({
+      tenant_id: 'tenant_1',
+      user_id: 'user_1',
+      response_idempotency_key: 'response_1',
+      response: { answer: 'yes' },
+    }).response).toEqual({ answer: 'yes' });
   });
 
   it('validates control-plane management API DTOs', () => {

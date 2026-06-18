@@ -3,6 +3,8 @@ import type {
   HumanTaskDecisionResponse,
   HumanTaskGetResponse,
   HumanTaskListResponse,
+  AgentRunRecord,
+  AgentStepRecord,
   TaskRun,
 } from '@dar/contracts';
 import type { ForwardHeaders } from './http-client.js';
@@ -15,6 +17,9 @@ export interface RuntimeApiOperationsClient {
   rejectHumanTask(humanTaskId: string, body: unknown, headers: ForwardHeaders): Promise<HumanTaskDecisionResponse>;
   listTaskRuns(query: URLSearchParams, headers: ForwardHeaders): Promise<TaskRun[]>;
   getTaskRun(taskRunId: string, headers: ForwardHeaders, tenantId?: string): Promise<TaskRun>;
+  listAgentRuns(query: URLSearchParams, headers: ForwardHeaders): Promise<{ agent_runs: AgentRunRecord[] }>;
+  getAgentRun(agentRunId: string, query: URLSearchParams, headers: ForwardHeaders): Promise<{ agent_run: AgentRunRecord }>;
+  listAgentSteps(agentRunId: string, query: URLSearchParams, headers: ForwardHeaders): Promise<{ agent_steps: AgentStepRecord[] }>;
 }
 
 export class RuntimeApiClient implements RuntimeApiOperationsClient {
@@ -50,6 +55,18 @@ export class RuntimeApiClient implements RuntimeApiOperationsClient {
   getTaskRun(taskRunId: string, headers: ForwardHeaders, tenantId?: string): Promise<TaskRun> {
     const suffix = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : '';
     return this.client.get<TaskRun>(`/v1/tasks/${encodeURIComponent(taskRunId)}${suffix}`, headers);
+  }
+
+  listAgentRuns(query: URLSearchParams, headers: ForwardHeaders): Promise<{ agent_runs: AgentRunRecord[] }> {
+    return this.client.get<{ agent_runs: AgentRunRecord[] }>(`/v1/agent-runs?${query.toString()}`, headers);
+  }
+
+  getAgentRun(agentRunId: string, query: URLSearchParams, headers: ForwardHeaders): Promise<{ agent_run: AgentRunRecord }> {
+    return this.client.get<{ agent_run: AgentRunRecord }>(`/v1/agent-runs/${encodeURIComponent(agentRunId)}?${query.toString()}`, headers);
+  }
+
+  listAgentSteps(agentRunId: string, query: URLSearchParams, headers: ForwardHeaders): Promise<{ agent_steps: AgentStepRecord[] }> {
+    return this.client.get<{ agent_steps: AgentStepRecord[] }>(`/v1/agent-runs/${encodeURIComponent(agentRunId)}/steps?${query.toString()}`, headers);
   }
 }
 
