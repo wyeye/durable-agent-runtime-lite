@@ -13,8 +13,13 @@ export interface VersionedSpecTable {
   spec_json: Json;
   sha256: string;
   created_by: string | null;
+  updated_by: string | null;
+  published_by: string | null;
   created_at: Timestamp;
+  updated_at: Timestamp;
   published_at: Timestamp | null;
+  revision: number;
+  gray_policy_json: Json;
 }
 
 export type ToolManifestTable = VersionedSpecTable;
@@ -37,8 +42,14 @@ export interface FlowRouteConfigTable {
   route_spec_json: Json;
   priority: number;
   sha256: string;
+  created_by: string | null;
+  updated_by: string | null;
+  published_by: string | null;
   created_at: Timestamp;
   updated_at: Timestamp;
+  published_at: Timestamp | null;
+  revision: number;
+  gray_policy_json: Json;
 }
 
 export interface FlowRouteEmbeddingTable {
@@ -138,6 +149,22 @@ export interface IdempotencyRecordTable {
   updated_at: Timestamp;
 }
 
+export interface CapabilityReleaseTable {
+  release_id: string;
+  tenant_id: string;
+  resource_type: string;
+  resource_id: string;
+  resource_version: number;
+  action: string;
+  previous_version: number | null;
+  target_status: string;
+  operator_id: string;
+  validation_result: Json | null;
+  release_note: string | null;
+  metadata_json: Json;
+  created_at: Timestamp;
+}
+
 export interface Database {
   flow_definition: FlowDefinitionTable;
   flow_route_config: FlowRouteConfigTable;
@@ -150,6 +177,7 @@ export interface Database {
   audit_event: AuditEventTable;
   tool_call_log: ToolCallLogTable;
   idempotency_record: IdempotencyRecordTable;
+  capability_release: CapabilityReleaseTable;
 }
 
 export interface CreateDbOptions {
@@ -210,3 +238,4 @@ export class InMemoryRepository<TRecord extends { id: string }> implements Repos
 
 export { sql };
 export * from './repositories.js';
+export * from './registry.js';

@@ -1,10 +1,16 @@
 import type { TaskRun } from '@dar/contracts';
-import { TaskRunRepository, type CreateTaskRunInput, type UpdateTaskRunStatusInput } from '@dar/db';
+import {
+  TaskRunRepository,
+  type CreateTaskRunInput,
+  type ListTaskRunsOptions,
+  type UpdateTaskRunStatusInput,
+} from '@dar/db';
 import type { WorkflowStartResponse } from '@dar/contracts';
 
 export interface TaskRunStore {
   create(input: CreateTaskRunInput): Promise<TaskRun>;
   get(taskRunId: string): Promise<TaskRun | undefined>;
+  list(options?: ListTaskRunsOptions): Promise<TaskRun[]>;
   updateStatus(
     taskRunId: string,
     input: TaskRun['status'] | UpdateTaskRunStatusInput,
@@ -25,8 +31,24 @@ export class InMemoryTaskRunStore implements TaskRunStore {
     return this.taskRuns.get(taskRunId);
   }
 
-  list(): TaskRun[] {
-    return [...this.taskRuns.values()];
+  async list(options: ListTaskRunsOptions = {}): Promise<TaskRun[]> {
+    return [...this.taskRuns.values()]
+      .filter((taskRun) => {
+        if (options.tenantId && taskRun.tenant_id !== options.tenantId) {
+          return false;
+        }
+        if (options.status && taskRun.status !== options.status) {
+          return false;
+        }
+        if (options.flowId && taskRun.flow_id !== options.flowId) {
+          return false;
+        }
+        if (options.workflowId && taskRun.workflow_id !== options.workflowId) {
+          return false;
+        }
+        return true;
+      })
+      .slice(options.offset ?? 0, (options.offset ?? 0) + Math.min(Math.max(options.limit ?? 20, 1), 100));
   }
 
   async updateStatus(
@@ -73,6 +95,10 @@ export class DbTaskRunStore implements TaskRunStore {
 
   async get(taskRunId: string): Promise<TaskRun | undefined> {
     return this.repository.get(taskRunId);
+  }
+
+  async list(options: ListTaskRunsOptions = {}): Promise<TaskRun[]> {
+    return this.repository.list(options);
   }
 
   async updateStatus(

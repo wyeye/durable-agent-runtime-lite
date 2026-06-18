@@ -4,7 +4,7 @@ Durable Agent Runtime Lite 是一个四应用通用 Agent Runtime 骨架：
 
 | App | 责任 |
 |---|---|
-| `apps/control-plane` | 能力运营端，Flow / Tool / Agent / TaskRun / Audit 最小页面 |
+| `apps/control-plane` | 能力运营端，Registry 管理 API、运营查询 BFF、OpenAPI、Vite 静态资源托管 |
 | `apps/runtime-api` | 统一运行入口，规则 Router、TaskRun、Workflow Starter |
 | `apps/runtime-worker` | Temporal Worker 入口、ConfigDrivenWorkflow、GenericAgentWorkflow、Activity、Pi mock |
 | `apps/tool-gateway` | 工具唯一出口，Manifest、Schema 校验、幂等、审计、mock adapter |
@@ -120,6 +120,12 @@ runtime-worker:
 tool-gateway:
   TOOL_GATEWAY_REGISTRY_SOURCE=db
   DATABASE_URL=postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
+
+control-plane:
+  CONTROL_PLANE_AUTH_MODE=header
+  RUNTIME_API_URL=http://runtime-api:3000
+  TOOL_GATEWAY_URL=http://tool-gateway:3200
+  DATABASE_URL=postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
 ```
 
 ## MVP smoke path
@@ -149,8 +155,9 @@ DATABASE_URL=postgres://dar:dar_local_password@localhost:15432/durable_agent_run
 docker compose -f infra/docker-compose.yml up -d postgres valkey temporal temporal-ui
 corepack pnpm db:migrate
 corepack pnpm seed:examples
-docker compose -f infra/docker-compose.yml up -d tool-gateway runtime-worker runtime-api
+docker compose -f infra/docker-compose.yml up -d tool-gateway runtime-worker runtime-api control-plane
 corepack pnpm smoke:temporal-db-e2e
+corepack pnpm smoke:control-plane-api-e2e
 ```
 
 `smoke:temporal-db-e2e` 会检查：
@@ -166,6 +173,40 @@ corepack pnpm smoke:temporal-db-e2e
 9. DB `idempotency_record` 有对应工具调用幂等记录。
 
 成功时会输出 JSON，包含 `ok: true`、`task_run_id`、`workflow_id`、最终状态、human tasks、tool call logs、工具 audit events 和 idempotency records。失败时会输出 `workflow_id`、`task_run_id`、DB task_run、最近 audit event、human task、tool call log 和错误摘要；优先检查 task queue、`TOOL_GATEWAY_URL`、DB seed 是否存在、ToolManifest schema 是否与 FlowSpec step input 匹配。
+
+control-plane API smoke 会额外验证 header auth、RBAC、Registry draft/validate/publish/rollback、Flow + Route 联合发布、release history、runtime-api router preview 命中新发布 Route，以及 BFF Human Task / Audit / ToolCall 查询。
+
+## Control-plane API
+
+control-plane 生产容器是单个 Node/Fastify 进程，监听 `PORT=3100`，同时提供 API 和前端静态资源：
+
+```text
+GET /healthz
+GET /readyz
+GET /openapi.json
+GET /docs
+/api/v1/*
+```
+
+身份来自 `x-user-id`、`x-tenant-id`、`x-roles` 和可选 `x-request-id`。生产环境必须使用 `CONTROL_PLANE_AUTH_MODE=header`，不会默认启用管理员身份。
+
+主要管理 API：
+
+```text
+/api/v1/flows
+/api/v1/routes
+/api/v1/tools
+/api/v1/agents
+/api/v1/prompts
+/api/v1/releases
+/api/v1/releases/flow-route
+/api/v1/operations/*
+```
+
+完整说明见：
+
+- `docs/16_control_plane_api.md`
+- `docs/17_control_plane_security.md`
 
 ## L3 高风险工具治理
 
@@ -210,6 +251,7 @@ pnpm db:migrate
 pnpm seed:examples
 pnpm smoke:db-registry
 pnpm smoke:temporal-db-e2e
+pnpm smoke:control-plane-api-e2e
 ```
 
 ## DB-backed Source of Truth
@@ -242,3 +284,6 @@ db://flow/{flow_id}/versions/{version}
 3. `docs/01_engineering_standards.md`
 4. `docs/10_milestones_acceptance.md`
 5. `docs/13_docker_deployment.md`
+6. `docs/15_registry_lifecycle.md`
+7. `docs/16_control_plane_api.md`
+8. `docs/17_control_plane_security.md`

@@ -175,7 +175,9 @@ export function buildServer(toolService = new ToolService()): FastifyInstance {
     }
   });
 
-  server.get('/v1/audit-events', async () => success(await toolService.listAuditEvents()));
+  server.get('/v1/audit-events', async (request) => success(await toolService.listAuditEvents(request.query)));
+
+  server.get('/v1/tool-calls', async (request) => success(await toolService.listToolCalls(request.query)));
 
   server.get('/v1/tool-calls/:toolCallId', async (request, reply) => {
     const { toolCallId } = request.params as { toolCallId: string };

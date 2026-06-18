@@ -4,7 +4,20 @@ export const toolRiskLevelSchema = z.enum(['L0', 'L1', 'L2', 'L3', 'L4']);
 export const riskLevelSchema = toolRiskLevelSchema;
 export const toolInvokeModeSchema = z.enum(['preview', 'commit']);
 export const toolPolicyDecisionSchema = z.enum(['allow', 'deny', 'require_human_confirm']);
-export const specStatusSchema = z.enum(['draft', 'published', 'gray', 'disabled', 'archived']);
+export const specStatusSchema = z.enum([
+  'draft',
+  'validated',
+  'published',
+  'gray',
+  'deprecated',
+  'disabled',
+]);
+export const specStatusTransitionSchema = z.object({
+  from: specStatusSchema,
+  to: specStatusSchema,
+});
+export const registryResourceTypeSchema = z.enum(['flow', 'route', 'tool', 'agent', 'prompt']);
+export const capabilityReleaseActionSchema = z.enum(['publish', 'gray', 'rollback', 'disable', 'deprecate']);
 export const flowStepTypeSchema = z.enum(['activity', 'tool', 'agent', 'human_task', 'condition']);
 export const piResultStatusSchema = z.enum([
   'final',
@@ -16,11 +29,175 @@ export const piResultStatusSchema = z.enum([
 
 export const jsonObjectSchema = z.record(z.string(), z.unknown());
 
+export const grayPolicySchema = z.object({
+  tenant_allowlist: z.array(z.string()).default([]),
+  user_allowlist: z.array(z.string()).default([]),
+});
+
+export const registryValidationIssueSchema = z.object({
+  code: z.string().min(1),
+  message: z.string().min(1),
+  path: z.string().optional(),
+  severity: z.enum(['error', 'warning']),
+});
+
+export const registryDependencyNodeSchema = z.object({
+  resource_type: registryResourceTypeSchema,
+  resource_id: z.string().min(1),
+  version: z.union([z.number().int().positive(), z.string().min(1)]).optional(),
+  status: specStatusSchema.optional(),
+});
+
+export const registryDependencyEdgeSchema = z.object({
+  from: registryDependencyNodeSchema,
+  to: registryDependencyNodeSchema,
+  relation: z.string().min(1),
+});
+
+export const registryValidationResultSchema = z.object({
+  valid: z.boolean(),
+  can_publish: z.boolean(),
+  errors: z.array(registryValidationIssueSchema),
+  warnings: z.array(registryValidationIssueSchema),
+  dependency_graph: z.object({
+    nodes: z.array(registryDependencyNodeSchema),
+    edges: z.array(registryDependencyEdgeSchema),
+  }),
+});
+
 export const runtimeErrorSchema = z.object({
   code: z.string().min(1),
   message: z.string().min(1),
   details: jsonObjectSchema.optional(),
 });
+
+export const paginationRequestSchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  page_size: z.coerce.number().int().positive().max(100).default(20),
+  cursor: z.string().min(1).optional(),
+  sort_by: z.string().min(1).optional(),
+  sort_order: z.enum(['asc', 'desc']).default('desc'),
+});
+
+export const paginatedResponseSchema = <TItem extends z.ZodType>(itemSchema: TItem) =>
+  z.object({
+    items: z.array(itemSchema),
+    page: z.number().int().positive(),
+    page_size: z.number().int().positive(),
+    total: z.number().int().nonnegative().optional(),
+    next_cursor: z.string().optional(),
+  });
+
+export const registryListRequestSchema = paginationRequestSchema.extend({
+  status: specStatusSchema.optional(),
+  resource_id: z.string().min(1).optional(),
+  keyword: z.string().min(1).optional(),
+  created_by: z.string().min(1).optional(),
+  updated_by: z.string().min(1).optional(),
+});
+
+export const createDraftRequestSchema = z.object({
+  spec: z.unknown(),
+});
+
+export const updateDraftRequestSchema = z.object({
+  spec: z.unknown(),
+  expected_revision: z.number().int().positive(),
+});
+
+export const cloneVersionRequestSchema = z.object({
+  version: z.number().int().positive().optional(),
+});
+
+export const validateResourceRequestSchema = z.object({
+  include_warnings: z.boolean().default(true),
+});
+
+export const publishResourceRequestSchema = z.object({
+  release_note: z.string().min(1),
+  metadata_json: jsonObjectSchema.default({}),
+});
+
+export const grayResourceRequestSchema = publishResourceRequestSchema.extend({
+  tenant_allowlist: z.array(z.string().min(1)).default([]),
+  user_allowlist: z.array(z.string().min(1)).default([]),
+});
+
+export const rollbackResourceRequestSchema = z.object({
+  target_version: z.number().int().positive(),
+  release_note: z.string().min(1),
+  metadata_json: jsonObjectSchema.default({}),
+});
+
+export const deprecateResourceRequestSchema = publishResourceRequestSchema;
+export const disableResourceRequestSchema = publishResourceRequestSchema;
+
+export const releaseListRequestSchema = paginationRequestSchema.extend({
+  resource_type: registryResourceTypeSchema.optional(),
+  resource_id: z.string().min(1).optional(),
+  action: capabilityReleaseActionSchema.optional(),
+  operator_id: z.string().min(1).optional(),
+  start_time: z.string().datetime().optional(),
+  end_time: z.string().datetime().optional(),
+});
+
+export const operationAuditQuerySchema = paginationRequestSchema.extend({
+  tenant_id: z.string().min(1).optional(),
+  task_run_id: z.string().min(1).optional(),
+  tool_name: z.string().min(1).optional(),
+  event_type: z.string().min(1).optional(),
+  start_time: z.string().datetime().optional(),
+  end_time: z.string().datetime().optional(),
+});
+
+export const capabilityReleaseSchema = z.object({
+  release_id: z.string().min(1),
+  tenant_id: z.string().min(1).default('default'),
+  resource_type: registryResourceTypeSchema,
+  resource_id: z.string().min(1),
+  resource_version: z.number().int().positive(),
+  action: capabilityReleaseActionSchema,
+  previous_version: z.number().int().positive().optional(),
+  target_status: specStatusSchema,
+  operator_id: z.string().min(1),
+  validation_result: registryValidationResultSchema.optional(),
+  release_note: z.string().optional(),
+  metadata_json: jsonObjectSchema.default({}),
+  created_at: z.string().datetime().optional(),
+});
+
+const allowedSpecStatusTransitions = {
+  draft: ['validated', 'disabled'],
+  validated: ['draft', 'published', 'disabled'],
+  published: ['gray', 'deprecated', 'disabled'],
+  gray: ['published', 'deprecated', 'disabled'],
+  deprecated: [],
+  disabled: [],
+} as const satisfies Record<z.infer<typeof specStatusSchema>, readonly z.infer<typeof specStatusSchema>[]>;
+
+export function validateSpecStatusTransition(input: z.infer<typeof specStatusTransitionSchema>):
+  | { ok: true }
+  | { ok: false; error: z.infer<typeof runtimeErrorSchema> } {
+  const transition = specStatusTransitionSchema.parse(input);
+  const allowedTargets = allowedSpecStatusTransitions[transition.from] as readonly z.infer<typeof specStatusSchema>[];
+
+  if (allowedTargets.includes(transition.to)) {
+    return { ok: true };
+  }
+
+  return {
+    ok: false,
+    error: {
+      code: 'INVALID_SPEC_STATUS_TRANSITION',
+      message: `Cannot transition registry resource from ${transition.from} to ${transition.to}`,
+      details: {
+        from: transition.from,
+        to: transition.to,
+        allowed_targets: [...allowedTargets],
+      },
+    },
+  };
+}
 
 export const tenantContextSchema = z.object({
   tenant_id: z.string().min(1),
@@ -72,6 +249,8 @@ export const standardResponseSchema = z.union([
   standardSuccessResponseSchema,
   standardErrorResponseSchema,
 ]);
+
+export const standardApiResponseSchema = standardResponseSchema;
 
 export const flowRuntimeSchema = z.object({
   workflow_type: z.enum(['ConfigDrivenWorkflow', 'GenericAgentWorkflow']),
@@ -370,6 +549,8 @@ export const humanTaskListRequestSchema = z.object({
   user_id: z.string().min(1),
   task_run_id: z.string().min(1).optional(),
   status: humanTaskStatusSchema.optional(),
+  page: z.coerce.number().int().positive().default(1),
+  page_size: z.coerce.number().int().positive().max(100).default(20),
 });
 
 export const humanTaskGetRequestSchema = z.object({
@@ -452,6 +633,13 @@ export const toolCallLogSchema = z.object({
   updated_at: z.string().datetime().optional(),
 });
 
+export const toolCallQuerySchema = paginationRequestSchema.extend({
+  tenant_id: z.string().min(1).optional(),
+  task_run_id: z.string().min(1).optional(),
+  tool_name: z.string().min(1).optional(),
+  status: toolCallLogStatusSchema.optional(),
+});
+
 export const taskInputSchema = z
   .object({
     text: z.string().min(1).optional(),
@@ -509,6 +697,43 @@ export const runTaskResponseSchema = z.object({
   agent_id: z.string().min(1).optional(),
 });
 
+export const taskRunQuerySchema = paginationRequestSchema.extend({
+  tenant_id: z.string().min(1).optional(),
+  status: taskRunStatusSchema.optional(),
+  flow_id: z.string().min(1).optional(),
+  workflow_id: z.string().min(1).optional(),
+});
+
+export const humanTaskQuerySchema = paginationRequestSchema.extend({
+  tenant_id: z.string().min(1).optional(),
+  status: humanTaskStatusSchema.optional(),
+  task_run_id: z.string().min(1).optional(),
+});
+
+export const validateResourceResponseSchema = z.object({
+  validation: registryValidationResultSchema,
+});
+
+export const capabilityReleaseResponseSchema = z.object({
+  release: capabilityReleaseSchema,
+});
+
+export const dashboardSummaryResponseSchema = z.object({
+  registry_counts: z.object({
+    flows_published: z.number().int().nonnegative(),
+    routes_published: z.number().int().nonnegative(),
+    tools_published: z.number().int().nonnegative(),
+    agents_published: z.number().int().nonnegative(),
+    prompts_published: z.number().int().nonnegative(),
+  }),
+  pending_human_task_count: z.number().int().nonnegative(),
+  running_task_count: z.number().int().nonnegative(),
+  waiting_human_task_count: z.number().int().nonnegative(),
+  failed_task_count: z.number().int().nonnegative(),
+  recent_releases: z.array(capabilityReleaseSchema),
+  recent_failed_tasks: z.array(taskRunSchema),
+});
+
 export const agentRunRequestSchema = z.object({
   tenant_id: z.string().min(1),
   user_id: z.string().min(1),
@@ -541,6 +766,42 @@ export type ToolRiskLevel = z.infer<typeof toolRiskLevelSchema>;
 export type RiskLevel = ToolRiskLevel;
 export type ToolInvokeMode = z.infer<typeof toolInvokeModeSchema>;
 export type ToolPolicyDecision = z.infer<typeof toolPolicyDecisionSchema>;
+export type SpecStatus = z.infer<typeof specStatusSchema>;
+export type SpecStatusTransition = z.infer<typeof specStatusTransitionSchema>;
+export type RegistryResourceType = z.infer<typeof registryResourceTypeSchema>;
+export type CapabilityReleaseAction = z.infer<typeof capabilityReleaseActionSchema>;
+export type GrayPolicy = z.infer<typeof grayPolicySchema>;
+export type RegistryValidationIssue = z.infer<typeof registryValidationIssueSchema>;
+export type RegistryDependencyNode = z.infer<typeof registryDependencyNodeSchema>;
+export type RegistryDependencyEdge = z.infer<typeof registryDependencyEdgeSchema>;
+export type RegistryValidationResult = z.infer<typeof registryValidationResultSchema>;
+export type CapabilityRelease = z.infer<typeof capabilityReleaseSchema>;
+export type PaginationRequest = z.infer<typeof paginationRequestSchema>;
+export type PaginatedResponse<TItem> = {
+  items: TItem[];
+  page: number;
+  page_size: number;
+  total?: number;
+  next_cursor?: string;
+};
+export type RegistryListRequest = z.infer<typeof registryListRequestSchema>;
+export type CreateDraftRequest = z.infer<typeof createDraftRequestSchema>;
+export type UpdateDraftRequest = z.infer<typeof updateDraftRequestSchema>;
+export type CloneVersionRequest = z.infer<typeof cloneVersionRequestSchema>;
+export type ValidateResourceRequest = z.infer<typeof validateResourceRequestSchema>;
+export type ValidateResourceResponse = z.infer<typeof validateResourceResponseSchema>;
+export type PublishResourceRequest = z.infer<typeof publishResourceRequestSchema>;
+export type GrayResourceRequest = z.infer<typeof grayResourceRequestSchema>;
+export type RollbackResourceRequest = z.infer<typeof rollbackResourceRequestSchema>;
+export type DeprecateResourceRequest = z.infer<typeof deprecateResourceRequestSchema>;
+export type DisableResourceRequest = z.infer<typeof disableResourceRequestSchema>;
+export type CapabilityReleaseResponse = z.infer<typeof capabilityReleaseResponseSchema>;
+export type ReleaseListRequest = z.infer<typeof releaseListRequestSchema>;
+export type DashboardSummaryResponse = z.infer<typeof dashboardSummaryResponseSchema>;
+export type OperationAuditQuery = z.infer<typeof operationAuditQuerySchema>;
+export type ToolCallQuery = z.infer<typeof toolCallQuerySchema>;
+export type TaskRunQuery = z.infer<typeof taskRunQuerySchema>;
+export type HumanTaskQuery = z.infer<typeof humanTaskQuerySchema>;
 export type RuntimeError = z.infer<typeof runtimeErrorSchema>;
 export type TenantContext = z.infer<typeof tenantContextSchema>;
 export type UserContext = z.infer<typeof userContextSchema>;
@@ -549,6 +810,7 @@ export type RequestContext = z.infer<typeof requestContextSchema>;
 export type StandardSuccessResponse<TData = unknown> = Omit<z.infer<typeof standardSuccessResponseSchema>, 'data'> & { data: TData };
 export type StandardErrorResponse = z.infer<typeof standardErrorResponseSchema>;
 export type StandardResponse<TData = unknown> = StandardSuccessResponse<TData> | StandardErrorResponse;
+export type StandardApiResponse<TData = unknown> = StandardResponse<TData>;
 export type FlowSpec = z.infer<typeof flowSpecSchema>;
 export type FlowStep = z.infer<typeof flowStepSchema>;
 export type RouteSpec = z.infer<typeof routeSpecSchema>;

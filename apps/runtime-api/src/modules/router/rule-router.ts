@@ -68,7 +68,7 @@ function scoreRoute(route: RouteSpec, input: TaskInput): number {
 export function routeByRules(input: RuleRouterInput, routes: RouteSpec[]): RuleRouterResult {
   const roles = input.roles ?? [];
   const candidates = routes
-    .filter((route) => route.status !== 'disabled')
+    .filter((route) => route.status === undefined || route.status === 'published' || route.status === 'gray')
     .filter((route) => isChannelAllowed(route, input.channel))
     .filter((route) => isRoleAllowed(route, roles))
     .map((route) => ({

@@ -35,7 +35,7 @@ docker compose -f infra/docker-compose.yml up --build
 
 | Service | Container port | Host port |
 |---|---:|---:|
-| control-plane | 8080 | 3100 |
+| control-plane | 3100 | 3100 |
 | runtime-api | 3000 | 3000 |
 | tool-gateway | 3200 | 3200 |
 | runtime-worker | 3300 | 3300 |
@@ -56,6 +56,7 @@ corepack pnpm db:migrate
 corepack pnpm seed:examples
 docker compose -f infra/docker-compose.yml up -d tool-gateway runtime-worker runtime-api control-plane
 corepack pnpm smoke:temporal-db-e2e
+corepack pnpm smoke:control-plane-api-e2e
 ```
 
 Host-side DB initialization can also use:
@@ -72,6 +73,9 @@ RUNTIME_API_ROUTE_SOURCE=db
 RUNTIME_API_WORKFLOW_STARTER=temporal
 RUNTIME_WORKER_MODE=temporal
 TOOL_GATEWAY_REGISTRY_SOURCE=db
+TOOL_GATEWAY_URL=http://tool-gateway:3200
+CONTROL_PLANE_AUTH_MODE=header
+RUNTIME_API_URL=http://runtime-api:3000
 TOOL_GATEWAY_URL=http://tool-gateway:3200
 ```
 
@@ -96,6 +100,59 @@ Risk policy summary:
 - L2 can preview; commit behavior depends on policy.
 - L3 cannot directly invoke side effects; preview writes `tool_call_log=pending_confirmation`, approve/reject writes `human_task` and audit, commit writes `tool_call_log=committed` and `idempotency_record`.
 - L4 is denied by default and audited.
+
+## Control-plane single container
+
+`apps/control-plane/Dockerfile` now builds both:
+
+- Fastify server output under `apps/control-plane/dist/server`
+- Vite frontend output under `apps/control-plane/dist/public`
+
+The final image uses a Node.js runtime, not Nginx. Fastify serves:
+
+- `/healthz`
+- `/readyz`
+- `/api/*`
+- `/openapi.json`
+- optional `/docs`
+- SPA fallback to `index.html` for non-API frontend routes
+
+Required runtime environment:
+
+```text
+NODE_ENV=production
+HOST=0.0.0.0
+PORT=3100
+DATABASE_URL=postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
+RUNTIME_API_URL=http://runtime-api:3000
+TOOL_GATEWAY_URL=http://tool-gateway:3200
+CONTROL_PLANE_AUTH_MODE=header
+CONTROL_PLANE_SWAGGER_ENABLED=true
+```
+
+`/api/*`, `/healthz`, `/readyz`, `/openapi.json`, and `/docs` are excluded from SPA fallback.
+
+## Control-plane API smoke
+
+After the integrated stack is running:
+
+```bash
+corepack pnpm smoke:control-plane-api-e2e
+```
+
+The smoke checks:
+
+- healthz and readyz;
+- missing identity returns 401;
+- auditor write returns 403;
+- capability operator creates Prompt, Tool, Agent, Flow, and Route drafts;
+- validation and Flow + Route joint publish;
+- release history;
+- runtime-api router preview sees the newly published Route;
+- v2 optimistic locking conflict;
+- published v1 immutable update conflict;
+- v2 publish and rollback to v1;
+- BFF Human Task, Audit, and ToolCall query endpoints.
 
 If smoke fails, inspect:
 

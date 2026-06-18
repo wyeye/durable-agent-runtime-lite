@@ -60,12 +60,12 @@ export class InMemoryToolManifestRegistry implements ToolManifestRegistry {
   }
 
   async list(_tenantId?: string): Promise<ToolManifest[]> {
-    return [...this.manifests.values()].filter((manifest) => manifest.status !== 'disabled');
+    return [...this.manifests.values()].filter((manifest) => manifest.status === undefined || manifest.status === 'published' || manifest.status === 'gray');
   }
 
   async get(toolName: string, _tenantId?: string): Promise<ToolManifest | undefined> {
     const manifest = this.manifests.get(toolName);
-    return manifest?.status === 'disabled' ? undefined : manifest;
+    return manifest?.status === undefined || manifest.status === 'published' || manifest.status === 'gray' ? manifest : undefined;
   }
 }
 
@@ -82,8 +82,8 @@ export class DbToolManifestRegistry implements ToolManifestRegistry {
   }
 
   async get(toolName: string, tenantId = 'default'): Promise<ToolManifest | undefined> {
-    const manifest = await this.repository.getPublished(toolName, { tenantId });
-    return manifest ? toolManifestSchema.parse(manifest) : undefined;
+    const selected = await this.repository.selectVersionForRequest(toolName, { tenantId });
+    return selected ? toolManifestSchema.parse(selected.spec) : undefined;
   }
 }
 

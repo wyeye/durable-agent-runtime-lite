@@ -14,11 +14,11 @@ import {
   type HumanTaskListResponse,
   type ToolCallLog,
 } from '@dar/contracts';
-import type { HumanTaskDecisionInput, ToolCallLogUpdateInput } from '@dar/db';
+import type { HumanTaskDecisionInput, ListHumanTasksOptions, ToolCallLogUpdateInput } from '@dar/db';
 
 export interface HumanTaskStore {
   get(humanTaskId: string): Promise<HumanTask | undefined>;
-  list(options?: { tenantId?: string; taskRunId?: string; status?: HumanTask['status'] }): Promise<HumanTask[]>;
+  list(options?: ListHumanTasksOptions): Promise<HumanTask[]>;
   approve(humanTaskId: string, input: HumanTaskDecisionInput): Promise<HumanTask | undefined>;
   reject(humanTaskId: string, input: HumanTaskDecisionInput): Promise<HumanTask | undefined>;
 }
@@ -54,6 +54,8 @@ export class HumanTaskService {
       tenantId: parsed.tenant_id,
       ...(parsed.task_run_id ? { taskRunId: parsed.task_run_id } : {}),
       ...(parsed.status ? { status: parsed.status } : {}),
+      limit: parsed.page_size,
+      offset: (parsed.page - 1) * parsed.page_size,
     });
 
     return humanTaskListResponseSchema.parse({ human_tasks: humanTasks });
@@ -140,19 +142,21 @@ export class InMemoryHumanTaskStore implements HumanTaskStore {
     return this.tasks.get(humanTaskId);
   }
 
-  async list(options: { tenantId?: string; taskRunId?: string; status?: HumanTask['status'] } = {}): Promise<HumanTask[]> {
-    return [...this.tasks.values()].filter((task) => {
-      if (options.tenantId && task.tenant_id !== options.tenantId) {
-        return false;
-      }
-      if (options.taskRunId && task.task_run_id !== options.taskRunId) {
-        return false;
-      }
-      if (options.status && task.status !== options.status) {
-        return false;
-      }
-      return true;
-    });
+  async list(options: ListHumanTasksOptions = {}): Promise<HumanTask[]> {
+    return [...this.tasks.values()]
+      .filter((task) => {
+        if (options.tenantId && task.tenant_id !== options.tenantId) {
+          return false;
+        }
+        if (options.taskRunId && task.task_run_id !== options.taskRunId) {
+          return false;
+        }
+        if (options.status && task.status !== options.status) {
+          return false;
+        }
+        return true;
+      })
+      .slice(options.offset ?? 0, (options.offset ?? 0) + Math.min(Math.max(options.limit ?? 20, 1), 100));
   }
 
   async approve(humanTaskId: string, input: HumanTaskDecisionInput): Promise<HumanTask | undefined> {

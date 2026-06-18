@@ -137,12 +137,24 @@ services:
     image: durable-agent-runtime/control-plane:local
     container_name: dar-control-plane
     depends_on:
+      postgres:
+        condition: service_healthy
       runtime-api:
         condition: service_started
       tool-gateway:
         condition: service_started
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3100
+      DATABASE_URL: postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
+      RUNTIME_API_URL: http://runtime-api:3000
+      TOOL_GATEWAY_URL: http://tool-gateway:3200
+      CONTROL_PLANE_AUTH_MODE: header
+      CONTROL_PLANE_SWAGGER_ENABLED: "true"
+      LOG_LEVEL: info
     ports:
-      - "${CONTROL_PLANE_HOST_PORT:-3100}:8080"
+      - "${CONTROL_PLANE_HOST_PORT:-3100}:3100"
 
 volumes:
   postgres-data:

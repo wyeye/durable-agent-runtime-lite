@@ -7,20 +7,25 @@ WORKDIR /repo
 RUN corepack enable
 
 FROM base AS deps
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
 COPY apps/control-plane/package.json apps/control-plane/package.json
 COPY packages ./packages
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS builder
 COPY . .
-RUN pnpm --filter @dar/control-plane... --workspace-concurrency=1 build && test -f apps/control-plane/dist/index.html
+RUN pnpm --filter @dar/control-plane... --workspace-concurrency=1 build \
+  && test -f apps/control-plane/dist/server/server/bootstrap.js \
+  && test -f apps/control-plane/dist/public/index.html
 
-# Serve static Vite build through unprivileged Nginx.
-# The internal container port is 8080. Map it to host port 3100 in compose.
-FROM nginxinc/nginx-unprivileged:1.27-alpine AS runner
-COPY --chown=nginx:nginx apps/control-plane/docker/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=builder --chown=nginx:nginx /repo/apps/control-plane/dist /usr/share/nginx/html
-EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3   CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1
-CMD ["nginx", "-g", "daemon off;"]
+FROM node:24-bookworm-slim AS runner
+ENV NODE_ENV=production
+ENV HOST=0.0.0.0
+ENV PORT=3100
+WORKDIR /repo/apps/control-plane
+RUN groupadd --system app && useradd --system --gid app app
+COPY --from=builder --chown=app:app /repo /repo
+USER app
+EXPOSE 3100
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || '3100') + '/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+CMD ["node", "dist/server/server/bootstrap.js"]

@@ -12,14 +12,17 @@ import type {
   ToolManifest,
 } from '@dar/contracts';
 import {
+  type CapabilityRelease,
   agentSpecSchema,
   auditEventSchema,
   flowSpecSchema,
+  grayPolicySchema,
   humanTaskCreateRequestSchema,
   humanTaskSchema,
   idempotencyRecordSchema,
   promptDefinitionSchema,
   routeSpecSchema,
+  type SpecStatus,
   taskRunSchema,
   taskRunStatusSchema,
   toolCallLogSchema,
@@ -28,7 +31,7 @@ import {
   type RouteResult,
   type WorkflowStartResponse,
 } from '@dar/contracts';
-import type { Insertable, Kysely, Selectable, Updateable } from 'kysely';
+import { sql, type Insertable, type Kysely, type Selectable, type Updateable } from 'kysely';
 import type {
   AgentSpecTable,
   AuditEventTable,
@@ -42,6 +45,16 @@ import type {
   ToolCallLogTable,
   ToolManifestTable,
 } from './index.js';
+import {
+  type RegistryCloneOptions,
+  type RegistryListOptions,
+  type RegistryResourceRecord,
+  type RegistryRollbackOptions,
+  type RegistryStatusOptions,
+  type RegistryUpdateDraftInput,
+  type RegistryWriteOptions,
+  VersionedRegistryRepository,
+} from './registry.js';
 
 export const executableSpecStatuses = ['published', 'gray'] as const;
 export type ExecutableSpecStatus = (typeof executableSpecStatuses)[number];
@@ -51,7 +64,7 @@ export interface RepositoryTenantOptions {
 }
 
 export interface UpsertSpecOptions extends RepositoryTenantOptions {
-  status?: ExecutableSpecStatus | 'draft' | 'disabled' | 'archived';
+  status?: ExecutableSpecStatus | 'draft' | 'validated' | 'deprecated' | 'disabled';
   createdBy?: string;
 }
 
@@ -66,6 +79,14 @@ export interface UpdateTaskRunStatusInput {
   status: TaskRun['status'];
   errorCode?: string;
   errorMessage?: string;
+}
+
+export interface ListTaskRunsOptions extends RepositoryTenantOptions {
+  status?: TaskRun['status'];
+  flowId?: string;
+  workflowId?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface IdempotencyReplayInput {
@@ -121,6 +142,33 @@ export interface ToolCallLogUpdateInput {
   result_json?: unknown;
 }
 
+export interface ListHumanTasksOptions extends RepositoryTenantOptions {
+  taskRunId?: string;
+  status?: HumanTask['status'];
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListAuditEventsOptions extends RepositoryTenantOptions {
+  targetType?: string;
+  targetId?: string;
+  taskRunId?: string;
+  toolName?: string;
+  action?: string;
+  startTime?: string;
+  endTime?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListToolCallLogsOptions extends RepositoryTenantOptions {
+  taskRunId?: string;
+  toolName?: string;
+  status?: ToolCallLog['status'];
+  limit?: number;
+  offset?: number;
+}
+
 export function hashJson(value: unknown): string {
   return createHash('sha256').update(stableStringify(value)).digest('hex');
 }
@@ -146,7 +194,85 @@ export function parseDbFlowSnapshotRef(ref: string): { flowId: string; version: 
 }
 
 export class FlowDefinitionRepository {
-  constructor(private readonly db: Kysely<Database>) {}
+  private readonly registry: VersionedRegistryRepository<FlowSpec>;
+
+  constructor(private readonly db: Kysely<Database>) {
+    this.registry = new VersionedRegistryRepository(db, {
+      resourceType: 'flow',
+      tableName: 'flow_definition',
+      idColumn: 'flow_id',
+      versionColumn: 'version',
+      jsonColumn: 'spec_json',
+      schema: flowSpecSchema,
+      getSpecId: (spec) => spec.flow_id,
+      getSpecVersion: (spec) => spec.version,
+      withIdentity: (spec, resourceId, version, status) => ({ ...spec, flow_id: resourceId, version, status }),
+    });
+  }
+
+  list(options: RegistryListOptions = {}): Promise<RegistryResourceRecord<FlowSpec>[]> {
+    return this.registry.list(options);
+  }
+
+  getByIdAndVersion(flowId: string, version: number, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<FlowSpec> | undefined> {
+    return this.registry.getByIdAndVersion(flowId, version, options);
+  }
+
+  getLatestVersion(flowId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<FlowSpec> | undefined> {
+    return this.registry.getLatestVersion(flowId, options);
+  }
+
+  getLatestPublishedVersion(flowId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<FlowSpec> | undefined> {
+    return this.registry.getLatestPublishedVersion(flowId, options);
+  }
+
+  listVersions(flowId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<FlowSpec>[]> {
+    return this.registry.listVersions(flowId, options);
+  }
+
+  createDraft(flowSpec: FlowSpec, options: RegistryWriteOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+    return this.registry.createDraft(flowSpec, options);
+  }
+
+  updateDraft(flowId: string, version: number, input: RegistryUpdateDraftInput<FlowSpec>): Promise<RegistryResourceRecord<FlowSpec>> {
+    return this.registry.updateDraft(flowId, version, input);
+  }
+
+  cloneVersion(flowId: string, version: number, options: RegistryCloneOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+    return this.registry.cloneVersion(flowId, version, options);
+  }
+
+  markValidated(flowId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+    return this.registry.markValidated(flowId, version, options);
+  }
+
+  publish(flowId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+    return this.registry.publish(flowId, version, options);
+  }
+
+  setGray(flowId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+    return this.registry.setGray(flowId, version, options);
+  }
+
+  deprecate(flowId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+    return this.registry.deprecate(flowId, version, options);
+  }
+
+  disable(flowId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+    return this.registry.disable(flowId, version, options);
+  }
+
+  rollback(flowId: string, targetVersion: number, options: RegistryRollbackOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+    return this.registry.rollback(flowId, targetVersion, options);
+  }
+
+  listReleaseHistory(flowId: string, options: RegistryListOptions = {}): Promise<CapabilityRelease[]> {
+    return this.registry.listReleaseHistory(flowId, options);
+  }
+
+  selectVersionForRequest(flowId: string, input: { tenantId?: string; userId?: string }): Promise<RegistryResourceRecord<FlowSpec> | undefined> {
+    return this.registry.selectVersionForRequest(flowId, input);
+  }
 
   async listPublished(options: RepositoryTenantOptions = {}): Promise<FlowSpec[]> {
     const rows = await this.db
@@ -175,8 +301,8 @@ export class FlowDefinitionRepository {
   }
 
   async upsert(flowSpec: FlowSpec, options: UpsertSpecOptions = {}): Promise<FlowSpec> {
-    const parsed = flowSpecSchema.parse({ ...flowSpec, status: options.status ?? flowSpec.status ?? 'published' });
-    const status = options.status ?? parsed.status ?? 'published';
+    const status = normalizeWriteStatus(options.status ?? flowSpec.status ?? 'published');
+    const parsed = flowSpecSchema.parse({ ...flowSpec, status });
     const row: Insertable<FlowDefinitionTable> = {
       tenant_id: tenant(options),
       flow_id: parsed.flow_id,
@@ -185,7 +311,12 @@ export class FlowDefinitionRepository {
       spec_json: parsed,
       sha256: parsed.sha256 ?? hashJson(parsed),
       created_by: options.createdBy ?? null,
+      updated_by: options.createdBy ?? null,
+      published_by: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? options.createdBy ?? null : null,
+      updated_at: new Date(),
       published_at: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? new Date() : null,
+      revision: 1,
+      gray_policy_json: grayPolicySchema.parse({}),
     };
 
     const saved = await this.db
@@ -197,7 +328,11 @@ export class FlowDefinitionRepository {
           spec_json: row.spec_json,
           sha256: row.sha256,
           created_by: row.created_by,
+          updated_by: row.updated_by,
+          published_by: row.published_by,
+          updated_at: row.updated_at,
           published_at: row.published_at,
+          gray_policy_json: row.gray_policy_json,
         }),
       )
       .returning(['spec_json'])
@@ -208,7 +343,98 @@ export class FlowDefinitionRepository {
 }
 
 export class RouteConfigRepository {
-  constructor(private readonly db: Kysely<Database>) {}
+  private readonly registry: VersionedRegistryRepository<RouteSpec>;
+
+  constructor(private readonly db: Kysely<Database>) {
+    this.registry = new VersionedRegistryRepository(db, {
+      resourceType: 'route',
+      tableName: 'flow_route_config',
+      idColumn: 'route_id',
+      versionColumn: 'flow_version',
+      jsonColumn: 'route_spec_json',
+      schema: routeSpecSchema,
+      getSpecId: (spec) => spec.route_id ?? `${spec.flow_id}@${spec.version}`,
+      getSpecVersion: (spec) => spec.version,
+      withIdentity: (spec, resourceId, version, status) => ({
+        ...spec,
+        route_id: resourceId,
+        version,
+        status,
+      }),
+      insertExtraColumns: (spec) => ({
+        flow_id: spec.flow_id,
+        priority: spec.route.priority,
+      }),
+      updateExtraColumns: (spec) => ({
+        flow_id: spec.flow_id,
+        priority: spec.route.priority,
+      }),
+    });
+  }
+
+  list(options: RegistryListOptions = {}): Promise<RegistryResourceRecord<RouteSpec>[]> {
+    return this.registry.list(options);
+  }
+
+  getByIdAndVersion(routeId: string, version: number, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<RouteSpec> | undefined> {
+    return this.registry.getByIdAndVersion(routeId, version, options);
+  }
+
+  getLatestVersion(routeId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<RouteSpec> | undefined> {
+    return this.registry.getLatestVersion(routeId, options);
+  }
+
+  getLatestPublishedVersion(routeId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<RouteSpec> | undefined> {
+    return this.registry.getLatestPublishedVersion(routeId, options);
+  }
+
+  listVersions(routeId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<RouteSpec>[]> {
+    return this.registry.listVersions(routeId, options);
+  }
+
+  createDraft(routeSpec: RouteSpec, options: RegistryWriteOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+    return this.registry.createDraft(routeSpec, options);
+  }
+
+  updateDraft(routeId: string, version: number, input: RegistryUpdateDraftInput<RouteSpec>): Promise<RegistryResourceRecord<RouteSpec>> {
+    return this.registry.updateDraft(routeId, version, input);
+  }
+
+  cloneVersion(routeId: string, version: number, options: RegistryCloneOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+    return this.registry.cloneVersion(routeId, version, options);
+  }
+
+  markValidated(routeId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+    return this.registry.markValidated(routeId, version, options);
+  }
+
+  publish(routeId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+    return this.registry.publish(routeId, version, options);
+  }
+
+  setGray(routeId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+    return this.registry.setGray(routeId, version, options);
+  }
+
+  deprecate(routeId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+    return this.registry.deprecate(routeId, version, options);
+  }
+
+  disable(routeId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+    return this.registry.disable(routeId, version, options);
+  }
+
+  rollback(routeId: string, targetVersion: number, options: RegistryRollbackOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+    return this.registry.rollback(routeId, targetVersion, options);
+  }
+
+  listReleaseHistory(routeId: string, options: RegistryListOptions = {}): Promise<CapabilityRelease[]> {
+    return this.registry.listReleaseHistory(routeId, options);
+  }
+
+  selectVersionForRequest(routeId: string, input: { tenantId?: string; userId?: string }): Promise<RegistryResourceRecord<RouteSpec> | undefined> {
+    return this.registry.selectVersionForRequest(routeId, input);
+  }
 
   async listPublished(options: RepositoryTenantOptions = {}): Promise<RouteSpec[]> {
     const rows = await this.db
@@ -237,8 +463,8 @@ export class RouteConfigRepository {
   }
 
   async upsert(routeSpec: RouteSpec, options: UpsertSpecOptions = {}): Promise<RouteSpec> {
-    const parsed = routeSpecSchema.parse({ ...routeSpec, status: options.status ?? routeSpec.status ?? 'published' });
-    const status = options.status ?? parsed.status ?? 'published';
+    const status = normalizeWriteStatus(options.status ?? routeSpec.status ?? 'published');
+    const parsed = routeSpecSchema.parse({ ...routeSpec, status });
     const routeId = parsed.route_id ?? `${parsed.flow_id}@${parsed.version}`;
     const row: Insertable<FlowRouteConfigTable> = {
       tenant_id: tenant(options),
@@ -249,6 +475,12 @@ export class RouteConfigRepository {
       route_spec_json: { ...parsed, route_id: routeId },
       priority: parsed.route.priority,
       sha256: parsed.sha256 ?? hashJson(parsed),
+      created_by: options.createdBy ?? null,
+      updated_by: options.createdBy ?? null,
+      published_by: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? options.createdBy ?? null : null,
+      published_at: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? new Date() : null,
+      revision: 1,
+      gray_policy_json: grayPolicySchema.parse({}),
     };
 
     const saved = await this.db
@@ -261,7 +493,11 @@ export class RouteConfigRepository {
           route_spec_json: row.route_spec_json,
           priority: row.priority,
           sha256: row.sha256,
+          updated_by: row.updated_by,
+          published_by: row.published_by,
           updated_at: new Date(),
+          published_at: row.published_at,
+          gray_policy_json: row.gray_policy_json,
         }),
       )
       .returning(['route_spec_json'])
@@ -272,7 +508,90 @@ export class RouteConfigRepository {
 }
 
 export class ToolManifestRepository {
-  constructor(private readonly db: Kysely<Database>) {}
+  private readonly registry: VersionedRegistryRepository<ToolManifest>;
+
+  constructor(private readonly db: Kysely<Database>) {
+    this.registry = new VersionedRegistryRepository(db, {
+      resourceType: 'tool',
+      tableName: 'tool_manifest',
+      idColumn: 'spec_id',
+      versionColumn: 'version',
+      jsonColumn: 'spec_json',
+      schema: toolManifestSchema,
+      getSpecId: (spec) => spec.tool_name,
+      getSpecVersion: (spec) => manifestSpecVersion(spec),
+      withIdentity: (spec, resourceId, version, status) => ({
+        ...spec,
+        tool_name: resourceId,
+        version: `${version}.0.0`,
+        status,
+      }),
+    });
+  }
+
+  list(options: RegistryListOptions = {}): Promise<RegistryResourceRecord<ToolManifest>[]> {
+    return this.registry.list(options);
+  }
+
+  getByIdAndVersion(toolName: string, version: number, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<ToolManifest> | undefined> {
+    return this.registry.getByIdAndVersion(toolName, version, options);
+  }
+
+  getLatestVersion(toolName: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<ToolManifest> | undefined> {
+    return this.registry.getLatestVersion(toolName, options);
+  }
+
+  getLatestPublishedVersion(toolName: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<ToolManifest> | undefined> {
+    return this.registry.getLatestPublishedVersion(toolName, options);
+  }
+
+  listVersions(toolName: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<ToolManifest>[]> {
+    return this.registry.listVersions(toolName, options);
+  }
+
+  createDraft(manifest: ToolManifest, options: RegistryWriteOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+    return this.registry.createDraft(manifest, options);
+  }
+
+  updateDraft(toolName: string, version: number, input: RegistryUpdateDraftInput<ToolManifest>): Promise<RegistryResourceRecord<ToolManifest>> {
+    return this.registry.updateDraft(toolName, version, input);
+  }
+
+  cloneVersion(toolName: string, version: number, options: RegistryCloneOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+    return this.registry.cloneVersion(toolName, version, options);
+  }
+
+  markValidated(toolName: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+    return this.registry.markValidated(toolName, version, options);
+  }
+
+  publish(toolName: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+    return this.registry.publish(toolName, version, options);
+  }
+
+  setGray(toolName: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+    return this.registry.setGray(toolName, version, options);
+  }
+
+  deprecate(toolName: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+    return this.registry.deprecate(toolName, version, options);
+  }
+
+  disable(toolName: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+    return this.registry.disable(toolName, version, options);
+  }
+
+  rollback(toolName: string, targetVersion: number, options: RegistryRollbackOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+    return this.registry.rollback(toolName, targetVersion, options);
+  }
+
+  listReleaseHistory(toolName: string, options: RegistryListOptions = {}): Promise<CapabilityRelease[]> {
+    return this.registry.listReleaseHistory(toolName, options);
+  }
+
+  selectVersionForRequest(toolName: string, input: { tenantId?: string; userId?: string }): Promise<RegistryResourceRecord<ToolManifest> | undefined> {
+    return this.registry.selectVersionForRequest(toolName, input);
+  }
 
   async listPublished(options: RepositoryTenantOptions = {}): Promise<ToolManifest[]> {
     const rows = await this.db
@@ -301,8 +620,8 @@ export class ToolManifestRepository {
   }
 
   async upsert(manifest: ToolManifest, options: UpsertSpecOptions = {}): Promise<ToolManifest> {
-    const parsed = toolManifestSchema.parse({ ...manifest, status: options.status ?? manifest.status ?? 'published' });
-    const status = options.status ?? parsed.status ?? 'published';
+    const status = normalizeWriteStatus(options.status ?? manifest.status ?? 'published');
+    const parsed = toolManifestSchema.parse({ ...manifest, status });
     const row: Insertable<ToolManifestTable> = {
       tenant_id: tenant(options),
       spec_id: parsed.tool_name,
@@ -311,7 +630,12 @@ export class ToolManifestRepository {
       spec_json: parsed,
       sha256: parsed.sha256 ?? hashJson(parsed),
       created_by: options.createdBy ?? null,
+      updated_by: options.createdBy ?? null,
+      published_by: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? options.createdBy ?? null : null,
+      updated_at: new Date(),
       published_at: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? new Date() : null,
+      revision: 1,
+      gray_policy_json: grayPolicySchema.parse({}),
     };
 
     const saved = await this.db
@@ -323,7 +647,11 @@ export class ToolManifestRepository {
           spec_json: row.spec_json,
           sha256: row.sha256,
           created_by: row.created_by,
+          updated_by: row.updated_by,
+          published_by: row.published_by,
+          updated_at: row.updated_at,
           published_at: row.published_at,
+          gray_policy_json: row.gray_policy_json,
         }),
       )
       .returning(['spec_json'])
@@ -371,6 +699,29 @@ export class TaskRunRepository {
       .executeTakeFirst();
 
     return row ? mapTaskRun(row) : undefined;
+  }
+
+  async list(options: ListTaskRunsOptions = {}): Promise<TaskRun[]> {
+    let query = this.db.selectFrom('task_run').selectAll();
+    if (options.tenantId) {
+      query = query.where('tenant_id', '=', options.tenantId);
+    }
+    if (options.status) {
+      query = query.where('status', '=', options.status);
+    }
+    if (options.flowId) {
+      query = query.where('flow_id', '=', options.flowId);
+    }
+    if (options.workflowId) {
+      query = query.where('workflow_id', '=', options.workflowId);
+    }
+
+    const rows = await query
+      .orderBy('created_at', 'desc')
+      .limit(limit(options.limit))
+      .offset(offset(options.offset))
+      .execute();
+    return rows.map(mapTaskRun);
   }
 
   async updateStatus(
@@ -438,7 +789,7 @@ export class AuditEventRepository {
     return mapAuditEvent(saved);
   }
 
-  async list(options: { tenantId?: string; targetType?: string; targetId?: string } = {}): Promise<AuditEvent[]> {
+  async list(options: ListAuditEventsOptions = {}): Promise<AuditEvent[]> {
     let query = this.db.selectFrom('audit_event').selectAll();
     if (options.tenantId) {
       query = query.where('tenant_id', '=', options.tenantId);
@@ -449,8 +800,27 @@ export class AuditEventRepository {
     if (options.targetId) {
       query = query.where('target_id', '=', options.targetId);
     }
+    if (options.action) {
+      query = query.where('action', '=', options.action);
+    }
+    if (options.toolName) {
+      query = query.where('target_id', '=', options.toolName);
+    }
+    if (options.taskRunId) {
+      query = query.where(sql<string>`payload->>'task_run_id'`, '=', options.taskRunId);
+    }
+    if (options.startTime) {
+      query = query.where('occurred_at', '>=', new Date(options.startTime));
+    }
+    if (options.endTime) {
+      query = query.where('occurred_at', '<=', new Date(options.endTime));
+    }
 
-    const rows = await query.orderBy('occurred_at', 'asc').execute();
+    const rows = await query
+      .orderBy('occurred_at', 'desc')
+      .limit(limit(options.limit))
+      .offset(offset(options.offset))
+      .execute();
     return rows.map(mapAuditEvent);
   }
 }
@@ -527,7 +897,7 @@ export class HumanTaskRepository {
     return rows.map(mapHumanTask);
   }
 
-  async list(options: { tenantId?: string; taskRunId?: string; status?: HumanTask['status'] } = {}): Promise<HumanTask[]> {
+  async list(options: ListHumanTasksOptions = {}): Promise<HumanTask[]> {
     let query = this.db.selectFrom('human_task').selectAll();
     if (options.tenantId) {
       query = query.where('tenant_id', '=', options.tenantId);
@@ -539,7 +909,11 @@ export class HumanTaskRepository {
       query = query.where('status', '=', options.status);
     }
 
-    const rows = await query.orderBy('created_at', 'asc').execute();
+    const rows = await query
+      .orderBy('created_at', 'desc')
+      .limit(limit(options.limit))
+      .offset(offset(options.offset))
+      .execute();
     return rows.map(mapHumanTask);
   }
 
@@ -710,7 +1084,7 @@ export class ToolCallLogRepository {
     return row ? mapToolCallLog(row) : undefined;
   }
 
-  async list(options: { tenantId?: string; taskRunId?: string } = {}): Promise<ToolCallLog[]> {
+  async list(options: ListToolCallLogsOptions = {}): Promise<ToolCallLog[]> {
     let query = this.db.selectFrom('tool_call_log').selectAll();
     if (options.tenantId) {
       query = query.where('tenant_id', '=', options.tenantId);
@@ -718,9 +1092,185 @@ export class ToolCallLogRepository {
     if (options.taskRunId) {
       query = query.where('task_run_id', '=', options.taskRunId);
     }
+    if (options.toolName) {
+      query = query.where('tool_name', '=', options.toolName);
+    }
+    if (options.status) {
+      query = query.where('status', '=', options.status);
+    }
 
-    const rows = await query.orderBy('created_at', 'asc').execute();
+    const rows = await query
+      .orderBy('created_at', 'desc')
+      .limit(limit(options.limit))
+      .offset(offset(options.offset))
+      .execute();
     return rows.map(mapToolCallLog);
+  }
+}
+
+export class AgentSpecRepository {
+  private readonly registry: VersionedRegistryRepository<AgentSpec>;
+
+  constructor(private readonly db: Kysely<Database>) {
+    this.registry = new VersionedRegistryRepository(db, {
+      resourceType: 'agent',
+      tableName: 'agent_spec',
+      idColumn: 'spec_id',
+      versionColumn: 'version',
+      jsonColumn: 'spec_json',
+      schema: agentSpecSchema,
+      getSpecId: (spec) => spec.agent_id,
+      getSpecVersion: (spec) => spec.version,
+      withIdentity: (spec, resourceId, version, status) => ({
+        ...spec,
+        agent_id: resourceId,
+        version,
+        status,
+      }),
+    });
+  }
+
+  list(options: RegistryListOptions = {}): Promise<RegistryResourceRecord<AgentSpec>[]> {
+    return this.registry.list(options);
+  }
+
+  getByIdAndVersion(agentId: string, version: number, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<AgentSpec> | undefined> {
+    return this.registry.getByIdAndVersion(agentId, version, options);
+  }
+
+  getLatestVersion(agentId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<AgentSpec> | undefined> {
+    return this.registry.getLatestVersion(agentId, options);
+  }
+
+  getLatestPublishedVersion(agentId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<AgentSpec> | undefined> {
+    return this.registry.getLatestPublishedVersion(agentId, options);
+  }
+
+  listVersions(agentId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<AgentSpec>[]> {
+    return this.registry.listVersions(agentId, options);
+  }
+
+  createDraft(agentSpec: AgentSpec, options: RegistryWriteOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+    return this.registry.createDraft(agentSpec, options);
+  }
+
+  updateDraft(agentId: string, version: number, input: RegistryUpdateDraftInput<AgentSpec>): Promise<RegistryResourceRecord<AgentSpec>> {
+    return this.registry.updateDraft(agentId, version, input);
+  }
+
+  cloneVersion(agentId: string, version: number, options: RegistryCloneOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+    return this.registry.cloneVersion(agentId, version, options);
+  }
+
+  markValidated(agentId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+    return this.registry.markValidated(agentId, version, options);
+  }
+
+  publish(agentId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+    return this.registry.publish(agentId, version, options);
+  }
+
+  setGray(agentId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+    return this.registry.setGray(agentId, version, options);
+  }
+
+  deprecate(agentId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+    return this.registry.deprecate(agentId, version, options);
+  }
+
+  disable(agentId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+    return this.registry.disable(agentId, version, options);
+  }
+
+  rollback(agentId: string, targetVersion: number, options: RegistryRollbackOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+    return this.registry.rollback(agentId, targetVersion, options);
+  }
+
+  listReleaseHistory(agentId: string, options: RegistryListOptions = {}): Promise<CapabilityRelease[]> {
+    return this.registry.listReleaseHistory(agentId, options);
+  }
+}
+
+export class PromptDefinitionRepository {
+  private readonly registry: VersionedRegistryRepository<PromptDefinition>;
+
+  constructor(private readonly db: Kysely<Database>) {
+    this.registry = new VersionedRegistryRepository(db, {
+      resourceType: 'prompt',
+      tableName: 'prompt_definition',
+      idColumn: 'spec_id',
+      versionColumn: 'version',
+      jsonColumn: 'spec_json',
+      schema: promptDefinitionSchema,
+      getSpecId: (spec) => spec.prompt_id,
+      getSpecVersion: (spec) => spec.version,
+      withIdentity: (spec, resourceId, version, status) => ({
+        ...spec,
+        prompt_id: resourceId,
+        version,
+        status,
+      }),
+    });
+  }
+
+  list(options: RegistryListOptions = {}): Promise<RegistryResourceRecord<PromptDefinition>[]> {
+    return this.registry.list(options);
+  }
+
+  getByIdAndVersion(promptId: string, version: number, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<PromptDefinition> | undefined> {
+    return this.registry.getByIdAndVersion(promptId, version, options);
+  }
+
+  getLatestVersion(promptId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<PromptDefinition> | undefined> {
+    return this.registry.getLatestVersion(promptId, options);
+  }
+
+  getLatestPublishedVersion(promptId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<PromptDefinition> | undefined> {
+    return this.registry.getLatestPublishedVersion(promptId, options);
+  }
+
+  listVersions(promptId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<PromptDefinition>[]> {
+    return this.registry.listVersions(promptId, options);
+  }
+
+  createDraft(prompt: PromptDefinition, options: RegistryWriteOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+    return this.registry.createDraft(prompt, options);
+  }
+
+  updateDraft(promptId: string, version: number, input: RegistryUpdateDraftInput<PromptDefinition>): Promise<RegistryResourceRecord<PromptDefinition>> {
+    return this.registry.updateDraft(promptId, version, input);
+  }
+
+  cloneVersion(promptId: string, version: number, options: RegistryCloneOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+    return this.registry.cloneVersion(promptId, version, options);
+  }
+
+  markValidated(promptId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+    return this.registry.markValidated(promptId, version, options);
+  }
+
+  publish(promptId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+    return this.registry.publish(promptId, version, options);
+  }
+
+  setGray(promptId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+    return this.registry.setGray(promptId, version, options);
+  }
+
+  deprecate(promptId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+    return this.registry.deprecate(promptId, version, options);
+  }
+
+  disable(promptId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+    return this.registry.disable(promptId, version, options);
+  }
+
+  rollback(promptId: string, targetVersion: number, options: RegistryRollbackOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+    return this.registry.rollback(promptId, targetVersion, options);
+  }
+
+  listReleaseHistory(promptId: string, options: RegistryListOptions = {}): Promise<CapabilityRelease[]> {
+    return this.registry.listReleaseHistory(promptId, options);
   }
 }
 
@@ -729,8 +1279,8 @@ export async function upsertAgentSpec(
   agentSpec: AgentSpec,
   options: UpsertSpecOptions = {},
 ): Promise<AgentSpec> {
-  const parsed = agentSpecSchema.parse({ ...agentSpec, status: options.status ?? agentSpec.status ?? 'published' });
-  const status = options.status ?? parsed.status ?? 'published';
+  const status = normalizeWriteStatus(options.status ?? agentSpec.status ?? 'published');
+  const parsed = agentSpecSchema.parse({ ...agentSpec, status });
   const row: Insertable<AgentSpecTable> = {
     tenant_id: tenant(options),
     spec_id: parsed.agent_id,
@@ -739,7 +1289,12 @@ export async function upsertAgentSpec(
     spec_json: parsed,
     sha256: parsed.sha256 ?? hashJson(parsed),
     created_by: options.createdBy ?? null,
+    updated_by: options.createdBy ?? null,
+    published_by: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? options.createdBy ?? null : null,
+    updated_at: new Date(),
     published_at: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? new Date() : null,
+    revision: 1,
+    gray_policy_json: grayPolicySchema.parse({}),
   };
   const saved = await db
     .insertInto('agent_spec')
@@ -750,7 +1305,11 @@ export async function upsertAgentSpec(
         spec_json: row.spec_json,
         sha256: row.sha256,
         created_by: row.created_by,
+        updated_by: row.updated_by,
+        published_by: row.published_by,
+        updated_at: row.updated_at,
         published_at: row.published_at,
+        gray_policy_json: row.gray_policy_json,
       }),
     )
     .returning(['spec_json'])
@@ -764,8 +1323,8 @@ export async function upsertPromptDefinition(
   prompt: PromptDefinition,
   options: UpsertSpecOptions = {},
 ): Promise<PromptDefinition> {
-  const parsed = promptDefinitionSchema.parse({ ...prompt, status: options.status ?? prompt.status ?? 'published' });
-  const status = options.status ?? parsed.status ?? 'published';
+  const status = normalizeWriteStatus(options.status ?? prompt.status ?? 'published');
+  const parsed = promptDefinitionSchema.parse({ ...prompt, status });
   const row: Insertable<PromptDefinitionTable> = {
     tenant_id: tenant(options),
     spec_id: parsed.prompt_id,
@@ -774,7 +1333,12 @@ export async function upsertPromptDefinition(
     spec_json: parsed,
     sha256: parsed.sha256 ?? hashJson(parsed),
     created_by: options.createdBy ?? null,
+    updated_by: options.createdBy ?? null,
+    published_by: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? options.createdBy ?? null : null,
+    updated_at: new Date(),
     published_at: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? new Date() : null,
+    revision: 1,
+    gray_policy_json: grayPolicySchema.parse({}),
   };
   const saved = await db
     .insertInto('prompt_definition')
@@ -785,7 +1349,11 @@ export async function upsertPromptDefinition(
         spec_json: row.spec_json,
         sha256: row.sha256,
         created_by: row.created_by,
+        updated_by: row.updated_by,
+        published_by: row.published_by,
+        updated_at: row.updated_at,
         published_at: row.published_at,
+        gray_policy_json: row.gray_policy_json,
       }),
     )
     .returning(['spec_json'])
@@ -802,6 +1370,18 @@ function manifestSpecVersion(manifest: ToolManifest): number {
   const [major] = manifest.version.split('.');
   const parsed = Number(major);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function normalizeWriteStatus(status: SpecStatus | undefined): SpecStatus {
+  return status ?? 'published';
+}
+
+function limit(value: number | undefined): number {
+  return Math.min(Math.max(value ?? 20, 1), 100);
+}
+
+function offset(value: number | undefined): number {
+  return Math.max(value ?? 0, 0);
 }
 
 function mapTaskRun(row: Selectable<TaskRunTable>): TaskRun {

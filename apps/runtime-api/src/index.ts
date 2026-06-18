@@ -110,10 +110,20 @@ export function buildServer(
     }
   });
 
+  server.get('/v1/tasks', async (request, reply) => {
+    try {
+      return toSuccessResponse(await taskService.list(request.query));
+    } catch (error) {
+      reply.code(error instanceof ZodError ? 400 : 500);
+      return toErrorResponse(error);
+    }
+  });
+
   server.get('/v1/tasks/:taskRunId', async (request, reply) => {
     const { taskRunId } = request.params as { taskRunId: string };
     const taskRun = await taskService.get(taskRunId);
-    if (!taskRun) {
+    const { tenant_id: tenantId } = request.query as { tenant_id?: string };
+    if (!taskRun || (tenantId && taskRun.tenant_id !== tenantId)) {
       reply.code(404);
       return {
         success: false,
@@ -127,7 +137,11 @@ export function buildServer(
 
   server.get('/v1/human-tasks', async (request, reply) => {
     try {
-      return toSuccessResponse(await humanTaskService.list(request.query));
+      return toSuccessResponse(await humanTaskService.list({
+        ...(request.query as Record<string, unknown>),
+        user_id: headerValue(request, 'x-user-id') ?? stringValue((request.query as { user_id?: unknown }).user_id),
+        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.query as { tenant_id?: unknown }).tenant_id) ?? 'default',
+      }));
     } catch (error) {
       reply.code(error instanceof ZodError ? 400 : 500);
       return toErrorResponse(error);
@@ -137,7 +151,11 @@ export function buildServer(
   server.get('/v1/human-tasks/:humanTaskId', async (request, reply) => {
     const { humanTaskId } = request.params as { humanTaskId: string };
     try {
-      const result = await humanTaskService.get(humanTaskId, request.query);
+      const result = await humanTaskService.get(humanTaskId, {
+        ...(request.query as Record<string, unknown>),
+        user_id: headerValue(request, 'x-user-id') ?? stringValue((request.query as { user_id?: unknown }).user_id),
+        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.query as { tenant_id?: unknown }).tenant_id) ?? 'default',
+      });
       if (!result) {
         reply.code(404);
         return {
@@ -157,7 +175,11 @@ export function buildServer(
     const { humanTaskId } = request.params as { humanTaskId: string };
     const traceId = getTraceId(request.body);
     try {
-      const result = await humanTaskService.approve(humanTaskId, request.body);
+      const result = await humanTaskService.approve(humanTaskId, {
+        ...(request.body as Record<string, unknown>),
+        user_id: headerValue(request, 'x-user-id') ?? stringValue((request.body as { user_id?: unknown }).user_id),
+        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.body as { tenant_id?: unknown }).tenant_id) ?? 'default',
+      });
       if (!result) {
         reply.code(404);
         return {
@@ -177,7 +199,11 @@ export function buildServer(
     const { humanTaskId } = request.params as { humanTaskId: string };
     const traceId = getTraceId(request.body);
     try {
-      const result = await humanTaskService.reject(humanTaskId, request.body);
+      const result = await humanTaskService.reject(humanTaskId, {
+        ...(request.body as Record<string, unknown>),
+        user_id: headerValue(request, 'x-user-id') ?? stringValue((request.body as { user_id?: unknown }).user_id),
+        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.body as { tenant_id?: unknown }).tenant_id) ?? 'default',
+      });
       if (!result) {
         reply.code(404);
         return {
@@ -220,4 +246,16 @@ if (isMain) {
     logger.error({ err: error }, `${appName} startup failed`);
     process.exit(1);
   });
+}
+
+function headerValue(request: { headers: Record<string, string | string[] | undefined> }, name: string): string | undefined {
+  const value = request.headers[name];
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return typeof value === 'string' ? value : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }

@@ -3,7 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   agentRunRequestSchema,
   agentRunResultSchema,
+  capabilityReleaseResponseSchema,
+  cloneVersionRequestSchema,
+  createDraftRequestSchema,
+  dashboardSummaryResponseSchema,
   flowSpecSchema,
+  grayResourceRequestSchema,
   humanTaskCreateRequestSchema,
   humanTaskDecisionRequestSchema,
   humanTaskDecisionResponseSchema,
@@ -11,14 +16,28 @@ import {
   humanTaskGetResponseSchema,
   humanTaskListRequestSchema,
   humanTaskListResponseSchema,
+  operationAuditQuerySchema,
+  paginationRequestSchema,
   promptDefinitionSchema,
   policyEvaluationResultSchema,
+  publishResourceRequestSchema,
+  registryListRequestSchema,
+  releaseListRequestSchema,
+  rollbackResourceRequestSchema,
   routeSpecSchema,
   runtimeContextSchema,
+  standardApiResponseSchema,
+  standardErrorResponseSchema,
+  taskRunQuerySchema,
+  toolCallQuerySchema,
   toolCallLogSchema,
   toolCommitRequestSchema,
   toolCommitResponseSchema,
   toolManifestSchema,
+  updateDraftRequestSchema,
+  validateResourceRequestSchema,
+  validateResourceResponseSchema,
+  validateSpecStatusTransition,
   toolPreviewRequestSchema,
   toolPreviewResponseSchema,
   workflowStartRequestSchema,
@@ -29,6 +48,27 @@ async function readJson<T = unknown>(path: string): Promise<T> {
 }
 
 describe('contracts schemas', () => {
+  it('validates registry lifecycle statuses and transitions', () => {
+    expect(validateSpecStatusTransition({ from: 'draft', to: 'validated' })).toEqual({ ok: true });
+    expect(validateSpecStatusTransition({ from: 'validated', to: 'draft' })).toEqual({ ok: true });
+    expect(validateSpecStatusTransition({ from: 'validated', to: 'published' })).toEqual({ ok: true });
+    expect(validateSpecStatusTransition({ from: 'published', to: 'gray' })).toEqual({ ok: true });
+    expect(validateSpecStatusTransition({ from: 'gray', to: 'published' })).toEqual({ ok: true });
+    expect(validateSpecStatusTransition({ from: 'published', to: 'deprecated' })).toEqual({ ok: true });
+    expect(validateSpecStatusTransition({ from: 'gray', to: 'deprecated' })).toEqual({ ok: true });
+    expect(validateSpecStatusTransition({ from: 'published', to: 'draft' })).toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_SPEC_STATUS_TRANSITION' },
+    });
+    expect(() => flowSpecSchema.parse({
+      flow_id: 'archived_flow',
+      version: 1,
+      status: 'archived',
+      runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
+      steps: [{ id: 'one', type: 'activity', activity: 'noop' }],
+    })).toThrow();
+  });
+
   it('validates core MVP specs and runtime DTOs', () => {
     expect(flowSpecSchema.parse({
       flow_id: 'sample_flow',
@@ -174,6 +214,8 @@ describe('contracts schemas', () => {
     expect(humanTaskListRequestSchema.parse({ tenant_id: 'tenant_1', user_id: 'user_1' })).toEqual({
       tenant_id: 'tenant_1',
       user_id: 'user_1',
+      page: 1,
+      page_size: 20,
     });
     expect(humanTaskGetRequestSchema.parse({ tenant_id: 'tenant_1', user_id: 'user_1' }).tenant_id).toBe('tenant_1');
     expect(humanTaskDecisionRequestSchema.parse({ tenant_id: 'tenant_1', user_id: 'approver_1' }).payload).toEqual({});
@@ -195,5 +237,97 @@ describe('contracts schemas', () => {
       mode: 'preview',
       idempotency_key: 'task_1:record.write.mock:preview',
     }).risk_level).toBe('L3');
+  });
+
+  it('validates control-plane management API DTOs', () => {
+    expect(paginationRequestSchema.parse({ page: '2', page_size: '10' })).toMatchObject({
+      page: 2,
+      page_size: 10,
+      sort_order: 'desc',
+    });
+    expect(registryListRequestSchema.parse({ status: 'published', keyword: 'flow' }).page).toBe(1);
+    expect(createDraftRequestSchema.parse({ spec: { prompt_id: 'prompt_1' } }).spec).toMatchObject({
+      prompt_id: 'prompt_1',
+    });
+    expect(updateDraftRequestSchema.parse({
+      spec: { prompt_id: 'prompt_1' },
+      expected_revision: 3,
+    }).expected_revision).toBe(3);
+    expect(() => updateDraftRequestSchema.parse({ spec: {} })).toThrow();
+    expect(cloneVersionRequestSchema.parse({ version: 2 }).version).toBe(2);
+    expect(validateResourceRequestSchema.parse({})).toEqual({ include_warnings: true });
+
+    const validation = {
+      valid: true,
+      can_publish: true,
+      errors: [],
+      warnings: [],
+      dependency_graph: { nodes: [], edges: [] },
+    };
+    expect(validateResourceResponseSchema.parse({ validation }).validation.can_publish).toBe(true);
+    expect(publishResourceRequestSchema.parse({ release_note: 'publish v1' }).metadata_json).toEqual({});
+    expect(grayResourceRequestSchema.parse({
+      release_note: 'gray v2',
+      tenant_allowlist: ['tenant_1'],
+    }).tenant_allowlist).toEqual(['tenant_1']);
+    expect(rollbackResourceRequestSchema.parse({
+      target_version: 1,
+      release_note: 'rollback v1',
+    }).target_version).toBe(1);
+
+    const release = {
+      release_id: 'release_1',
+      tenant_id: 'tenant_1',
+      resource_type: 'flow',
+      resource_id: 'flow_1',
+      resource_version: 1,
+      action: 'publish',
+      target_status: 'published',
+      operator_id: 'operator_1',
+      validation_result: validation,
+      metadata_json: {},
+    };
+    expect(capabilityReleaseResponseSchema.parse({ release }).release.action).toBe('publish');
+    expect(releaseListRequestSchema.parse({
+      resource_type: 'flow',
+      page: 1,
+      page_size: 20,
+    }).resource_type).toBe('flow');
+  });
+
+  it('validates operation query and standard API response DTOs', () => {
+    expect(operationAuditQuerySchema.parse({
+      tenant_id: 'tenant_1',
+      event_type: 'tool.invoke',
+      page_size: '5',
+    }).page_size).toBe(5);
+    expect(toolCallQuerySchema.parse({ tenant_id: 'tenant_1', status: 'committed' }).status).toBe('committed');
+    expect(taskRunQuerySchema.parse({ tenant_id: 'tenant_1', status: 'running' }).status).toBe('running');
+    expect(dashboardSummaryResponseSchema.parse({
+      registry_counts: {
+        flows_published: 1,
+        routes_published: 1,
+        tools_published: 1,
+        agents_published: 1,
+        prompts_published: 1,
+      },
+      pending_human_task_count: 0,
+      running_task_count: 0,
+      waiting_human_task_count: 0,
+      failed_task_count: 0,
+      recent_releases: [],
+      recent_failed_tasks: [],
+    }).registry_counts.flows_published).toBe(1);
+    expect(standardErrorResponseSchema.parse({
+      success: false,
+      data: null,
+      error: { code: 'FORBIDDEN', message: 'Permission denied' },
+      trace_id: 'req_1',
+    }).error.code).toBe('FORBIDDEN');
+    expect(standardApiResponseSchema.parse({
+      success: true,
+      data: { ok: true },
+      error: null,
+    }).success).toBe(true);
   });
 });

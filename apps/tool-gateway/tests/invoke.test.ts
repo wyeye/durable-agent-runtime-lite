@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AuditEvent, HumanTask, IdempotencyRecord, ToolManifest } from '@dar/contracts';
+import type { AuditEvent, HumanTask, IdempotencyRecord, ToolCallLog, ToolManifest } from '@dar/contracts';
 import { buildServer, createToolGatewayService } from '../src/index.js';
 import type { ToolManifestRegistry } from '../src/modules/tool-registry.js';
 import {
@@ -607,5 +607,72 @@ describe('tool-gateway invoke', () => {
     expect(() => createToolGatewayService(productionConfig)).toThrow(
       'TOOL_GATEWAY_REGISTRY_SOURCE=db is required in production',
     );
+  });
+
+  it('queries audit events and tool calls with tenant filters and masks sensitive payloads', async () => {
+    const auditStore = new FakeAuditStore();
+    await auditStore.append({
+      tenant_id: 'tenant_1',
+      actor_id: 'user_1',
+      action: 'tool.commit',
+      target_type: 'tool',
+      target_id: 'knowledge.search',
+      result: 'succeeded',
+      payload: {
+        task_run_id: 'task_sensitive',
+        token: 'plain-token',
+      },
+    });
+    const toolCallLogStore = new InMemoryToolCallLogStore();
+    const toolCall = await toolCallLogStore.create({
+      tenant_id: 'tenant_1',
+      task_run_id: 'task_sensitive',
+      user_id: 'user_1',
+      tool_name: 'knowledge.search',
+      tool_version: '1.0.0',
+      risk_level: 'L1',
+      policy_decision: 'allow',
+      status: 'committed',
+      preview_json: { token: 'preview-secret' },
+      result_json: { password: 'result-secret', value: 'ok' },
+    });
+    await toolCallLogStore.create({
+      tenant_id: 'tenant_2',
+      task_run_id: 'task_other',
+      tool_name: 'knowledge.search',
+      tool_version: '1.0.0',
+      risk_level: 'L1',
+      policy_decision: 'allow',
+      status: 'failed',
+    });
+    const server = buildServer(new ToolService({ auditStore, toolCallLogStore }));
+
+    const audit = await server.inject({
+      method: 'GET',
+      url: '/v1/audit-events?tenant_id=tenant_1&task_run_id=task_sensitive&tool_name=knowledge.search&event_type=tool.commit',
+    });
+    expect(audit.statusCode).toBe(200);
+    expect(audit.json().data).toHaveLength(1);
+    expect(audit.json().data[0].payload.token).toBe('[REDACTED]');
+
+    const toolCalls = await server.inject({
+      method: 'GET',
+      url: '/v1/tool-calls?tenant_id=tenant_1&task_run_id=task_sensitive&tool_name=knowledge.search&status=committed',
+    });
+    expect(toolCalls.statusCode).toBe(200);
+    const rows = toolCalls.json().data as ToolCallLog[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.tool_call_id).toBe(toolCall.tool_call_id);
+    expect((rows[0]?.preview_json as { token?: string }).token).toBe('[REDACTED]');
+    expect((rows[0]?.result_json as { password?: string; value?: string }).password).toBe('[REDACTED]');
+    expect((rows[0]?.result_json as { value?: string }).value).toBe('ok');
+
+    const single = await server.inject({
+      method: 'GET',
+      url: `/v1/tool-calls/${toolCall.tool_call_id}`,
+    });
+    expect((single.json().data.result_json as { password?: string }).password).toBe('[REDACTED]');
+
+    await server.close();
   });
 });

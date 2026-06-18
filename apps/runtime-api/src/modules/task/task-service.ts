@@ -3,6 +3,7 @@ import {
   runTaskResponseSchema,
   routerPreviewResponseSchema,
   taskRunSchema,
+  taskRunQuerySchema,
   type RouteSpec,
   type RunTaskRequest,
   type RunTaskResponse,
@@ -65,13 +66,13 @@ export class TaskService {
 
   async preview(input: unknown): Promise<RouterPreviewResponse> {
     const normalized = normalizeRunTaskRequest(input);
-    const routes = await this.routeSource.listPublished(normalized.tenant_id);
+    const routes = await this.routeSource.listPublished(normalized.tenant_id, normalized.user_id);
     return previewRoute(input, routes, this.allowMockRouteFallback);
   }
 
   async create(input: unknown): Promise<RunTaskResponse> {
     const normalized = normalizeRunTaskRequest(input);
-    const routes = await this.routeSource.listPublished(normalized.tenant_id);
+    const routes = await this.routeSource.listPublished(normalized.tenant_id, normalized.user_id);
     const routeResult = routeByRules(
       {
         input: normalized.input,
@@ -158,6 +159,18 @@ export class TaskService {
 
   async get(taskRunId: string): Promise<TaskRun | undefined> {
     return this.taskStore.get(taskRunId);
+  }
+
+  async list(input: unknown): Promise<TaskRun[]> {
+    const query = taskRunQuerySchema.parse(input);
+    return this.taskStore.list({
+      tenantId: query.tenant_id ?? 'default',
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.flow_id ? { flowId: query.flow_id } : {}),
+      ...(query.workflow_id ? { workflowId: query.workflow_id } : {}),
+      limit: query.page_size,
+      offset: (query.page - 1) * query.page_size,
+    });
   }
 }
 

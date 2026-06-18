@@ -25,8 +25,8 @@ describe('docker deployment files', () => {
     await access('scripts/docker-seed-examples.sh', constants.X_OK);
   });
 
-  it('keeps backend runner images readable by their unprivileged app user', async () => {
-    for (const file of dockerfiles.filter((name) => !name.includes('control-plane'))) {
+  it('keeps Node runner images readable by their unprivileged app user', async () => {
+    for (const file of dockerfiles) {
       const content = await readFile(file, 'utf8');
       expect(content).toContain('COPY --from=builder --chown=app:app /repo /repo');
       expect(content).toContain('--workspace-concurrency=1 build');
@@ -34,13 +34,12 @@ describe('docker deployment files', () => {
     }
   });
 
-  it('keeps the control-plane nginx runner readable by the unprivileged nginx user', async () => {
+  it('serves control-plane API and Vite assets from the Fastify Node runner', async () => {
     const content = await readFile('apps/control-plane/Dockerfile', 'utf8');
-    expect(content).toContain('--workspace-concurrency=1 build && test -f apps/control-plane/dist/index.html');
-    expect(content).toContain(
-      'COPY --chown=nginx:nginx apps/control-plane/docker/nginx.conf /etc/nginx/conf.d/default.conf',
-    );
-    expect(content).toContain('COPY --from=builder --chown=nginx:nginx /repo/apps/control-plane/dist');
+    expect(content).toContain('test -f apps/control-plane/dist/server/server/bootstrap.js');
+    expect(content).toContain('test -f apps/control-plane/dist/public/index.html');
+    expect(content).toContain('CMD ["node", "dist/server/server/bootstrap.js"]');
+    expect(content).not.toContain('nginx');
   });
 
   it('does not define a root production Dockerfile and keeps compose context at repo root', async () => {
@@ -53,12 +52,17 @@ describe('docker deployment files', () => {
     expect(compose).toContain('RUNTIME_API_WORKFLOW_STARTER: temporal');
     expect(compose).toContain('RUNTIME_WORKER_MODE: temporal');
     expect(compose).toContain('TOOL_GATEWAY_REGISTRY_SOURCE: db');
+    expect(compose).toContain('CONTROL_PLANE_AUTH_MODE: header');
+    expect(compose).toContain('RUNTIME_API_URL: http://runtime-api:3000');
+    expect(compose).toContain('TOOL_GATEWAY_URL: http://tool-gateway:3200');
   });
 
   it('provides the real Temporal DB smoke script command target', async () => {
     const rootPackage = await readFile('package.json', 'utf8');
     expect(rootPackage).toContain('"smoke:temporal-db-e2e": "tsx scripts/smoke-temporal-db-e2e.ts"');
+    expect(rootPackage).toContain('"smoke:control-plane-api-e2e": "tsx scripts/smoke-control-plane-api-e2e.ts"');
     await access('scripts/smoke-temporal-db-e2e.ts', constants.R_OK);
+    await access('scripts/smoke-control-plane-api-e2e.ts', constants.R_OK);
   });
 
   it('lets example seeding target the local compose database without extra env', async () => {

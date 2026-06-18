@@ -62,6 +62,14 @@ export const runtimeConfigSchema = z.object({
   ),
   RUNTIME_API_ROUTE_SOURCE: z.preprocess(emptyToUndefined, z.enum(['db', 'memory']).default('memory')),
   TOOL_GATEWAY_REGISTRY_SOURCE: z.preprocess(emptyToUndefined, z.enum(['db', 'memory']).default('memory')),
+  CONTROL_PLANE_AUTH_MODE: z.preprocess(
+    emptyToUndefined,
+    z.enum(['header', 'disabled']).default('header'),
+  ),
+  CONTROL_PLANE_SWAGGER_ENABLED: z.preprocess(
+    emptyToUndefined,
+    z.coerce.boolean().default(true),
+  ),
 });
 
 export type AppName = z.infer<typeof appNameSchema>;
@@ -92,4 +100,8 @@ export function getAppPort(app: AppName, config: RuntimeConfig): number {
 
 export function getToolGatewayUrl(config: RuntimeConfig): string {
   return config.TOOL_GATEWAY_BASE_URL ?? config.TOOL_GATEWAY_URL ?? 'http://localhost:3003';
+}
+
+export function getRuntimeApiUrl(config: RuntimeConfig): string {
+  return config.RUNTIME_API_URL ?? 'http://localhost:3001';
 }

@@ -99,6 +99,18 @@ describe('runtime-api router and task endpoints', () => {
     const queried = await server.inject({ method: 'GET', url: `/v1/tasks/${created.data.task_run_id}` });
     expect(queried.statusCode).toBe(200);
     expect(queried.json().data.task_run_id).toBe(created.data.task_run_id);
+    const wrongTenant = await server.inject({
+      method: 'GET',
+      url: `/v1/tasks/${created.data.task_run_id}?tenant_id=tenant_2`,
+    });
+    expect(wrongTenant.statusCode).toBe(404);
+
+    const list = await server.inject({
+      method: 'GET',
+      url: '/v1/tasks?tenant_id=tenant_1&status=queued&page=1&page_size=5',
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().data.map((task: TaskRun) => task.task_run_id)).toContain(created.data.task_run_id);
     await server.close();
   });
 
@@ -328,12 +340,11 @@ describe('runtime-api router and task endpoints', () => {
 
     const list = await server.inject({
       method: 'GET',
-      url: '/v1/human-tasks?tenant_id=tenant_1&user_id=user_1&status=pending',
+      url: '/v1/human-tasks?tenant_id=tenant_1&user_id=user_1&status=pending&page=1&page_size=1',
     });
     expect(list.statusCode).toBe(200);
     expect(list.json().data.human_tasks.map((task: HumanTask) => task.human_task_id)).toEqual([
       'human_l3_1',
-      'human_l3_2',
     ]);
 
     const get = await server.inject({

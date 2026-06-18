@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   humanTaskSchema,
+  operationAuditQuerySchema,
   toolCallLogSchema,
   toolCommitRequestSchema,
   toolCommitResponseSchema,
@@ -8,6 +9,7 @@ import {
   toolInvokeResponseSchema,
   toolPreviewRequestSchema,
   toolPreviewResponseSchema,
+  toolCallQuerySchema,
   type HumanTask,
   type PolicyEvaluationResult,
   type ToolCallLog,
@@ -20,9 +22,12 @@ import {
   type ToolPreviewRequest,
   type ToolPreviewResponse,
 } from '@dar/contracts';
+import { maskSensitiveFields } from '@dar/security';
 import {
   HumanTaskRepository,
   IdempotencyRecordRepository,
+  type ListAuditEventsOptions,
+  type ListToolCallLogsOptions,
   type ToolCallLogCreateInput,
 } from '@dar/db';
 import { InMemoryAuditStore, type AuditStore } from './audit.js';
@@ -42,7 +47,7 @@ export interface ToolCallLogStore {
   create(input: ToolCallLogCreateInput): Promise<ToolCallLog>;
   get(toolCallId: string): Promise<ToolCallLog | undefined>;
   update(toolCallId: string, input: ToolCallLogUpdateInput): Promise<ToolCallLog | undefined>;
-  list(options?: { tenantId?: string; taskRunId?: string }): Promise<ToolCallLog[]>;
+  list(options?: ListToolCallLogsOptions): Promise<ToolCallLog[]>;
 }
 
 export interface ToolCallLogUpdateInput {
@@ -96,7 +101,7 @@ export class InMemoryToolCallLogStore implements ToolCallLogStore {
     return updated;
   }
 
-  async list(options: { tenantId?: string; taskRunId?: string } = {}): Promise<ToolCallLog[]> {
+  async list(options: ListToolCallLogsOptions = {}): Promise<ToolCallLog[]> {
     return [...this.logs.values()].filter((log) => {
       if (options.tenantId && log.tenant_id !== options.tenantId) {
         return false;
@@ -104,8 +109,14 @@ export class InMemoryToolCallLogStore implements ToolCallLogStore {
       if (options.taskRunId && log.task_run_id !== options.taskRunId) {
         return false;
       }
+      if (options.toolName && log.tool_name !== options.toolName) {
+        return false;
+      }
+      if (options.status && log.status !== options.status) {
+        return false;
+      }
       return true;
-    });
+    }).slice(options.offset ?? 0, (options.offset ?? 0) + Math.min(Math.max(options.limit ?? 20, 1), 100));
   }
 }
 
@@ -179,16 +190,41 @@ export class ToolService {
     return this.registry.get(toolName, tenantId);
   }
 
-  async listAuditEvents() {
-    return this.auditStore.list();
+  async listAuditEvents(input: unknown = {}) {
+    const query = operationAuditQuerySchema.parse(input);
+    const options: ListAuditEventsOptions = {
+      ...(query.tenant_id ? { tenantId: query.tenant_id } : {}),
+      ...(query.task_run_id ? { taskRunId: query.task_run_id } : {}),
+      ...(query.tool_name ? { toolName: query.tool_name } : {}),
+      ...(query.event_type ? { action: query.event_type } : {}),
+      ...(query.start_time ? { startTime: query.start_time } : {}),
+      ...(query.end_time ? { endTime: query.end_time } : {}),
+      limit: query.page_size,
+      offset: (query.page - 1) * query.page_size,
+    };
+    const events = await this.auditStore.list(options);
+    return events.map((event) => ({
+      ...event,
+      payload: maskSensitiveFields(event.payload) as Record<string, unknown>,
+    }));
   }
 
   async getToolCall(toolCallId: string): Promise<ToolCallLog | undefined> {
-    return this.toolCallLogStore.get(toolCallId);
+    const toolCall = await this.toolCallLogStore.get(toolCallId);
+    return toolCall ? maskToolCall(toolCall) : undefined;
   }
 
-  async listToolCalls(options: { tenantId?: string; taskRunId?: string } = {}): Promise<ToolCallLog[]> {
-    return this.toolCallLogStore.list(options);
+  async listToolCalls(input: unknown = {}): Promise<ToolCallLog[]> {
+    const query = toolCallQuerySchema.parse(input);
+    const toolCalls = await this.toolCallLogStore.list({
+      ...(query.tenant_id ? { tenantId: query.tenant_id } : {}),
+      ...(query.task_run_id ? { taskRunId: query.task_run_id } : {}),
+      ...(query.tool_name ? { toolName: query.tool_name } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      limit: query.page_size,
+      offset: (query.page - 1) * query.page_size,
+    });
+    return toolCalls.map(maskToolCall);
   }
 
   async getIdempotencyRecord(idempotencyKey: string) {
@@ -717,6 +753,14 @@ function buildPreviewPlan(request: ToolPreviewRequest, manifest: ToolManifest): 
     risk_level: manifest.risk_level,
     arguments: request.arguments,
   };
+}
+
+function maskToolCall(toolCall: ToolCallLog): ToolCallLog {
+  return toolCallLogSchema.parse({
+    ...toolCall,
+    preview_json: toolCall.preview_json === undefined ? undefined : maskSensitiveFields(toolCall.preview_json),
+    result_json: toolCall.result_json === undefined ? undefined : maskSensitiveFields(toolCall.result_json),
+  });
 }
 
 function hashJson(value: unknown): string {

@@ -5,13 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc -p tsconfig.json && vite build",
+    "build": "rm -rf dist && tsc -p tsconfig.json && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint .",
     "dev:web": "vite --host 0.0.0.0",
+    "dev:api": "tsx watch src/server/bootstrap.ts",
     "build:web": "vite build",
-    "start": "vite --host 0.0.0.0"
+    "start": "node dist/server/server/bootstrap.js"
   },
   "dependencies": {
     "@dar/contracts": "workspace:*",
