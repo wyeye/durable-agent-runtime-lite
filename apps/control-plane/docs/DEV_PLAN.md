@@ -2,54 +2,56 @@
 
 ## 定位
 
-`control-plane` 是控制面和能力运营端，负责配置、发布、治理和运营观测。它不是线上执行核心路径，但它决定 Runtime 能加载什么能力、使用什么版本、哪些租户可见、哪些工具可调用。
+`control-plane` 是能力运营端和控制面。它负责 Registry 管理、发布治理、灰度、回滚、Human Task 审批和运行观测；它不执行工具、不复制 Temporal/Human Task 状态机，也不直连真实业务系统。
 
-## 阶段计划
+生产 app 仍只有：
 
-| 阶段 | 目标 | 主要任务 | 验收 |
-|---|---|---|---|
-| CP-M1 | 基础框架 | 登录占位、菜单、权限上下文、Registry 数据模型 | 页面可访问，API 健康检查通过 |
-| CP-M2 | Flow 管理 | FlowSpec 草稿、编辑、校验、版本列表、详情 | 可创建并保存 FlowSpec |
-| CP-M3 | Route 管理 | RouteSpec、关键词、样例、负样例、阈值配置 | 发布后可生成 RouteIndex |
-| CP-M4 | Tool/Agent/Prompt 管理 | ToolManifest、AgentSpec、Prompt 版本 | Flow 可引用 Tool/Agent/Prompt |
-| CP-M5 | 发布灰度 | 校验、dry-run、发布、灰度、回滚 | 发布事件可被 runtime-api 热加载 |
-| CP-M6 | Human Task 与看板 | 待确认任务、审批、任务轨迹、调用统计 | 可完成人工确认闭环 |
+```text
+control-plane
+runtime-api
+runtime-worker
+tool-gateway
+```
 
-## 当前后端治理批次状态
+## 已完成阶段
 
-已完成 CP-R1 + CP-R2 后端基础：
+| 阶段 | 状态 | 内容 |
+|---|---|---|
+| CP-R1 + CP-R2 | 完成 | Registry 生命周期、DB migration、Repository、Validation/Release Service、发布/灰度/回滚/禁用 |
+| CP-R3 + CP-R4 | 完成 | Fastify 管理 API、标准错误、OpenAPI、Header Auth/RBAC、BFF、单容器 API+静态托管、API smoke |
+| CP-R5 + CP-R6 | 完成 | React 能力运营页面、Registry 管理页、发布操作页、Human Task 审批、运行查询、Dashboard、UI smoke |
 
-1. `packages/contracts` 定义统一 lifecycle：`draft`、`validated`、`published`、`gray`、`deprecated`、`disabled`。
-2. `db/migrations/004_control_plane_registry.sql` 补齐治理字段、`capability_release` 和 `archived -> deprecated` 兼容迁移。
-3. `packages/db` 提供 Flow、Route、Tool、Agent、Prompt 的版本化 Registry Repository。
-4. Repository 支持 draft、revision optimistic locking、clone、publish、gray、rollback、deprecate、disable、release history。
-5. `RegistryValidationService` 和 `RegistryReleaseService` 已放在 `src/modules/registry/`。
-6. runtime-api 和 tool-gateway 已保持只读取 `published` / `gray`，并加入 deterministic gray allowlist 选择逻辑。
+## 当前页面清单
 
-已完成 CP-R3 + CP-R4 API 与运行形态：
+| 路由 | 能力 |
+|---|---|
+| `/dashboard` | Registry published 数量、Human Task/TaskRun 统计、最近 release、failed task、Audit、ToolCall |
+| `/registry/flows` | FlowSpec 列表、版本、JSON draft 编辑、validate、publish、gray、rollback、deprecate、disable、版本对比 |
+| `/registry/routes` | RouteSpec 阈值、关键词、样例、绑定 Flow、gray allowlist、版本治理 |
+| `/registry/tools` | ToolManifest 风险等级、side_effect、adapter、L3/L4 提示、版本治理 |
+| `/registry/agents` | AgentSpec prompt_ref、allowed_tools、预算、依赖 validate |
+| `/registry/prompts` | PromptDefinition 内容、变量、密钥风险 validate |
+| `/releases` | 发布历史查询、详情、metadata/validation_result、rollback 入口 |
+| `/human-tasks` | pending/approved/rejected 查询、详情、preview payload、approve/reject |
+| `/task-runs` | TaskRun 列表、状态/flow/workflow/task_run 查询、详情跳转 |
+| `/audit-events` | Audit 查询和 metadata 查看 |
+| `/tool-calls` | ToolCall 查询、preview/result/idempotency 查看 |
 
-1. control-plane `/api/v1` Registry 管理 API。
-2. 标准错误映射和 OpenAPI。
-3. Header 认证与最小 RBAC：`platform_admin`、`capability_operator`、`auditor`。
-4. Human Task、TaskRun、Audit、ToolCall 运营查询 BFF。
-5. runtime-api Human Task / TaskRun 查询最小扩展。
-6. tool-gateway Audit / ToolCall 查询最小扩展和敏感字段脱敏。
-7. control-plane Fastify API + Vite 静态资源单容器 Node runtime。
-8. `smoke:control-plane-api-e2e` 管理 API smoke。
+## 当前验收
 
-尚未完成：
+- 前端不再使用硬编码 sample 数据作为默认渲染源。
+- 所有页面请求走 control-plane 同源 `/api/v1/...`。
+- 前端不直接请求 runtime-api 或 tool-gateway；BFF 页面只使用 `/api/v1/operations/...`。
+- 开发环境可用 Identity Panel 设置 `user_id`、`tenant_id`、`roles`。
+- production 不默默伪造管理员；缺少身份由 API 返回 401，页面显示友好错误。
+- auditor 只显示只读视图；写操作由 RBAC guard 隐藏或由 API 返回 403。
+- 发布、灰度、回滚、废弃、禁用、Human Task approve/reject 都有二次确认。
+- `smoke:control-plane-ui-e2e` 提供浏览器级 UI smoke。
 
-1. 完整 React 运营页面。
-2. 低代码流程画布。
-3. 企业 SSO。
-4. 真实 Pi / 真实模型 / 真实业务系统适配。
+## 后续不在本阶段
 
-## 重点功能
-
-1. Flow 编排管理：草稿、校验、版本、发布、下线。
-2. Route 配置：触发样例、负样例、关键词、适用渠道、适用角色、阈值。
-3. Agent 管理：Prompt、模型策略、工具白名单、输出 Schema、预算。
-4. Tool 管理：Manifest、风险等级、权限策略、Adapter 配置、测试调用。
-5. 发布治理：校验、测试集、灰度、回滚、审计。
-6. Human Task：当前通过 BFF 查询与 approve/reject；完整运营页面后续实现。
-7. 运营看板：当前提供 Dashboard Summary API；完整图表页面后续实现。
+1. 低代码流程画布和拖拽编排器。
+2. 企业 SSO。
+3. 真实 Pi / 真实模型调用。
+4. 真实业务系统 adapter 和凭据管理。
+5. 随机灰度或复杂流量分配。

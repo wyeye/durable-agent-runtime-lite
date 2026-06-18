@@ -22,7 +22,8 @@
     "seed:examples": "tsx scripts/seed-examples.ts",
     "smoke:db-registry": "tsx scripts/smoke-db-registry.ts",
     "smoke:temporal-db-e2e": "tsx scripts/smoke-temporal-db-e2e.ts",
-    "smoke:control-plane-api-e2e": "tsx scripts/smoke-control-plane-api-e2e.ts"
+    "smoke:control-plane-api-e2e": "tsx scripts/smoke-control-plane-api-e2e.ts",
+    "smoke:control-plane-ui-e2e": "tsx scripts/smoke-control-plane-ui-e2e.ts"
   },
   "devDependencies": {
     "@dar/config": "workspace:*",

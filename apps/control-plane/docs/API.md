@@ -86,6 +86,50 @@ GET  /api/v1/operations/tool-calls/:toolCallId
 
 BFF 会向下游透传 `x-user-id`、`x-tenant-id`、`x-roles`、`x-request-id`，下游不可用映射为 `503 DOWNSTREAM_UNAVAILABLE`。
 
+## React 运营页面
+
+Fastify 在 production 同进程托管 Vite build 产物。前端页面均通过本文件中的 `/api/v1` API 获取数据：
+
+```text
+/dashboard
+/registry/flows
+/registry/routes
+/registry/tools
+/registry/agents
+/registry/prompts
+/releases
+/human-tasks
+/task-runs
+/audit-events
+/tool-calls
+```
+
+开发身份面板会为 API client 注入：
+
+```text
+x-user-id
+x-tenant-id
+x-roles
+x-request-id
+```
+
+页面不硬编码 runtime-api / tool-gateway 地址，也不直接访问下游服务。Operations 页面必须通过 control-plane BFF。
+
+Registry 页面使用 JSON 编辑器管理 draft：
+
+- JSON parse 失败不提交。
+- `PUT` 自动携带当前 `revision` 作为 `expected_revision`。
+- `409` 显示 optimistic lock / immutable version 友好提示。
+- `422` 展示 validate errors/warnings/dependency graph。
+- 发布、灰度、回滚、废弃、禁用均要求二次确认和 `release_note`。
+- gray 支持 tenant allowlist。
+
+Human Task 页面：
+
+- `auditor` 只读，不显示 approve/reject。
+- `platform_admin` 和 `capability_operator` 可通过 BFF approve/reject。
+- 审批理由会作为 `decision_reason` 下发给 runtime-api。
+
 ## 错误码
 
 常见映射：

@@ -1,31 +1,5 @@
 # control-plane 开发规范
 
-## 模块划分
-
-```text
-modules/flow-registry
-modules/route-registry
-modules/tool-registry
-modules/agent-registry
-modules/prompt-registry
-modules/release
-modules/human-task
-modules/dashboard
-modules/audit-viewer
-modules/registry
-```
-
-## API 约定
-
-- 草稿类接口使用 `POST /api/v1/<resources>`。
-- 更新草稿接口使用 `PUT /api/v1/<resources>/:id/versions/:version`，必须带 `expected_revision`。
-- 发布类接口使用 `POST /api/v1/<resources>/:id/versions/:version/publish`。
-- 灰度类接口使用 `POST /api/v1/<resources>/:id/versions/:version/gray`。
-- 回滚类接口使用 `POST /api/v1/<resources>/:id/rollback`。
-- 所有发布接口必须写 `capability_release` 和 `audit_event`。
-- Flow + Route 联合发布使用 `POST /api/v1/releases/flow-route`。
-- OpenAPI 输出 `GET /openapi.json`；Swagger UI 为 `GET /docs`。
-
 ## 服务端结构
 
 ```text
@@ -39,56 +13,26 @@ src/server/
   utils/
 ```
 
-`createApp()` 和 `listen()` 分离，测试通过 `app.inject()` 覆盖管理 API、BFF、OpenAPI 和静态资源 fallback。
+服务端继续使用 Fastify。`createApp()` 和 `listen()` 分离；Registry API、Operations BFF、OpenAPI、静态文件托管都在同一个 `control-plane` app 内。
 
-## 数据写入规则
-
-- `published` 版本不可变，不允许原地修改。
-- `gray`、`deprecated`、`disabled` 版本也不可通过 draft 更新接口修改。
-- `draft` 和 `validated` 可以修改；修改 `validated` 会回到 `draft`。
-- `updateDraft` 必须携带 `expected_revision`，冲突返回明确 optimistic lock 错误。
-- 修改已发布流程必须生成新版本。
-- 下线只改变状态，不物理删除。
-- FlowSpec、RouteSpec、AgentSpec、PromptDefinition、ToolManifest 需要保存 `sha256`。
-- `archived` 不再作为新状态；历史数据由 migration 转成 `deprecated`。
-- `capability_release` 是 append-only，不允许用修改历史 release 记录伪造回滚。
-
-## 状态机
-
-允许：
+## 前端结构
 
 ```text
-draft -> validated
-validated -> draft
-validated -> published
-published -> gray
-gray -> published
-published -> deprecated
-gray -> deprecated
-draft/validated/published/gray -> disabled
+src/web/
+  main.tsx
+  App.tsx
+  router.tsx
+  api/
+  auth/
+  layout/
+  pages/
+  components/
+  utils/
 ```
 
-禁止原地恢复：
+前端使用 React、Vite、Ant Design、React Router、React Query。所有请求必须走同源 `/api/v1/...`，不能硬编码 runtime-api 或 tool-gateway 地址。
 
-```text
-published -> draft
-gray -> draft
-deprecated -> published
-disabled -> published
-```
-
-重新启用必须 clone 新版本。
-
-## 发布与灰度
-
-- 发布、灰度、回滚、废弃、禁用必须在事务中完成。
-- Flow 和绑定 Route 支持联合事务发布。
-- 灰度只支持 deterministic allowlist：`tenant_allowlist` 和可选 `user_allowlist`。
-- 不允许随机流量分流。
-- 运行路径只读取 `published` / `gray`。
-- 已运行 Temporal Workflow 继续使用启动时锁定的 `db://flow/...` 版本。
-
-## 认证与权限
+## 身份与权限
 
 Header 认证来源：
 
@@ -99,39 +43,62 @@ x-roles
 x-request-id
 ```
 
-角色：
+开发环境提供 Identity Panel，可写入 localStorage。production 不创建默认管理员；缺少身份时 API 返回 401，前端显示“缺少身份”。
 
-- `platform_admin`：全部读写、发布治理和 Human Task 决策。
+角色规则：
+
+- `platform_admin`：全部读写、发布治理、Human Task 决策。
 - `capability_operator`：Registry 读写、校验、发布、灰度、回滚、Human Task 决策和运行记录读取。
-- `auditor`：只读 Registry、release、TaskRun、Human Task、Audit、ToolCall。
+- `auditor`：只读 Registry、Release、TaskRun、Human Task、Audit、ToolCall，不显示写操作。
 
-`CONTROL_PLANE_AUTH_MODE=disabled` 仅允许 development/test；production 必须为 `header`。
+## Registry UI 规则
 
-## 错误映射
+- 五类资源使用统一 ResourcePage，但每类资源必须展示自己的关键字段。
+- 创建和编辑使用 JSON textarea；JSON 解析失败不提交。
+- `PUT` 必须使用当前版本 `revision` 作为 `expected_revision`。
+- `draft` / `validated` 可编辑；`published` / `gray` / `deprecated` / `disabled` 不可编辑。
+- 修改已发布资源必须 clone 新版本。
+- `validated` 被编辑后由后端回到 `draft`，前端以 API 返回状态为准。
+- `archived` 不作为新状态展示。
+- validate 结果展示 `errors`、`warnings` 和 `dependency_graph`。
+- publish、gray、rollback、deprecate、disable 必须输入 `release_note` 并二次确认。
+- gray 支持 `tenant_allowlist` 和可选 `user_allowlist`，不使用随机分流。
+- rollback 选择目标版本；rollback 不修改历史 spec 内容。
+- 版本对比使用两侧格式化 JSON，暂不引入重型 diff 依赖。
 
-- `400`：请求格式或参数错误。
-- `401`：缺少身份。
-- `403`：权限不足。
-- `404`：资源或版本不存在。
-- `409`：revision 冲突、发布版本原地修改、重复版本或非法状态转换。
-- `422`：Registry 校验失败或依赖不可发布。
-- `503`：runtime-api / tool-gateway 下游不可用。
-- `500`：未知服务端错误。
+## 运行查询 UI 规则
 
-错误响应不得包含 SQL、连接串、stack trace 或敏感 payload。
+- Human Task 页面只调用 `/api/v1/operations/human-tasks...`，审批由 runtime-api 负责状态机。
+- TaskRun 页面只调用 `/api/v1/operations/task-runs...`。
+- Audit 和 ToolCall 页面只调用 `/api/v1/operations/audit-events`、`/api/v1/operations/tool-calls`。
+- 前端不还原敏感字段；后端脱敏后原样展示。
+- 下游不可用显示 503 友好错误。
 
-## UI 规范
+## 常见错误展示
 
-- 所有发布动作需要二次确认。
-- 所有高风险工具要醒目标注。
-- 流程引用不存在的 Tool / Agent / Prompt 时禁止发布。
-- 页面要展示当前版本、灰度比例、最近发布时间、发布人。
+- `401`：缺少身份，提示设置 Identity Panel 或检查生产认证头。
+- `403`：权限不足，提示当前角色不能执行该操作。
+- `409`：revision 冲突、发布版本不可原地修改、重复版本或非法状态转换。
+- `422`：Registry validate 未通过或依赖不可发布，展示校验详情。
+- `503`：DB、runtime-api 或 tool-gateway 不可用。
 
-## 测试要求
+## 测试与 smoke
 
-- contracts 管理 API Schema 测试。
-- control-plane API 权限、错误映射、OpenAPI、静态资源和 BFF 测试。
-- runtime-api Human Task / TaskRun 查询测试。
-- tool-gateway Audit / ToolCall 查询和脱敏测试。
-- Dockerfile 单容器约束测试。
-- `smoke:control-plane-api-e2e` 验证管理 API 和 BFF 基础链路。
+常规验证：
+
+```bash
+corepack pnpm lint
+corepack pnpm typecheck
+corepack pnpm test
+corepack pnpm build
+```
+
+Docker/DB smoke：
+
+```bash
+corepack pnpm smoke:temporal-db-e2e
+corepack pnpm smoke:control-plane-api-e2e
+corepack pnpm smoke:control-plane-ui-e2e
+```
+
+UI smoke 需要 control-plane、runtime-api、runtime-worker、tool-gateway、PostgreSQL、Temporal 已运行。它会在浏览器中设置开发身份，验证页面渲染，创建并发布 Registry 资源，执行 router preview、rollback，并通过 Human Task 页面 approve 一个 L3 pending task。

@@ -176,6 +176,18 @@ corepack pnpm smoke:control-plane-api-e2e
 
 control-plane API smoke 会额外验证 header auth、RBAC、Registry draft/validate/publish/rollback、Flow + Route 联合发布、release history、runtime-api router preview 命中新发布 Route，以及 BFF Human Task / Audit / ToolCall 查询。
 
+control-plane UI smoke 会在浏览器中打开 `http://localhost:3100`，设置开发身份，验证 Dashboard、Registry、Release、Human Task、TaskRun、Audit、ToolCall 页面，并通过 UI approve 一个 L3 pending Human Task：
+
+```bash
+corepack pnpm smoke:control-plane-ui-e2e
+```
+
+如果本机没有 Playwright Chromium：
+
+```bash
+corepack pnpm --filter @dar/control-plane exec playwright install chromium
+```
+
 ## Control-plane API
 
 control-plane 生产容器是单个 Node/Fastify 进程，监听 `PORT=3100`，同时提供 API 和前端静态资源：
@@ -187,6 +199,24 @@ GET /openapi.json
 GET /docs
 /api/v1/*
 ```
+
+React 运营页面：
+
+```text
+/dashboard
+/registry/flows
+/registry/routes
+/registry/tools
+/registry/agents
+/registry/prompts
+/releases
+/human-tasks
+/task-runs
+/audit-events
+/tool-calls
+```
+
+页面只请求同源 `/api/v1/...`。Registry 页面支持 JSON draft 编辑、validate、publish、gray、rollback、deprecate、disable、release history 和版本对比；Operations 页面通过 control-plane BFF 查询 runtime-api/tool-gateway。
 
 身份来自 `x-user-id`、`x-tenant-id`、`x-roles` 和可选 `x-request-id`。生产环境必须使用 `CONTROL_PLANE_AUTH_MODE=header`，不会默认启用管理员身份。
 
@@ -252,6 +282,7 @@ pnpm seed:examples
 pnpm smoke:db-registry
 pnpm smoke:temporal-db-e2e
 pnpm smoke:control-plane-api-e2e
+pnpm smoke:control-plane-ui-e2e
 ```
 
 ## DB-backed Source of Truth

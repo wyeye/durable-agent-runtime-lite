@@ -57,6 +57,7 @@ corepack pnpm seed:examples
 docker compose -f infra/docker-compose.yml up -d tool-gateway runtime-worker runtime-api control-plane
 corepack pnpm smoke:temporal-db-e2e
 corepack pnpm smoke:control-plane-api-e2e
+corepack pnpm smoke:control-plane-ui-e2e
 ```
 
 Host-side DB initialization can also use:
@@ -153,6 +154,31 @@ The smoke checks:
 - published v1 immutable update conflict;
 - v2 publish and rollback to v1;
 - BFF Human Task, Audit, and ToolCall query endpoints.
+
+## Control-plane UI smoke
+
+After the same integrated stack is running:
+
+```bash
+corepack pnpm smoke:control-plane-ui-e2e
+```
+
+The UI smoke uses Playwright from `apps/control-plane` and opens `http://localhost:3100` by default. It verifies:
+
+- the Fastify-served React app opens;
+- development identity can be set in the Identity Panel;
+- Registry pages render data from `/api/v1`, not embedded sample rows;
+- Prompt, Tool, Agent, Flow and Route drafts can be created and published through control-plane API in a browser context;
+- runtime-api router preview sees the newly published Route;
+- v2 publish and rollback return new requests to v1;
+- Human Task page can approve a pending L3 task through the BFF;
+- TaskRun, Audit and ToolCall pages are reachable.
+
+If browser dependencies are missing:
+
+```bash
+corepack pnpm --filter @dar/control-plane exec playwright install chromium
+```
 
 If smoke fails, inspect:
 

@@ -1,0 +1,266 @@
+import type { ColumnsType } from 'antd/es/table';
+import type { FlowStep, RegistryResourceType, ToolRiskLevel } from '@dar/contracts';
+import { Alert, Descriptions, Table, Tag, Typography } from 'antd';
+import { RiskNotice, RiskTag } from '../../components/RiskTag.js';
+import { formatList } from '../../utils/format.js';
+import { isRecord, readNumber, readString, readStringArray } from '../../utils/json.js';
+import type { RegistryRecord } from '../../api/registry-api.js';
+
+export interface ResourceConfig {
+  type: RegistryResourceType;
+  plural: string;
+  idLabel: string;
+  title: string;
+  description: string;
+  getIdFromSpec(spec: unknown): string | undefined;
+  makeDraftTemplate(): unknown;
+  renderSummary(record: RegistryRecord): React.ReactNode;
+  renderListExtra?(record: RegistryRecord): React.ReactNode;
+}
+
+export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
+  flow: {
+    type: 'flow',
+    plural: 'flows',
+    idLabel: 'flow_id',
+    title: 'Flow Registry',
+    description: '管理 FlowSpec 生命周期、依赖校验和发布版本。',
+    getIdFromSpec: (spec) => readStringField(spec, 'flow_id'),
+    makeDraftTemplate: () => ({
+      flow_id: 'flow_id_here',
+      version: 1,
+      name: 'Flow name',
+      runtime: {
+        workflow_type: 'ConfigDrivenWorkflow',
+        task_queue: 'config-driven',
+      },
+      input_schema: {},
+      output_schema: {},
+      steps: [
+        {
+          id: 'start',
+          type: 'activity',
+          activity: 'activity.name',
+          input: {},
+        },
+      ],
+      metadata: {},
+    }),
+    renderSummary: renderFlowSummary,
+    renderListExtra: (record) => {
+      const spec = asRecord(record.spec);
+      const steps = Array.isArray(spec.steps) ? spec.steps : [];
+      return <Tag>{steps.length} steps</Tag>;
+    },
+  },
+  route: {
+    type: 'route',
+    plural: 'routes',
+    idLabel: 'route_id',
+    title: 'Route Registry',
+    description: '管理 RouteSpec 匹配信号、阈值、灰度策略和发布版本。',
+    getIdFromSpec: (spec) => readStringField(spec, 'route_id') ?? routeIdFromSpec(spec),
+    makeDraftTemplate: () => ({
+      route_id: 'route_id_here',
+      flow_id: 'flow_id_here',
+      version: 1,
+      route: {
+        priority: 50,
+        keywords: ['keyword'],
+        examples: ['example input'],
+        negative_examples: [],
+        supported_channels: ['web'],
+        role_constraints: [],
+        confidence_threshold: 0.7,
+        ambiguous_threshold: 0.5,
+      },
+    }),
+    renderSummary: renderRouteSummary,
+  },
+  tool: {
+    type: 'tool',
+    plural: 'tools',
+    idLabel: 'tool_name',
+    title: 'Tool Registry',
+    description: '管理 ToolManifest、风险等级、副作用和 adapter 元数据。',
+    getIdFromSpec: (spec) => readStringField(spec, 'tool_name'),
+    makeDraftTemplate: () => ({
+      tool_name: 'tool.name',
+      version: '1.0.0',
+      description: 'Tool description',
+      risk_level: 'L1',
+      side_effect: false,
+      adapter: {
+        type: 'mock',
+        config: {},
+      },
+      input_schema: {},
+      output_schema: {},
+      required_permissions: [],
+    }),
+    renderSummary: renderToolSummary,
+    renderListExtra: (record) => {
+      const spec = asRecord(record.spec);
+      return <RiskTag risk={readString(spec.risk_level)} />;
+    },
+  },
+  agent: {
+    type: 'agent',
+    plural: 'agents',
+    idLabel: 'agent_id',
+    title: 'Agent Registry',
+    description: '管理 AgentSpec、Prompt 引用、allowed_tools 和执行边界。',
+    getIdFromSpec: (spec) => readStringField(spec, 'agent_id'),
+    makeDraftTemplate: () => ({
+      agent_id: 'agent_id_here',
+      version: 1,
+      prompt_ref: 'prompt_id@1',
+      model_policy: 'mock',
+      allowed_tools: [],
+      max_steps: 6,
+      max_tokens: 12000,
+    }),
+    renderSummary: renderAgentSummary,
+  },
+  prompt: {
+    type: 'prompt',
+    plural: 'prompts',
+    idLabel: 'prompt_id',
+    title: 'Prompt Registry',
+    description: '管理 PromptDefinition 内容、变量和发布版本。',
+    getIdFromSpec: (spec) => readStringField(spec, 'prompt_id'),
+    makeDraftTemplate: () => ({
+      prompt_id: 'prompt_id_here',
+      version: 1,
+      name: 'Prompt name',
+      content: 'Write prompt content here. Use {{variable_name}} for template variables.',
+      variables: ['variable_name'],
+    }),
+    renderSummary: renderPromptSummary,
+  },
+};
+
+function renderFlowSummary(record: RegistryRecord) {
+  const spec = asRecord(record.spec);
+  const steps = Array.isArray(spec.steps) ? spec.steps.filter(isRecord) as FlowStep[] : [];
+  const columns: ColumnsType<FlowStep> = [
+    { title: 'step id', dataIndex: 'id', key: 'id' },
+    { title: 'type', dataIndex: 'type', key: 'type' },
+    { title: 'tool', dataIndex: 'tool', key: 'tool', render: (value: string | undefined) => value ?? '-' },
+    { title: 'agent', dataIndex: 'agent_id', key: 'agent_id', render: (value: string | undefined) => value ?? '-' },
+    { title: 'activity', dataIndex: 'activity', key: 'activity', render: (value: string | undefined) => value ?? '-' },
+    { title: 'mode', dataIndex: 'mode', key: 'mode', render: (value: string | undefined) => value ?? '-' },
+    { title: 'risk', dataIndex: 'risk_level', key: 'risk_level', render: (value: ToolRiskLevel | undefined) => value ? <RiskTag risk={value} /> : '-' },
+  ];
+  const hasL3PreviewCommit = steps.some((step) => step.type === 'tool' && (step.risk_level === 'L3' || step.mode === 'preview_commit') && step.mode === 'preview_commit');
+  return (
+    <>
+      <Descriptions bordered size="small" column={2}>
+        <Descriptions.Item label="flow_id">{readString(spec.flow_id) ?? record.resource_id}</Descriptions.Item>
+        <Descriptions.Item label="version">{record.version}</Descriptions.Item>
+        <Descriptions.Item label="workflow_type">{readString(asRecord(spec.runtime).workflow_type) ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="steps">{steps.length}</Descriptions.Item>
+      </Descriptions>
+      <Alert
+        style={{ marginTop: 12 }}
+        type={hasL3PreviewCommit ? 'success' : 'info'}
+        showIcon
+        message="L3 human confirmation path"
+        description={hasL3PreviewCommit ? 'Flow 中存在 preview_commit 路径。' : '如 Flow 引用 L3 Tool，validate 会强制检查 preview_commit。'}
+      />
+      <Table size="small" rowKey="id" columns={columns} dataSource={steps} pagination={false} style={{ marginTop: 12 }} />
+    </>
+  );
+}
+
+function renderRouteSummary(record: RegistryRecord) {
+  const spec = asRecord(record.spec);
+  const route = asRecord(spec.route);
+  return (
+    <Descriptions bordered size="small" column={2}>
+      <Descriptions.Item label="route_id">{readString(spec.route_id) ?? record.resource_id}</Descriptions.Item>
+      <Descriptions.Item label="flow_id">{readString(spec.flow_id) ?? '-'}</Descriptions.Item>
+      <Descriptions.Item label="flow_version">{readNumber(spec.version) ?? record.version}</Descriptions.Item>
+      <Descriptions.Item label="priority">{readNumber(route.priority) ?? '-'}</Descriptions.Item>
+      <Descriptions.Item label="confidence_threshold">{readNumber(route.confidence_threshold) ?? '-'}</Descriptions.Item>
+      <Descriptions.Item label="ambiguous_threshold">{readNumber(route.ambiguous_threshold) ?? '-'}</Descriptions.Item>
+      <Descriptions.Item label="keywords">{formatList(readStringArray(route.keywords))}</Descriptions.Item>
+      <Descriptions.Item label="examples">{formatList(readStringArray(route.examples))}</Descriptions.Item>
+      <Descriptions.Item label="negative_examples">{formatList(readStringArray(route.negative_examples))}</Descriptions.Item>
+      <Descriptions.Item label="channels">{formatList(readStringArray(route.supported_channels))}</Descriptions.Item>
+      <Descriptions.Item label="roles">{formatList(readStringArray(route.role_constraints))}</Descriptions.Item>
+      <Descriptions.Item label="gray tenant allowlist">{formatList(record.gray_policy.tenant_allowlist)}</Descriptions.Item>
+    </Descriptions>
+  );
+}
+
+function renderToolSummary(record: RegistryRecord) {
+  const spec = asRecord(record.spec);
+  const adapter = asRecord(spec.adapter);
+  const risk = readString(spec.risk_level);
+  return (
+    <>
+      <Descriptions bordered size="small" column={2}>
+        <Descriptions.Item label="tool_name">{readString(spec.tool_name) ?? record.resource_id}</Descriptions.Item>
+        <Descriptions.Item label="version">{readString(spec.version) ?? record.version}</Descriptions.Item>
+        <Descriptions.Item label="risk_level"><RiskTag risk={risk} /></Descriptions.Item>
+        <Descriptions.Item label="side_effect">{String(Boolean(spec.side_effect))}</Descriptions.Item>
+        <Descriptions.Item label="adapter.type">{readString(adapter.type) ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="required_permissions">{formatList(readStringArray(spec.required_permissions))}</Descriptions.Item>
+      </Descriptions>
+      <div style={{ marginTop: 12 }}><RiskNotice risk={risk} sideEffect={Boolean(spec.side_effect)} /></div>
+      <Typography.Title level={5}>input_schema</Typography.Title>
+      <pre className="cp-json-pre">{JSON.stringify(spec.input_schema ?? {}, null, 2)}</pre>
+      <Typography.Title level={5}>output_schema</Typography.Title>
+      <pre className="cp-json-pre">{JSON.stringify(spec.output_schema ?? {}, null, 2)}</pre>
+    </>
+  );
+}
+
+function renderAgentSummary(record: RegistryRecord) {
+  const spec = asRecord(record.spec);
+  return (
+    <Descriptions bordered size="small" column={2}>
+      <Descriptions.Item label="agent_id">{readString(spec.agent_id) ?? record.resource_id}</Descriptions.Item>
+      <Descriptions.Item label="prompt_ref">{readString(spec.prompt_ref) ?? '-'}</Descriptions.Item>
+      <Descriptions.Item label="allowed_tools">{formatList(readStringArray(spec.allowed_tools))}</Descriptions.Item>
+      <Descriptions.Item label="max_steps">{readNumber(spec.max_steps) ?? '-'}</Descriptions.Item>
+      <Descriptions.Item label="max_tokens">{readNumber(spec.max_tokens) ?? '-'}</Descriptions.Item>
+      <Descriptions.Item label="model_policy">{readString(spec.model_policy) ?? '-'}</Descriptions.Item>
+      <Descriptions.Item label="output_schema" span={2}>{readString(spec.output_schema) ?? '-'}</Descriptions.Item>
+    </Descriptions>
+  );
+}
+
+function renderPromptSummary(record: RegistryRecord) {
+  const spec = asRecord(record.spec);
+  const content = readString(spec.content) ?? '';
+  return (
+    <>
+      <Descriptions bordered size="small" column={2}>
+        <Descriptions.Item label="prompt_id">{readString(spec.prompt_id) ?? record.resource_id}</Descriptions.Item>
+        <Descriptions.Item label="version">{readNumber(spec.version) ?? record.version}</Descriptions.Item>
+        <Descriptions.Item label="name">{readString(spec.name) ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="variables">{formatList(readStringArray(spec.variables))}</Descriptions.Item>
+      </Descriptions>
+      <Alert style={{ marginTop: 12 }} type="info" showIcon message="模板变量格式" description="变量应使用合法标识符，Prompt 内容中的疑似密钥会由 validate 检查并展示 warning/error。" />
+      <Typography.Title level={5}>content</Typography.Title>
+      <pre className="cp-json-pre">{content}</pre>
+    </>
+  );
+}
+
+function readStringField(spec: unknown, field: string): string | undefined {
+  return readString(asRecord(spec)[field]);
+}
+
+function routeIdFromSpec(spec: unknown): string | undefined {
+  const record = asRecord(spec);
+  const flowId = readString(record.flow_id);
+  const version = readNumber(record.version);
+  return flowId && version ? `${flowId}@${version}` : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}

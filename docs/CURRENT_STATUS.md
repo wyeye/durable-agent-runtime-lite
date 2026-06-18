@@ -1,8 +1,8 @@
 # Current Status
 
-Last updated for CP-R3 + CP-R4: control-plane Registry API and single-container API/static runtime.
+Last updated for CP-R5 + CP-R6: complete control-plane React operations UI and UI smoke.
 
-## Completed Before CP-R3 + CP-R4
+## Completed Platform Capabilities
 
 1. DB-backed FlowSpec / RouteSpec / ToolManifest source of truth.
 2. runtime-api DB route source without production fallback to memory sample data.
@@ -17,29 +17,43 @@ Last updated for CP-R3 + CP-R4: control-plane Registry API and single-container 
 11. `RegistryReleaseService`.
 12. Publish, Flow + Route joint publish, gray, rollback, deprecate, disable.
 13. Deterministic gray allowlist selection.
-14. Docker + PostgreSQL + Temporal smoke path: `smoke:temporal-db-e2e`.
+14. Header authentication and RBAC for control-plane.
+15. control-plane Registry management API.
+16. control-plane standard error mapping and OpenAPI.
+17. control-plane operations BFF for Human Task, TaskRun, Audit and ToolCall.
+18. runtime-api minimal Human Task and TaskRun query extensions.
+19. tool-gateway minimal Audit and ToolCall query extensions with sensitive field masking.
+20. control-plane Fastify API + Vite static resources in one Node/Fastify container.
+21. Docker + PostgreSQL + Temporal smoke path: `smoke:temporal-db-e2e`.
+22. control-plane API smoke: `smoke:control-plane-api-e2e`.
+23. control-plane UI smoke: `smoke:control-plane-ui-e2e`.
 
-## Completed In CP-R3 + CP-R4
+## Completed In CP-R5 + CP-R6
 
-1. Shared control-plane API contracts in `packages/contracts`.
-2. Header authentication and minimal RBAC in `packages/security`.
-3. control-plane Fastify server structure under `apps/control-plane/src/server`.
-4. Standard control-plane error mapping to `StandardErrorResponse`.
-5. OpenAPI generation at `/openapi.json` and optional Swagger UI at `/docs`.
-6. Registry management API for Flow, Route, Tool, Agent, and Prompt.
-7. Flow + Route atomic publish API: `POST /api/v1/releases/flow-route`.
-8. Release list and release detail APIs.
-9. Operations BFF:
-   - Human Task list/detail/approve/reject through runtime-api;
-   - TaskRun list/detail through runtime-api;
-   - Audit and ToolCall query through tool-gateway.
-10. runtime-api minimal Human Task and TaskRun query extensions.
-11. tool-gateway minimal Audit and ToolCall query extensions.
-12. Sensitive field masking for audit payload and tool call preview/result output.
-13. control-plane production static hosting of Vite build output through Fastify.
-14. control-plane Dockerfile switched from Nginx static image to Node/Fastify single container.
-15. Docker Compose environment updated for control-plane DB, runtime-api, tool-gateway, auth, and port `3100`.
-16. API E2E smoke script: `smoke:control-plane-api-e2e`.
+1. React app moved under `apps/control-plane/src/web`.
+2. Unified same-origin API client for `/api/v1/...`.
+3. Development Identity Panel with `user_id`, `tenant_id`, and `roles`.
+4. RBAC-aware write buttons and auditor read-only notice.
+5. Dashboard page.
+6. Generic Registry ResourcePage for Flow, Route, Tool, Agent and Prompt.
+7. JSON draft create/edit with local parse guard and formatting.
+8. `expected_revision` draft update support.
+9. Validate result display with errors, warnings and dependency graph.
+10. Publish, gray, rollback, deprecate and disable confirmation modals with `release_note`.
+11. Gray tenant/user allowlist input.
+12. Release history and Release Center.
+13. Simple side-by-side JSON version comparison.
+14. Flow step summary.
+15. Route threshold, examples, channel, role and gray allowlist summary.
+16. Tool L3/L4 risk labels and warnings.
+17. Agent Prompt/Tool dependency summary.
+18. Prompt content and variable summary.
+19. Human Task list/detail and approve/reject through BFF.
+20. TaskRun list/detail with links to Human Task, Audit and ToolCall.
+21. AuditEvent list/detail through BFF.
+22. ToolCall list/detail through BFF.
+23. Frontend tests for API client, auth headers, error mapping, Registry page model and no legacy sample default rows.
+24. Browser UI smoke script that validates Registry publish/rollback and UI Human Task approval.
 
 ## Runtime Compatibility
 
@@ -63,7 +77,7 @@ runtime-api avoids DB production fallback to memory/default/sample routes. tool-
 
 Temporal workflow inputs continue to use immutable `db://flow/{flow_id}/versions/{version}` refs, so running workflows are not changed by later publish, gray, rollback, disable, or deprecate operations.
 
-control-plane does not execute tools and does not copy the Human Task state machine. It acts as Registry management API plus BFF for runtime-api and tool-gateway operations queries.
+control-plane does not execute tools and does not copy the Human Task state machine. UI operations go through control-plane API/BFF.
 
 ## Security Model
 
@@ -90,34 +104,20 @@ CONTROL_PLANE_AUTH_MODE=header
 
 `disabled` auth mode is allowed only in development/test. Production never silently uses a default administrator.
 
-## Documentation
-
-Primary current docs:
+## Primary Docs
 
 - `docs/15_registry_lifecycle.md`
 - `docs/16_control_plane_api.md`
 - `docs/17_control_plane_security.md`
+- `docs/18_control_plane_ui.md`
 - `apps/control-plane/docs/API.md`
 - `apps/control-plane/docs/DEV_PLAN.md`
 - `apps/control-plane/docs/DEV_SPEC.md`
 - `docs/13_docker_deployment.md`
 
-## Verification Status
+## Verification Commands
 
-Targeted checks already run during CP-R3 + CP-R4 implementation:
-
-```bash
-corepack pnpm --filter @dar/contracts test
-corepack pnpm --filter @dar/security test
-corepack pnpm --filter @dar/control-plane typecheck
-corepack pnpm typecheck
-corepack pnpm --filter @dar/control-plane test
-corepack pnpm --filter @dar/runtime-api test
-corepack pnpm --filter @dar/tool-gateway test
-corepack pnpm test
-```
-
-Final full verification before handoff should include:
+The expected final verification set is:
 
 ```bash
 corepack pnpm lint
@@ -132,26 +132,24 @@ corepack pnpm seed:examples
 docker compose -f infra/docker-compose.yml up -d tool-gateway runtime-worker runtime-api control-plane
 corepack pnpm smoke:temporal-db-e2e
 corepack pnpm smoke:control-plane-api-e2e
+corepack pnpm smoke:control-plane-ui-e2e
 ```
 
 ## Not Completed Yet
 
 This stage intentionally does not implement:
 
-1. Full React operations pages.
-2. Low-code flow canvas.
-3. Real Pi integration.
-4. Real model calls.
-5. Real business system adapters.
-6. Enterprise SSO.
-7. Any fifth production app.
+1. Low-code flow canvas or drag-and-drop designer.
+2. Real Pi integration.
+3. Real model calls.
+4. Real business system adapters.
+5. Enterprise SSO.
+6. Random gray traffic splitting.
+7. Any fifth production app or production container.
 
 ## Suggested Next Batch
 
-Implement the first real control-plane React Registry pages on top of the completed API:
-
-1. Registry list/detail/version pages.
-2. JSON editor for Flow, Route, Tool, Agent, and Prompt drafts.
-3. Validate/publish/gray/rollback action panels.
-4. Release history view.
-5. Operations dashboard and Human Task queue UI.
+1. Improve UI ergonomics around large JSON editing and schema hints.
+2. Add evaluation/test-set operations for Route and Flow releases.
+3. Add production identity integration behind the existing Header Auth boundary.
+4. Add richer diff visualization if reviewers need semantic spec diffs.
