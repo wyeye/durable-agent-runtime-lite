@@ -61,6 +61,8 @@ export interface TaskRunTable {
   flow_version: number | null;
   workflow_id: string | null;
   status: string;
+  error_code: string | null;
+  error_message: string | null;
   input_json: Json;
   route_result_json: Json | null;
   workflow_start_json: Json | null;

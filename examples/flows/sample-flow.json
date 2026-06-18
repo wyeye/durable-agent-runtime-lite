@@ -8,8 +8,23 @@
   },
   "steps": [
     { "id": "input_normalize", "type": "activity", "activity": "input.normalize" },
-    { "id": "knowledge_search", "type": "tool", "tool": "knowledge.search" },
+    {
+      "id": "knowledge_search",
+      "type": "tool",
+      "tool": "knowledge.search",
+      "input": {
+        "query": "${input.text}"
+      }
+    },
     { "id": "agent_plan", "type": "agent", "agent_id": "sample_agent" },
-    { "id": "record_write", "type": "tool", "tool": "record.write.mock", "risk_level": "L3" }
+    {
+      "id": "record_write",
+      "type": "tool",
+      "tool": "record.write.mock",
+      "risk_level": "L3",
+      "input": {
+        "record": "${state.steps.knowledge_search.result}"
+      }
+    }
   ]
 }

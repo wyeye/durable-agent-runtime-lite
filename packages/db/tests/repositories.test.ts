@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { FlowSpec, IdempotencyRecord, RouteSpec, ToolManifest } from '@dar/contracts';
+import type { FlowSpec, IdempotencyRecord, RouteSpec, TaskRun, ToolManifest } from '@dar/contracts';
 import {
   buildDbFlowSnapshotRef,
   FlowDefinitionRepository,
@@ -8,6 +8,7 @@ import {
   parseDbFlowSnapshotRef,
   RouteConfigRepository,
   stableStringify,
+  TaskRunRepository,
   ToolManifestRepository,
 } from '../src/index.js';
 
@@ -54,7 +55,7 @@ class FakeQuery {
   }
 
   set(value: unknown) {
-    this.first = value;
+    this.first = { ...(this.rows[0] as object | undefined), ...(value as object) };
     return this;
   }
 
@@ -200,5 +201,35 @@ describe('db repositories', () => {
         requestHash: 'hash_2',
       }),
     ).resolves.toMatchObject({ decision: 'conflict' });
+  });
+
+  it('updates task_run status with failure error details', async () => {
+    const taskRunRow: TaskRun = {
+      task_run_id: 'task_failed',
+      tenant_id: 'tenant_1',
+      user_id: 'user_1',
+      route_type: 'matched',
+      flow_id: 'sample_flow',
+      flow_version: 1,
+      workflow_id: 'workflow_1',
+      status: 'running',
+      created_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+      updated_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    };
+    const db = new FakeDb({ task_run: [taskRunRow] });
+
+    await expect(
+      new TaskRunRepository(db as never).updateStatus('task_failed', {
+        status: 'failed',
+        errorCode: 'TOOL_FAILED',
+        errorMessage: 'tool gateway request failed',
+      }),
+    ).resolves.toMatchObject({
+      status: 'failed',
+      error_code: 'TOOL_FAILED',
+      error_message: 'tool gateway request failed',
+    });
+
+    expect(db.calls.map((call) => call.table)).toEqual(['task_run']);
   });
 });

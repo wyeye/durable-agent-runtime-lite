@@ -5,7 +5,7 @@ Durable Agent Runtime Lite 是一个四应用通用 Agent Runtime 骨架：
 | App | 责任 |
 |---|---|
 | `apps/control-plane` | 能力运营端，Flow / Tool / Agent / TaskRun / Audit 最小页面 |
-| `apps/runtime-api` | 统一运行入口，规则 Router、TaskRun、Workflow Starter mock |
+| `apps/runtime-api` | 统一运行入口，规则 Router、TaskRun、Workflow Starter |
 | `apps/runtime-worker` | Temporal Worker 入口、ConfigDrivenWorkflow、GenericAgentWorkflow、Activity、Pi mock |
 | `apps/tool-gateway` | 工具唯一出口，Manifest、Schema 校验、幂等、审计、mock adapter |
 
@@ -23,7 +23,7 @@ pnpm build
 pnpm dev
 ```
 
-`pnpm dev` 会通过 Turborepo 并行启动各 workspace 的 dev 脚本。当前 MVP 默认使用 mock workflow starter、mock Pi Runner 和 mock tool adapter；未提供 `.env` 时会加载本地安全默认值。
+`pnpm dev` 会通过 Turborepo 并行启动各 workspace 的 dev 脚本。当前 MVP 开发默认使用 memory RouteSpec、mock workflow starter、mock Pi Runner 和 mock tool adapter；未提供 `.env` 时会加载本地安全默认值。
 
 可选配置：
 
@@ -48,7 +48,7 @@ RUNTIME_API_WORKFLOW_STARTER=mock
 RUNTIME_WORKER_MODE=mock
 ```
 
-DB 模式下不会回退到内置 sample RouteSpec 或 ToolManifest。缺失 RouteSpec 会返回明确未命中，缺失 ToolManifest 会返回 `TOOL_NOT_FOUND`。
+DB 模式下不会回退到内置 sample RouteSpec 或 ToolManifest。缺失 RouteSpec 会返回明确未命中，缺失 ToolManifest 会返回 `TOOL_NOT_FOUND`。生产或 Docker smoke 路径必须使用 DB source；不能用 `defaultRouteSpecs`、`sample_flow@1` 或 memory tool registry 伪造成功。
 
 ## 本地基础设施
 
@@ -71,11 +71,22 @@ pnpm seed:examples
 Docker 使用多个 app-specific Dockerfile，不使用根目录 Dockerfile；build context 必须是仓库根目录。
 
 ```bash
-scripts/docker-build-all.sh
-docker compose -f infra/docker-compose.yml up --build
-# 或
-scripts/docker-run-local.sh
+docker compose -f infra/docker-compose.yml config
+docker compose -f infra/docker-compose.yml build runtime-api runtime-worker tool-gateway control-plane
+docker compose -f infra/docker-compose.yml up -d postgres valkey temporal temporal-ui
+corepack pnpm db:migrate
+corepack pnpm seed:examples
+docker compose -f infra/docker-compose.yml up -d tool-gateway runtime-worker runtime-api control-plane
 ```
+
+也可以使用宿主机脚本执行 DB 初始化：
+
+```bash
+./scripts/docker-db-migrate.sh
+./scripts/docker-seed-examples.sh
+```
+
+这些命令在宿主机运行 `corepack pnpm db:migrate` / `corepack pnpm seed:examples`，默认连接 Docker Compose 暴露的 PostgreSQL：`postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime`。
 
 默认端口：
 
@@ -90,6 +101,26 @@ scripts/docker-run-local.sh
 | Temporal UI | http://localhost:8233 |
 | PostgreSQL | localhost:15432 |
 | Valkey | localhost:16380 |
+
+Docker Compose 中真实 smoke 相关环境变量：
+
+```text
+runtime-api:
+  RUNTIME_API_ROUTE_SOURCE=db
+  RUNTIME_API_WORKFLOW_STARTER=temporal
+  DATABASE_URL=postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
+  TEMPORAL_ADDRESS=temporal:7233
+
+runtime-worker:
+  RUNTIME_WORKER_MODE=temporal
+  DATABASE_URL=postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
+  TEMPORAL_ADDRESS=temporal:7233
+  TOOL_GATEWAY_URL=http://tool-gateway:3200
+
+tool-gateway:
+  TOOL_GATEWAY_REGISTRY_SOURCE=db
+  DATABASE_URL=postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
+```
 
 ## MVP smoke path
 
@@ -112,6 +143,28 @@ DATABASE_URL=postgres://dar:dar_local_password@localhost:15432/durable_agent_run
 
 该 smoke 脚本会 seed examples，调用 `runtime-api /v1/router/preview` 和 `/v1/tasks`，并断言 TaskRun 已写入 DB。
 
+真实 Docker / PostgreSQL / Temporal 端到端 smoke：
+
+```bash
+docker compose -f infra/docker-compose.yml up -d postgres valkey temporal temporal-ui
+corepack pnpm db:migrate
+corepack pnpm seed:examples
+docker compose -f infra/docker-compose.yml up -d tool-gateway runtime-worker runtime-api
+corepack pnpm smoke:temporal-db-e2e
+```
+
+`smoke:temporal-db-e2e` 会检查：
+
+1. `runtime-api`、`tool-gateway`、`runtime-worker` 的 `/healthz`；
+2. `POST /v1/router/preview` 命中 DB seed 的 `sample_route`，请求文本使用 `db-smoke`，不会被内置 `defaultRouteSpecs` 命中；
+3. `POST /v1/tasks` 返回真实 Temporal `workflow_id` 和 `task_run_id`；
+4. `GET /v1/tasks/:taskRunId` 轮询到 `completed`；
+5. DB `task_run` 状态为 `completed`；
+6. DB `audit_event` 有 `knowledge.search` 或 `record.write.mock` 工具审计；
+7. DB `idempotency_record` 有对应工具调用幂等记录。
+
+成功时会输出 JSON，包含 `ok: true`、`task_run_id`、`workflow_id`、最终状态、工具 audit events 和 idempotency records。失败时会输出 `workflow_id`、`task_run_id`、DB task_run、最近 audit event 和错误摘要；优先检查 task queue、`TOOL_GATEWAY_URL`、DB seed 是否存在、ToolManifest schema 是否与 FlowSpec step input 匹配。
+
 ## 关键命令
 
 ```bash
@@ -124,6 +177,7 @@ pnpm dev
 pnpm db:migrate
 pnpm seed:examples
 pnpm smoke:db-registry
+pnpm smoke:temporal-db-e2e
 ```
 
 ## DB-backed Source of Truth
@@ -133,7 +187,7 @@ pnpm smoke:db-registry
 - `FlowDefinitionRepository`：读写 `flow_definition`，读取 `published` / `gray` FlowSpec。
 - `RouteConfigRepository`：读写 `flow_route_config`，runtime-api DB 模式读取 published RouteSpec。
 - `ToolManifestRepository`：读写 `tool_manifest`，tool-gateway DB 模式读取 published ToolManifest。
-- `TaskRunRepository`：`create/get/updateStatus`，runtime-api DB 模式写入和查询 TaskRun。
+- `TaskRunRepository`：`create/get/updateStatus/updateWorkflowStart`，runtime-api DB 模式写入和查询 TaskRun，runtime-worker Activity 回写 `running` / `completed` / `failed`。
 - `AuditEventRepository`：`append/list`，tool-gateway DB 模式写 audit。
 - `IdempotencyRecordRepository`：`get/insert/replayOrConflict`，tool-gateway DB 模式做 replay/conflict。
 

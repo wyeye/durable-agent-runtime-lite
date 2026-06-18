@@ -71,6 +71,7 @@ services:
       PORT: 3200
       DATABASE_URL: postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
       VALKEY_URL: redis://valkey:6379
+      TOOL_GATEWAY_REGISTRY_SOURCE: db
       LOG_LEVEL: info
     ports:
       - "${TOOL_GATEWAY_HOST_PORT:-3200}:3200"
@@ -95,7 +96,7 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
       TOOL_GATEWAY_URL: http://tool-gateway:3200
-      RUNTIME_WORKER_MODE: mock
+      RUNTIME_WORKER_MODE: temporal
       LOG_LEVEL: info
     ports:
       - "${RUNTIME_WORKER_HOST_PORT:-3300}:3300"
@@ -123,8 +124,8 @@ services:
       VALKEY_URL: redis://valkey:6379
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
-      TOOL_GATEWAY_URL: http://tool-gateway:3200
-      RUNTIME_API_WORKFLOW_STARTER: mock
+      RUNTIME_API_ROUTE_SOURCE: db
+      RUNTIME_API_WORKFLOW_STARTER: temporal
       LOG_LEVEL: info
     ports:
       - "${RUNTIME_API_HOST_PORT:-3000}:3000"

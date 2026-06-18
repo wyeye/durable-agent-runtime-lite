@@ -7,7 +7,7 @@ import { startTemporalWorker } from './worker.js';
 const appName = 'runtime-worker' as const;
 const logger = createLogger(appName);
 
-export function buildServer(): FastifyInstance {
+export function buildServer(workerMode: 'mock' | 'temporal' = 'mock'): FastifyInstance {
   const server = Fastify({ logger: false });
 
   server.get('/healthz', async () => ({
@@ -20,7 +20,7 @@ export function buildServer(): FastifyInstance {
     app: appName,
     checks: {
       config: 'ok',
-      temporal_worker: 'mock',
+      temporal_worker: workerMode,
     },
   }));
 
@@ -29,8 +29,8 @@ export function buildServer(): FastifyInstance {
 
 export async function start(): Promise<void> {
   const config = loadConfig();
-  await startTemporalWorker(config);
-  const server = buildServer();
+  const workerHandle = await startTemporalWorker(config);
+  const server = buildServer(workerHandle.mode);
   const port = getAppPort(appName, config);
 
   await server.listen({ host: config.HOST, port });

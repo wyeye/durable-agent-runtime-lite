@@ -19,16 +19,13 @@ import {
 
 const repoRootUrl = new URL('..', import.meta.url);
 const tenantId = process.env.SEED_TENANT_ID ?? 'default';
+const defaultDatabaseUrl = 'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime';
 
 async function readJson(path: string): Promise<unknown> {
   return JSON.parse(await readFile(new URL(path, repoRootUrl), 'utf8'));
 }
 
-export async function seedExamples(databaseUrl = process.env.DATABASE_URL): Promise<void> {
-  if (!databaseUrl) {
-    throw new Error('DATABASE_URL is required to seed examples');
-  }
-
+export async function seedExamples(databaseUrl = process.env.DATABASE_URL ?? defaultDatabaseUrl): Promise<void> {
   const db = createDb({ databaseUrl });
   try {
     const flow = flowSpecSchema.parse(await readJson('examples/flows/sample-flow.json'));

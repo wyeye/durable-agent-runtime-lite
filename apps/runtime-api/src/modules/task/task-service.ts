@@ -102,13 +102,11 @@ export class TaskService {
           trace_id: normalized.trace_id,
         };
 
-    const workflowStart = await this.workflowStarter.start(workflowRequest);
-    const response = runTaskResponseSchema.parse({
+    const queuedResponse = runTaskResponseSchema.parse({
       task_run_id: taskRunId,
       workflow_id: workflowId,
       status: 'queued',
       route_decision: decision,
-      workflow_start: workflowStart,
       flow_id: decision.decision === 'matched' ? decision.flow_id : undefined,
       flow_version: decision.decision === 'matched' ? decision.flow_version : undefined,
       agent_id: decision.decision === 'agent_fallback' ? decision.agent_id : undefined,
@@ -120,19 +118,32 @@ export class TaskService {
         tenant_id: normalized.tenant_id,
         user_id: normalized.user_id,
         route_type: decision.decision === 'matched' ? 'matched' : 'agent_fallback',
-        flow_id: response.flow_id,
-        flow_version: response.flow_version,
+        flow_id: queuedResponse.flow_id,
+        flow_version: queuedResponse.flow_version,
         workflow_id: workflowId,
-        status: response.status,
+        status: queuedResponse.status,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }),
       input: normalized.input,
       routeResult,
-      workflowStart,
     });
 
-    return response;
+    try {
+      const workflowStart = await this.workflowStarter.start(workflowRequest);
+      await this.taskStore.updateWorkflowStart(taskRunId, workflowStart);
+      return runTaskResponseSchema.parse({
+        ...queuedResponse,
+        workflow_start: workflowStart,
+      });
+    } catch (error) {
+      await this.taskStore.updateStatus(taskRunId, {
+        status: 'failed_to_start',
+        errorCode: 'WORKFLOW_START_FAILED',
+        errorMessage: errorMessage(error),
+      });
+      throw error;
+    }
   }
 
   async get(taskRunId: string): Promise<TaskRun | undefined> {
@@ -153,6 +164,10 @@ export function normalizeRunTaskRequest(input: unknown): NormalizedRunTaskReques
 
 function buildLocalFlowSnapshotRef(flowId: string, version: number): string {
   return `${flowId}@${version}`;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Workflow failed to start';
 }
 
 export function previewRoute(

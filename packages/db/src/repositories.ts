@@ -22,7 +22,7 @@ import {
   type RouteResult,
   type WorkflowStartResponse,
 } from '@dar/contracts';
-import type { Insertable, Kysely, Selectable } from 'kysely';
+import type { Insertable, Kysely, Selectable, Updateable } from 'kysely';
 import type {
   AgentSpecTable,
   AuditEventTable,
@@ -52,6 +52,12 @@ export interface CreateTaskRunInput {
   input: unknown;
   routeResult?: RouteResult;
   workflowStart?: WorkflowStartResponse;
+}
+
+export interface UpdateTaskRunStatusInput {
+  status: TaskRun['status'];
+  errorCode?: string;
+  errorMessage?: string;
 }
 
 export interface IdempotencyReplayInput {
@@ -293,6 +299,8 @@ export class TaskRunRepository {
       flow_version: taskRun.flow_version ?? null,
       workflow_id: taskRun.workflow_id ?? null,
       status: taskRun.status,
+      error_code: taskRun.error_code ?? null,
+      error_message: taskRun.error_message ?? null,
       input_json: input.input,
       route_result_json: input.routeResult ?? null,
       workflow_start_json: input.workflowStart ?? null,
@@ -317,11 +325,36 @@ export class TaskRunRepository {
     return row ? mapTaskRun(row) : undefined;
   }
 
-  async updateStatus(taskRunId: string, status: TaskRun['status']): Promise<TaskRun | undefined> {
-    const parsedStatus = taskRunStatusSchema.parse(status);
+  async updateStatus(
+    taskRunId: string,
+    input: TaskRun['status'] | UpdateTaskRunStatusInput,
+  ): Promise<TaskRun | undefined> {
+    const normalized = typeof input === 'string' ? { status: input } : input;
+    const parsedStatus = taskRunStatusSchema.parse(normalized.status);
+    const failureStatus = parsedStatus === 'failed' || parsedStatus === 'failed_to_start';
+    const rowUpdate: Updateable<TaskRunTable> = {
+      status: parsedStatus,
+      updated_at: new Date(),
+      error_code: failureStatus ? normalized.errorCode ?? 'WORKFLOW_FAILED' : null,
+      error_message: failureStatus ? normalized.errorMessage ?? 'Workflow failed' : null,
+    };
     const row = await this.db
       .updateTable('task_run')
-      .set({ status: parsedStatus, updated_at: new Date() })
+      .set(rowUpdate)
+      .where('task_run_id', '=', taskRunId)
+      .returningAll()
+      .executeTakeFirst();
+
+    return row ? mapTaskRun(row) : undefined;
+  }
+
+  async updateWorkflowStart(
+    taskRunId: string,
+    workflowStart: WorkflowStartResponse,
+  ): Promise<TaskRun | undefined> {
+    const row = await this.db
+      .updateTable('task_run')
+      .set({ workflow_start_json: workflowStart, updated_at: new Date() })
       .where('task_run_id', '=', taskRunId)
       .returningAll()
       .executeTakeFirst();
@@ -526,6 +559,12 @@ function mapTaskRun(row: Selectable<TaskRunTable>): TaskRun {
   }
   if (row.workflow_id) {
     taskRun.workflow_id = row.workflow_id;
+  }
+  if (row.error_code) {
+    taskRun.error_code = row.error_code;
+  }
+  if (row.error_message) {
+    taskRun.error_message = row.error_message;
   }
 
   return taskRunSchema.parse(taskRun);

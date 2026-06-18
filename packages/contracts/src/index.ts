@@ -226,6 +226,8 @@ export const taskRunSchema = z.object({
   flow_version: z.number().int().positive().optional(),
   workflow_id: z.string().optional(),
   status: taskRunStatusSchema,
+  error_code: z.string().min(1).optional(),
+  error_message: z.string().min(1).optional(),
   created_at: z.string().datetime().optional(),
   updated_at: z.string().datetime().optional(),
 });

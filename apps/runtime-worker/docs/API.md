@@ -9,6 +9,18 @@
 - `RUNTIME_WORKER_MODE=mock`：只启动 health server 和 mock worker handle，不连接 Temporal。
 - `RUNTIME_WORKER_MODE=temporal`：连接 Temporal 并注册 workflow/activity worker。
 
+真实 Docker smoke 使用：
+
+```text
+RUNTIME_WORKER_MODE=temporal
+DATABASE_URL=postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
+TEMPORAL_ADDRESS=temporal:7233
+TEMPORAL_NAMESPACE=default
+TOOL_GATEWAY_URL=http://tool-gateway:3200
+```
+
+worker 与 runtime-api 共享 task queue：`runtime-worker-main`。
+
 ## Endpoints
 
 ### `GET /healthz`
@@ -29,6 +41,8 @@
   }
 }
 ```
+
+`RUNTIME_WORKER_MODE=temporal` 时 `temporal_worker` 返回 `temporal`。
 
 ## FlowSpec Snapshot Ref
 
@@ -70,8 +84,31 @@ Flow step 的 `input` 字段可作为最小 input mapping：
 
 未配置 `input` 时保持向后兼容，tool step 接收当前 state。
 
+Seed 的 sample FlowSpec 显式映射：
+
+```json
+{
+  "knowledge_search": { "query": "${input.text}" },
+  "record_write": { "record": "${state.steps.knowledge_search.result}" }
+}
+```
+
+这样真实 ToolManifest schema 校验会使用实际 workflow input 和上一步工具结果，不依赖默认参数或 mock fallback。
+
+## TaskRun status writeback
+
+`ConfigDrivenWorkflow` 和 `GenericAgentWorkflow` 通过 `updateTaskRunStatusActivity` 回写 DB：
+
+- workflow 开始执行后：`running`
+- workflow 成功完成后：`completed`
+- workflow 等待人工时：`waiting_human`
+- workflow 失败后：`failed`，并记录 `error_code` / `error_message`
+
+状态回写在 Activity 中通过 `TaskRunRepository` 完成，Workflow 本体不直接访问 DB、HTTP、LLM、Pi、`Date.now` 或 `Math.random`。
+
 ## Environment
 
 - `DATABASE_URL`：DB FlowSpec Activity 使用的 PostgreSQL URL。
 - `RUNTIME_WORKER_MODE=mock|temporal`：worker mode。
 - `TOOL_GATEWAY_URL` / `TOOL_GATEWAY_BASE_URL`：tool Activity 调用 tool-gateway。
+- `TEMPORAL_ADDRESS` / `TEMPORAL_NAMESPACE`：Temporal worker 连接参数。

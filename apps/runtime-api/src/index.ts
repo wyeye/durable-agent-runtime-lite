@@ -59,7 +59,15 @@ function getTraceId(body: unknown): string | undefined {
   return undefined;
 }
 
-export function buildServer(taskService = new TaskService()): FastifyInstance {
+export interface RuntimeApiReadiness {
+  routeSource: 'db' | 'memory';
+  workflowStarter: 'mock' | 'temporal';
+}
+
+export function buildServer(
+  taskService = new TaskService(),
+  readiness: RuntimeApiReadiness = { routeSource: 'memory', workflowStarter: 'mock' },
+): FastifyInstance {
   const server = Fastify({ logger: false });
 
   server.get('/healthz', async () => ({
@@ -73,7 +81,8 @@ export function buildServer(taskService = new TaskService()): FastifyInstance {
     checks: {
       config: 'ok',
       router: 'ok',
-      workflow_starter: 'mock',
+      route_source: readiness.routeSource,
+      workflow_starter: readiness.workflowStarter,
     },
   }));
 
@@ -120,7 +129,10 @@ export function buildServer(taskService = new TaskService()): FastifyInstance {
 export async function start(): Promise<void> {
   const config = loadConfig();
   const { taskService, close } = createRuntimeApiTaskService(config);
-  const server = buildServer(taskService);
+  const server = buildServer(taskService, {
+    routeSource: config.RUNTIME_API_ROUTE_SOURCE,
+    workflowStarter: config.RUNTIME_API_WORKFLOW_STARTER,
+  });
   const port = getAppPort(appName, config);
 
   server.addHook('onClose', async () => {

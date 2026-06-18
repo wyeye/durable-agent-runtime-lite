@@ -20,6 +20,17 @@ DB 模式下：
 - 同一 idempotency key + 相同请求返回原始响应；
 - 同一 idempotency key + 不同请求返回 `IDEMPOTENCY_CONFLICT`。
 
+真实 Docker smoke 使用：
+
+```text
+TOOL_GATEWAY_REGISTRY_SOURCE=db
+DATABASE_URL=postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
+HOST=0.0.0.0
+PORT=3200
+```
+
+生产或 Docker smoke 路径不能使用 memory registry。缺失 ToolManifest 必须返回 `TOOL_NOT_FOUND`，不能回退到内置 `knowledge.search` 或 `record.write.mock`。
+
 ## Endpoints
 
 ### `GET /v1/tools`
@@ -65,3 +76,11 @@ corepack pnpm db:migrate
 corepack pnpm seed:examples
 TOOL_GATEWAY_REGISTRY_SOURCE=db corepack pnpm --filter @dar/tool-gateway dev
 ```
+
+## Temporal DB smoke checks
+
+`corepack pnpm smoke:temporal-db-e2e` 会在 workflow 完成后直接查询 DB，确认：
+
+- `audit_event` 中存在 `knowledge.search` 或 `record.write.mock` 的 `tool.invoke` 审计；
+- `idempotency_record` 中存在工具调用幂等记录；
+- repeated idempotency key 仍走 DB replay/conflict 逻辑，而不是进程内 Map。

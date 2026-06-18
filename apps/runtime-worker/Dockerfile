@@ -14,7 +14,7 @@ RUN pnpm install --frozen-lockfile
 
 FROM deps AS builder
 COPY . .
-RUN pnpm --filter @dar/runtime-worker... build
+RUN pnpm --filter @dar/runtime-worker... --workspace-concurrency=1 build && test -f apps/runtime-worker/dist/index.js
 
 FROM node:24-bookworm-slim AS runner
 ENV NODE_ENV=production
@@ -22,7 +22,7 @@ ENV HOST=0.0.0.0
 ENV PORT=3300
 WORKDIR /repo/apps/runtime-worker
 RUN groupadd --system app && useradd --system --gid app app
-COPY --from=builder /repo /repo
+COPY --from=builder --chown=app:app /repo /repo
 USER app
 EXPOSE 3300
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || '3300') + '/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"

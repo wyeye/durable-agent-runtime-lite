@@ -8,7 +8,7 @@ import {
 } from '@dar/contracts';
 import { ToolGatewayClient } from '@dar/tool-client';
 import { getToolGatewayUrl, loadConfig } from '@dar/config';
-import { closeDb, createDb, FlowDefinitionRepository, parseDbFlowSnapshotRef } from '@dar/db';
+import { closeDb, createDb, FlowDefinitionRepository, parseDbFlowSnapshotRef, TaskRunRepository } from '@dar/db';
 import { runPiAgent } from '../pi/pi-runner.js';
 
 const sampleFlowSpec: FlowSpec = {
@@ -36,6 +36,12 @@ export interface HumanTaskPlaceholder {
   human_task_id: string;
   status: 'created';
   signal_name: string;
+}
+
+export interface UpdateTaskRunStatusActivityInput extends ActivityContext {
+  status: 'running' | 'waiting_human' | 'completed' | 'failed';
+  error_code?: string;
+  error_message?: string;
 }
 
 export async function normalizeInput(input: unknown): Promise<Record<string, unknown>> {
@@ -95,6 +101,25 @@ export async function createHumanTaskActivity(
 
 export async function loadFlowSpecActivity(flowSpec: FlowSpec): Promise<FlowSpec> {
   return flowSpec;
+}
+
+export async function updateTaskRunStatusActivity(
+  input: UpdateTaskRunStatusActivityInput,
+): Promise<void> {
+  const config = loadConfig();
+  const db = createDb({ databaseUrl: config.DATABASE_URL });
+  try {
+    const updated = await new TaskRunRepository(db).updateStatus(input.task_run_id, {
+      status: input.status,
+      ...(input.error_code ? { errorCode: input.error_code } : {}),
+      ...(input.error_message ? { errorMessage: input.error_message } : {}),
+    });
+    if (!updated) {
+      throw new Error(`TaskRun not found for status update: ${input.task_run_id}`);
+    }
+  } finally {
+    await closeDb(db);
+  }
 }
 
 export async function loadFlowSpecByRefActivity(flowSnapshotRef: string): Promise<FlowSpec> {

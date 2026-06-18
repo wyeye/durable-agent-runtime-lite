@@ -5,8 +5,8 @@
   "status": "published",
   "route": {
     "priority": 90,
-    "keywords": ["知识搜索", "记录写入", "mvp"],
-    "examples": ["执行 mvp 示例流程", "搜索知识并写入记录"],
+    "keywords": ["知识搜索", "记录写入", "mvp", "db-smoke"],
+    "examples": ["执行 mvp 示例流程", "搜索知识并写入记录", "db-smoke 真实链路验证"],
     "negative_examples": [],
     "supported_channels": ["web", "api"],
     "role_constraints": [],

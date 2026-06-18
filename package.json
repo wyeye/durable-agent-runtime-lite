@@ -20,7 +20,8 @@
     "format": "prettier --write .",
     "db:migrate": "tsx db/migrate.ts",
     "seed:examples": "tsx scripts/seed-examples.ts",
-    "smoke:db-registry": "tsx scripts/smoke-db-registry.ts"
+    "smoke:db-registry": "tsx scripts/smoke-db-registry.ts",
+    "smoke:temporal-db-e2e": "tsx scripts/smoke-temporal-db-e2e.ts"
   },
   "devDependencies": {
     "@dar/config": "workspace:*",

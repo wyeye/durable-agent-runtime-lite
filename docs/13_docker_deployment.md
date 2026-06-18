@@ -41,8 +41,52 @@ docker compose -f infra/docker-compose.yml up --build
 | runtime-worker | 3300 | 3300 |
 | Temporal | 7233 | 7233 |
 | Temporal UI | 8080 | 8233 |
-| PostgreSQL | 5432 | 5432 |
-| Valkey | 6379 | 6379 |
+| PostgreSQL | 5432 | 15432 |
+| Valkey | 6379 | 16380 |
+
+## Real Temporal DB smoke
+
+The integrated Docker Compose smoke path uses the four production apps plus PostgreSQL, Valkey, Temporal, and Temporal UI. It does not add another production service.
+
+```bash
+docker compose -f infra/docker-compose.yml config
+docker compose -f infra/docker-compose.yml build runtime-api runtime-worker tool-gateway control-plane
+docker compose -f infra/docker-compose.yml up -d postgres valkey temporal temporal-ui
+corepack pnpm db:migrate
+corepack pnpm seed:examples
+docker compose -f infra/docker-compose.yml up -d tool-gateway runtime-worker runtime-api control-plane
+corepack pnpm smoke:temporal-db-e2e
+```
+
+Host-side DB initialization can also use:
+
+```bash
+./scripts/docker-db-migrate.sh
+./scripts/docker-seed-examples.sh
+```
+
+The compose file intentionally sets:
+
+```text
+RUNTIME_API_ROUTE_SOURCE=db
+RUNTIME_API_WORKFLOW_STARTER=temporal
+RUNTIME_WORKER_MODE=temporal
+TOOL_GATEWAY_REGISTRY_SOURCE=db
+TOOL_GATEWAY_URL=http://tool-gateway:3200
+```
+
+Production-like Docker paths must not use memory sources, `defaultRouteSpecs`, `sample_flow@1`, or memory tool registry. `runtime-api` only starts Temporal workflows; tool invocation happens in `runtime-worker` activities through `tool-gateway`.
+
+Successful smoke output includes `ok: true`, a `task_run_id`, a `workflow_id`, `completed` task status, DB audit events for `knowledge.search` or `record.write.mock`, and DB idempotency records for the tool calls.
+
+If smoke fails, inspect:
+
+1. `docker compose -f infra/docker-compose.yml logs runtime-api runtime-worker tool-gateway temporal`
+2. whether `corepack pnpm db:migrate` applied all migrations;
+3. whether `corepack pnpm seed:examples` inserted the sample FlowSpec, RouteSpec, and ToolManifest rows;
+4. whether runtime-api and worker use the same Temporal task queue, `runtime-worker-main`;
+5. whether worker uses `TOOL_GATEWAY_URL=http://tool-gateway:3200` inside Docker;
+6. whether `task_run.error_code` / `task_run.error_message` explains a workflow failure.
 
 ## Notes for Codex
 

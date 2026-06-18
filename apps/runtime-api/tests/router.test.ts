@@ -1,16 +1,49 @@
 import { describe, expect, it } from 'vitest';
-import type { RouteSpec } from '@dar/contracts';
+import type { RouteSpec, TaskRun, WorkflowStartResponse } from '@dar/contracts';
 import { buildServer } from '../src/index.js';
 import { routeByRules } from '../src/modules/router/rule-router.js';
 import { defaultRouteSpecs } from '../src/modules/router/route-registry.js';
 import type { RouteSpecSource } from '../src/modules/router/route-source.js';
 import { createRuntimeApiTaskService, TaskService } from '../src/modules/task/task-service.js';
+import type { TaskRunStore } from '../src/modules/task/task-store.js';
 
 class StaticRouteSource implements RouteSpecSource {
   constructor(private readonly routes: RouteSpec[]) {}
 
   async listPublished(): Promise<RouteSpec[]> {
     return this.routes;
+  }
+}
+
+class RecordingTaskRunStore implements TaskRunStore {
+  readonly calls: string[] = [];
+  private readonly taskRuns = new Map<string, TaskRun>();
+
+  async create(input: { taskRun: TaskRun }): Promise<TaskRun> {
+    this.calls.push('create');
+    this.taskRuns.set(input.taskRun.task_run_id, input.taskRun);
+    return input.taskRun;
+  }
+
+  async get(taskRunId: string): Promise<TaskRun | undefined> {
+    return this.taskRuns.get(taskRunId);
+  }
+
+  async updateStatus(taskRunId: string, input: TaskRun['status'] | { status: TaskRun['status'] }): Promise<TaskRun | undefined> {
+    this.calls.push('updateStatus');
+    const existing = this.taskRuns.get(taskRunId);
+    if (!existing) {
+      return undefined;
+    }
+    const status = typeof input === 'string' ? input : input.status;
+    const updated = { ...existing, status };
+    this.taskRuns.set(taskRunId, updated);
+    return updated;
+  }
+
+  async updateWorkflowStart(taskRunId: string): Promise<TaskRun | undefined> {
+    this.calls.push('updateWorkflowStart');
+    return this.taskRuns.get(taskRunId);
   }
 }
 
@@ -189,6 +222,41 @@ describe('runtime-api router and task endpoints', () => {
     });
 
     await server.close();
+  });
+
+  it('persists queued task_run before starting the workflow', async () => {
+    const taskStore = new RecordingTaskRunStore();
+    const workflowStart: WorkflowStartResponse = {
+      workflow_id: 'workflow_placeholder',
+      task_run_id: 'task_placeholder',
+      started: true,
+      mode: 'mock',
+    };
+    const service = new TaskService({
+      routeSource: new StaticRouteSource([dbOnlyRoute]),
+      taskStore,
+      workflowStarter: {
+        async start(request) {
+          expect(taskStore.calls).toEqual(['create']);
+          return {
+            ...workflowStart,
+            workflow_id: request.workflow_id,
+            task_run_id: request.task_run_id,
+          };
+        },
+      },
+      allowMockRouteFallback: false,
+    });
+
+    const response = await service.create({
+      tenant_id: 'tenant_1',
+      user_id: 'user_1',
+      request_id: 'req_order',
+      input: { text: 'db-only' },
+    });
+
+    expect(response.workflow_start).toMatchObject({ mode: 'mock', started: true });
+    expect(taskStore.calls).toEqual(['create', 'updateWorkflowStart']);
   });
 
   it('requires DB RouteSpec source in production', () => {
