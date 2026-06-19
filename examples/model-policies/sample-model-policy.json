@@ -1,0 +1,41 @@
+{
+  "model_policy_id": "sample_deterministic_final_only",
+  "version": 1,
+  "status": "published",
+  "protocol": "dar_generate",
+  "targets": [
+    {
+      "target_id": "sample_deterministic_final_only_primary",
+      "gateway_profile": "local-deterministic",
+      "model_id": "deterministic:final_only",
+      "priority": 0,
+      "enabled": true,
+      "capabilities": ["text", "tools", "usage"]
+    }
+  ],
+  "retry_policy": {
+    "max_attempts_per_target": 1,
+    "retryable_status_codes": [429, 500, 502, 503, 504],
+    "retry_on_timeout": true,
+    "retry_on_network_error": true,
+    "backoff_ms": 10,
+    "max_backoff_ms": 50
+  },
+  "fallback_policy": {
+    "enabled": false,
+    "ordered_target_ids": [],
+    "eligible_error_classes": ["rate_limit", "timeout", "network", "upstream_5xx"],
+    "stop_on_auth_error": true,
+    "stop_on_validation_error": true,
+    "stop_on_policy_denial": true
+  },
+  "request_policy": {
+    "temperature": 0,
+    "top_p": 1,
+    "max_output_tokens": 1000,
+    "tool_choice_mode": "auto",
+    "response_format": "text",
+    "allow_parallel_tool_calls": false
+  },
+  "revision": 1
+}

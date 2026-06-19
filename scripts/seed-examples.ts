@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import {
   agentSpecSchema,
   flowSpecSchema,
+  modelPolicySchema,
   promptDefinitionSchema,
   tenantRuntimePolicySchema,
   routeSpecSchema,
@@ -13,9 +14,11 @@ import {
   createDb,
   FlowExecutionPlanRepository,
   FlowDefinitionRepository,
+  ModelPolicyRepository,
   RouteConfigRepository,
   TenantRuntimePolicyReleaseService,
   TenantRuntimePolicyRepository,
+  hashModelPolicy,
   hashTenantRuntimePolicy,
   ToolManifestRepository,
   upsertAgentSpec,
@@ -41,6 +44,7 @@ export async function seedExamples(databaseUrl = process.env.DATABASE_URL ?? def
     const recordWriteTool = toolManifestSchema.parse(
       await readJson('examples/tools/record-write-mock-tool.json'),
     );
+    const modelPolicy = modelPolicySchema.parse(await readJson('examples/model-policies/sample-model-policy.json'));
     const agent = agentSpecSchema.parse(await readJson('examples/agents/sample-agent.json'));
     const promptContent = await readFile(new URL('examples/prompts/sample-prompt.md', repoRootUrl), 'utf8');
     const prompt = promptDefinitionSchema.parse({
@@ -64,6 +68,7 @@ export async function seedExamples(databaseUrl = process.env.DATABASE_URL ?? def
       status: 'published',
       createdBy: 'seed-examples',
     });
+    await seedModelPolicy(db, tenantId, modelPolicy);
     await upsertAgentSpec(db, agent, { tenantId, status: 'published', createdBy: 'seed-examples' });
     await upsertPromptDefinition(db, prompt, { tenantId, status: 'published', createdBy: 'seed-examples' });
     await new FlowExecutionPlanRepository(db).createForFlow({
@@ -84,6 +89,35 @@ export async function seedExamples(databaseUrl = process.env.DATABASE_URL ?? def
   } finally {
     await closeDb(db);
   }
+}
+
+async function seedModelPolicy(db: ReturnType<typeof createDb>, tenantIdValue: string, policy: ReturnType<typeof modelPolicySchema.parse>) {
+  const repository = new ModelPolicyRepository(db);
+  const existing = await repository.getByIdAndVersion(policy.model_policy_id, policy.version, { tenantId: tenantIdValue });
+  const expectedHash = hashModelPolicy(policy);
+  if (existing) {
+    const existingHash = hashModelPolicy(existing);
+    if (existingHash !== expectedHash) {
+      throw new Error(`ModelPolicy seed content mismatch: ${policy.model_policy_id}@${policy.version}`);
+    }
+    if (existing.status === 'published' || existing.status === 'gray') {
+      return existing;
+    }
+    if (existing.status === 'draft' || existing.status === 'validated') {
+      return repository.publish(policy.model_policy_id, policy.version, {
+        tenantId: tenantIdValue,
+        operatorId: 'seed-examples',
+        releaseNote: 'Seed sample model policy',
+      });
+    }
+    throw new Error(`ModelPolicy ${policy.model_policy_id}@${policy.version} already exists with non-executable status ${existing.status}`);
+  }
+  await repository.createDraft(policy, { tenantId: tenantIdValue, operatorId: 'seed-examples' });
+  return repository.publish(policy.model_policy_id, policy.version, {
+    tenantId: tenantIdValue,
+    operatorId: 'seed-examples',
+    releaseNote: 'Seed sample model policy',
+  });
 }
 
 async function seedTenantPolicy(db: ReturnType<typeof createDb>, tenantIdValue: string) {
