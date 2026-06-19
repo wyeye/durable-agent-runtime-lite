@@ -1,15 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import type { AgentSpec, FlowSpec, PromptDefinition, RouteSpec, ToolManifest } from '@dar/contracts';
+import type { AgentSpec, FlowSpec, ModelPolicy, PromptDefinition, RouteSpec, ToolManifest } from '@dar/contracts';
 import {
   AgentSpecRepository,
   closeDb,
   createDb,
   FlowDefinitionRepository,
   FlowExecutionPlanRepository,
+  ModelPolicyRepository,
   PromptDefinitionRepository,
   RouteConfigRepository,
   ToolManifestRepository,
+  hashModelPolicy,
   upsertAgentSpec,
   upsertPromptDefinition,
 } from '@dar/db';
@@ -25,10 +27,11 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
     const tenantId = `tenant_${randomUUID()}`;
     const operatorId = 'operator_release_test';
     const flowId = `flow_${randomUUID()}`;
-    const routeId = `route_${randomUUID()}`;
-    const promptId = `prompt_${randomUUID()}`;
-    const agentId = `agent_${randomUUID()}`;
-    const toolName = `tool.${randomUUID()}`;
+      const routeId = `route_${randomUUID()}`;
+      const promptId = `prompt_${randomUUID()}`;
+      const agentId = `agent_${randomUUID()}`;
+      const modelPolicyId = `model_policy_${randomUUID()}`;
+      const toolName = `tool.${randomUUID()}`;
 
     try {
       const flows = new FlowDefinitionRepository(db);
@@ -58,11 +61,55 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
         required_permissions: [],
         status: 'published',
       };
+      const modelPolicy: ModelPolicy = {
+        model_policy_id: modelPolicyId,
+        version: 1,
+        status: 'published',
+        protocol: 'dar_generate',
+        targets: [{
+          target_id: `${modelPolicyId}_primary`,
+          gateway_profile: 'local-test',
+          model_id: 'mock',
+          priority: 0,
+          enabled: true,
+          capabilities: ['text', 'tools', 'usage'],
+        }],
+        retry_policy: {
+          max_attempts_per_target: 1,
+          retryable_status_codes: [429, 500, 502, 503, 504],
+          retry_on_timeout: true,
+          retry_on_network_error: true,
+          backoff_ms: 10,
+          max_backoff_ms: 50,
+        },
+        fallback_policy: {
+          enabled: false,
+          ordered_target_ids: [],
+          eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
+          stop_on_auth_error: true,
+          stop_on_validation_error: true,
+          stop_on_policy_denial: true,
+        },
+        request_policy: {
+          temperature: 0,
+          top_p: 1,
+          max_output_tokens: 1000,
+          tool_choice_mode: 'auto',
+          response_format: 'text',
+          allow_parallel_tool_calls: false,
+        },
+        revision: 1,
+      };
       const agent: AgentSpec = {
         agent_id: agentId,
         version: 1,
         prompt_ref: `${promptId}@1`,
         model_policy: 'mock',
+        model_policy_ref: {
+          model_policy_id: modelPolicy.model_policy_id,
+          model_policy_version: modelPolicy.version,
+          model_policy_hash: hashModelPolicy(modelPolicy),
+        },
         allowed_tools: [`${toolName}@1.0.0`],
         allowed_handoffs: [],
         max_steps: 4,
@@ -72,6 +119,13 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
 
       await upsertPromptDefinition(db, prompt, { tenantId, status: 'published', createdBy: operatorId });
       await new ToolManifestRepository(db).upsert(tool, { tenantId, status: 'published', createdBy: operatorId });
+      const modelPolicies = new ModelPolicyRepository(db);
+      await modelPolicies.createDraft(modelPolicy, { tenantId, operatorId });
+      await modelPolicies.publish(modelPolicy.model_policy_id, modelPolicy.version, {
+        tenantId,
+        operatorId,
+        releaseNote: 'publish model policy for release test',
+      });
       await upsertAgentSpec(db, agent, { tenantId, status: 'published', createdBy: operatorId });
 
       const flowV1: FlowSpec = {

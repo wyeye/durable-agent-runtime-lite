@@ -3,12 +3,14 @@ import type {
   AgentSpec,
   CapabilityRelease,
   FlowSpec,
+  ModelPolicy,
   PromptDefinition,
   RouteSpec,
   RouterPreviewResponse,
   StandardResponse,
   ToolManifest,
 } from '@dar/contracts';
+import { hashModelPolicy } from '@dar/db';
 
 const controlPlaneUrl = trimTrailingSlash(process.env.CONTROL_PLANE_URL ?? 'http://localhost:3100');
 const runtimeApiUrl = trimTrailingSlash(process.env.RUNTIME_API_URL ?? 'http://localhost:3000');
@@ -39,6 +41,7 @@ async function main(): Promise<void> {
   const ids = {
     prompt: `${requestPrefix}_prompt`,
     tool: `${requestPrefix}.tool`,
+    modelPolicy: `${requestPrefix}_model_policy`,
     agent: `${requestPrefix}_agent`,
     flow: `${requestPrefix}_flow`,
     route: `${requestPrefix}_route`,
@@ -54,10 +57,14 @@ async function main(): Promise<void> {
 
   const prompt = await createDraft<PromptDefinition>('prompts', promptSpec(ids, 1));
   const tool = await createDraft<ToolManifest>('tools', toolSpec(ids, '1.0.0'));
+  const modelPolicySpecV1 = modelPolicySpec(ids, 1);
+  const modelPolicy = await createDraft<ModelPolicy>('model-policies', modelPolicySpecV1);
   await validateResource('prompts', ids.prompt, 1);
   await validateResource('tools', ids.tool, 1);
+  await validateResource('model-policies', ids.modelPolicy, 1);
   await publishResource('prompts', ids.prompt, 1, 'publish smoke prompt v1');
   await publishResource('tools', ids.tool, 1, 'publish smoke tool v1');
+  await publishResource('model-policies', ids.modelPolicy, 1, 'publish smoke model policy v1');
   await cloneResource<PromptDefinition>('prompts', ids.prompt, 1);
   await updateDraft<PromptDefinition>('prompts', ids.prompt, 2, {
     ...promptSpec(ids, 2),
@@ -71,7 +78,7 @@ async function main(): Promise<void> {
   );
   assert.equal(grayPrompt.action, 'gray');
 
-  const agent = await createDraft<AgentSpec>('agents', agentSpec(ids, 1));
+  const agent = await createDraft<AgentSpec>('agents', agentSpec(ids, 1, modelPolicySpecV1));
   await validateResource('agents', ids.agent, 1);
   await publishResource('agents', ids.agent, 1, 'publish smoke agent v1');
 
@@ -172,6 +179,7 @@ async function main(): Promise<void> {
     ok: true,
     prompt: `${prompt.resource_id}@${prompt.version}`,
     tool: `${tool.resource_id}@${tool.version}`,
+    model_policy: `${modelPolicy.resource_id}@${modelPolicy.version}`,
     agent: `${agent.resource_id}@${agent.version}`,
     flow: `${ids.flow}@1`,
     route: `${ids.route}@1`,
@@ -211,12 +219,59 @@ function toolSpec(ids: { tool: string }, version: string): ToolManifest {
   };
 }
 
-function agentSpec(ids: { agent: string; prompt: string; tool: string }, version: number): AgentSpec {
+function modelPolicySpec(ids: { modelPolicy: string }, version: number): ModelPolicy {
+  return {
+    model_policy_id: ids.modelPolicy,
+    version,
+    status: 'draft',
+    protocol: 'dar_generate',
+    targets: [{
+      target_id: `${ids.modelPolicy}_primary`,
+      gateway_profile: 'local-smoke',
+      model_id: 'mock',
+      priority: 0,
+      enabled: true,
+      capabilities: ['text', 'tools', 'usage'],
+    }],
+    retry_policy: {
+      max_attempts_per_target: 1,
+      retryable_status_codes: [429, 500, 502, 503, 504],
+      retry_on_timeout: true,
+      retry_on_network_error: true,
+      backoff_ms: 10,
+      max_backoff_ms: 50,
+    },
+    fallback_policy: {
+      enabled: false,
+      ordered_target_ids: [],
+      eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
+      stop_on_auth_error: true,
+      stop_on_validation_error: true,
+      stop_on_policy_denial: true,
+    },
+    request_policy: {
+      temperature: 0,
+      top_p: 1,
+      max_output_tokens: 1000,
+      tool_choice_mode: 'auto',
+      response_format: 'text',
+      allow_parallel_tool_calls: false,
+    },
+    revision: 1,
+  };
+}
+
+function agentSpec(ids: { agent: string; prompt: string; tool: string }, version: number, modelPolicy: ModelPolicy): AgentSpec {
   return {
     agent_id: ids.agent,
     version,
     prompt_ref: `${ids.prompt}@1`,
     model_policy: 'mock',
+    model_policy_ref: {
+      model_policy_id: modelPolicy.model_policy_id,
+      model_policy_version: modelPolicy.version,
+      model_policy_hash: hashModelPolicy(modelPolicy),
+    },
     allowed_tools: [`${ids.tool}@1.0.0`],
     allowed_handoffs: [],
     max_steps: 3,
