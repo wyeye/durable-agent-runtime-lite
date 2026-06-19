@@ -203,6 +203,10 @@ export interface TenantRuntimePolicySnapshotTable {
   snapshot_id: string;
   snapshot_ref: string;
   tenant_id: string;
+  root_snapshot_ref: string;
+  parent_snapshot_ref: string | null;
+  derivation_type: string;
+  lineage_depth: number;
   source_policy_version: number;
   source_policy_hash: string;
   execution_plan_ref: string;

@@ -1,7 +1,7 @@
-import { condition, defineSignal, executeChild, proxyActivities, setHandler } from '@temporalio/workflow';
+import { condition, defineSignal, executeChild, patched, proxyActivities, setHandler } from '@temporalio/workflow';
 import type { ConfigDrivenWorkflowInput, HumanTaskDecisionSignalInput } from '@dar/temporal';
 import { WORKFLOW_SIGNALS } from '@dar/temporal';
-import type { AgentRunResult, FlowExecutionPlan, FlowExecutionPlanAgent, HumanTask, PiDurableAgentWorkflowResult } from '@dar/contracts';
+import type { AgentRunResult, EffectiveTenantPolicy, FlowExecutionPlan, FlowExecutionPlanAgent, FlowExecutionPlanTool, HumanTask, PiDurableAgentWorkflowResult } from '@dar/contracts';
 import { executeFlowSpec, type FlowExecutionActivities, type FlowExecutionResult } from '../interpreter/flow-interpreter.js';
 import type { piDurableAgentWorkflow } from './pi-durable-agent-workflow.js';
 
@@ -18,6 +18,9 @@ const {
   commitToolActivity,
   createHumanTaskActivity,
   loadExecutionPlanByRefActivity,
+  loadAgentExecutionPlanByRefActivity,
+  loadTenantPolicySnapshotActivity,
+  deriveTenantPolicySnapshotActivity,
   updateTaskRunStatusActivity,
 } = proxyActivities<{
   normalizeInput: FlowExecutionActivities['normalizeInput'];
@@ -26,6 +29,33 @@ const {
   commitToolActivity: FlowExecutionActivities['commitTool'];
   createHumanTaskActivity: FlowExecutionActivities['createHumanTask'];
   loadExecutionPlanByRefActivity(executionPlanRef: string): Promise<FlowExecutionPlan>;
+  loadAgentExecutionPlanByRefActivity(executionPlanRef: string, tenantId?: string): Promise<{ execution_plan_ref: string; execution_plan_hash: string }>;
+  loadTenantPolicySnapshotActivity(input: {
+    tenant_id: string;
+    user_id: string;
+    task_run_id: string;
+    workflow_id: string;
+    request_id: string;
+    execution_plan_ref: string;
+    execution_plan_hash: string;
+    execution_plan_type: 'flow' | 'agent';
+    tenant_policy_snapshot_ref?: string;
+    tenant_policy_hash?: string;
+  }): Promise<EffectiveTenantPolicy>;
+  deriveTenantPolicySnapshotActivity(input: {
+    tenant_id: string;
+    user_id: string;
+    task_run_id: string;
+    workflow_id: string;
+    request_id: string;
+    parent_snapshot_ref: string;
+    target_execution_plan_ref: string;
+    target_execution_plan_hash: string;
+    target_execution_plan_type: 'flow' | 'agent';
+    derivation_type: 'flow_agent_child' | 'workflow_handoff' | 'nested_handoff';
+    tenant_policy_snapshot_ref?: string;
+    tenant_policy_hash?: string;
+  }): Promise<EffectiveTenantPolicy>;
   updateTaskRunStatusActivity(input: {
     tenant_id: string;
     user_id: string;
@@ -80,13 +110,36 @@ export async function configDrivenWorkflow(input: ConfigDrivenWorkflowArgs): Pro
       execution_plan_ref: executionPlan.execution_plan_ref,
       execution_plan_hash: executionPlan.execution_plan_hash,
     };
+    const policy = context.tenant_policy_snapshot_ref && context.tenant_policy_hash && patched('config-driven-effective-tenant-policy-v1')
+      ? await loadTenantPolicySnapshotActivity({
+          ...executionContext,
+          execution_plan_ref: executionPlan.execution_plan_ref,
+          execution_plan_hash: executionPlan.execution_plan_hash,
+          execution_plan_type: 'flow',
+        })
+      : undefined;
 
     const result = await executeFlowSpec(executionPlan, executionContext, input.input ?? {}, {
       normalizeInput,
-      invokeTool: invokeToolActivity,
-      previewTool: previewToolActivity,
-      commitTool: commitToolActivity,
-      runAgent: async (_context, plannedAgent, agentInput) => runAgentChildWorkflow(executionContext, plannedAgent, agentInput),
+      invokeTool: async (toolContext, tool, args) => {
+        if (policy) {
+          assertEffectivePolicyAllowsTool(policy, tool, 'invoke');
+        }
+        return invokeToolActivity(toolContext, tool, args);
+      },
+      previewTool: async (toolContext, tool, args) => {
+        if (policy) {
+          assertEffectivePolicyAllowsTool(policy, tool, 'preview');
+        }
+        return previewToolActivity(toolContext, tool, args);
+      },
+      commitTool: async (toolContext, toolCallId, tool, args) => {
+        if (policy) {
+          assertEffectivePolicyAllowsTool(policy, tool, 'commit');
+        }
+        return commitToolActivity(toolContext, toolCallId, tool, args);
+      },
+      runAgent: async (_context, plannedAgent, agentInput) => runAgentChildWorkflow(executionContext, plannedAgent, agentInput, policy),
       createHumanTask: createHumanTaskActivity,
       waitForHumanTaskDecision: async (_context, humanTaskId) => {
         await condition(() => decisions.has(humanTaskId));
@@ -149,9 +202,24 @@ async function runAgentChildWorkflow(
   },
   plannedAgent: FlowExecutionPlanAgent,
   input: Record<string, unknown>,
+  policy?: EffectiveTenantPolicy,
 ): Promise<AgentRunResult> {
   if (!plannedAgent.agent_execution_plan_ref) {
     throw new Error(`FlowExecutionPlan agent missing agent_execution_plan_ref: ${plannedAgent.agent_id}@${plannedAgent.agent_version}`);
+  }
+  let childPolicy = policy;
+  if (policy && patched('flow-agent-child-tenant-policy-snapshot-v1')) {
+    const childPlan = await loadAgentExecutionPlanByRefActivity(plannedAgent.agent_execution_plan_ref, context.tenant_id);
+    childPolicy = await deriveTenantPolicySnapshotActivity({
+      ...context,
+      parent_snapshot_ref: policy.snapshot_ref,
+      target_execution_plan_ref: childPlan.execution_plan_ref,
+      target_execution_plan_hash: childPlan.execution_plan_hash,
+      target_execution_plan_type: 'agent',
+      derivation_type: 'flow_agent_child',
+      tenant_policy_snapshot_ref: policy.snapshot_ref,
+      tenant_policy_hash: policy.snapshot_hash,
+    });
   }
   const result = await executeChild<typeof piDurableAgentWorkflow>('piDurableAgentWorkflow', {
     workflowId: `${context.workflow_id}-agent-${sanitizeWorkflowId(plannedAgent.step_id)}`,
@@ -163,13 +231,36 @@ async function runAgentChildWorkflow(
       agent_execution_plan_ref: plannedAgent.agent_execution_plan_ref,
       execution_mode: 'mediated_tool_call',
       initial_user_input: JSON.stringify(input),
-      ...(context.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: context.tenant_policy_snapshot_ref } : {}),
-      ...(context.tenant_policy_hash ? { tenant_policy_hash: context.tenant_policy_hash } : {}),
+      ...(childPolicy ? { tenant_policy_snapshot_ref: childPolicy.snapshot_ref } : context.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: context.tenant_policy_snapshot_ref } : {}),
+      ...(childPolicy ? { tenant_policy_hash: childPolicy.snapshot_hash } : context.tenant_policy_hash ? { tenant_policy_hash: context.tenant_policy_hash } : {}),
       ...(context.tenant_admission_id ? { tenant_admission_id: context.tenant_admission_id } : {}),
       request_id: context.request_id,
     }],
   });
   return agentResultFromDurableResult(result);
+}
+
+function assertEffectivePolicyAllowsTool(policy: EffectiveTenantPolicy, tool: FlowExecutionPlanTool, operation: 'invoke' | 'preview' | 'commit'): void {
+  const denied = policy.denied_tools.some((rule) => rule.tool_name === tool.tool_name && ruleMatchesVersion(rule, tool.tool_version));
+  if (denied) {
+    throw new Error('TOOL_DENIED_BY_TENANT_POLICY');
+  }
+  const allowed = policy.allowed_tools.some((rule) =>
+    rule.tool_name === tool.tool_name
+    && ruleMatchesVersion(rule, tool.tool_version)
+    && rule.allowed_operations.includes(operation)
+    && (!rule.max_risk_level || riskRank(tool.risk_level) <= riskRank(rule.max_risk_level)));
+  if (!allowed) {
+    throw new Error('TOOL_DENIED_BY_TENANT_POLICY');
+  }
+}
+
+function ruleMatchesVersion(rule: { versions?: string[] | undefined }, version: string): boolean {
+  return !rule.versions?.length || rule.versions.includes(version);
+}
+
+function riskRank(riskLevel: string): number {
+  return Number(riskLevel.slice(1));
 }
 
 function agentResultFromDurableResult(result: PiDurableAgentWorkflowResult): AgentRunResult {

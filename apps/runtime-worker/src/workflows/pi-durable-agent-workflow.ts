@@ -5,6 +5,7 @@ import {
   continueAsNew,
   defineSignal,
   executeChild,
+  patched,
   proxyActivities,
   setHandler,
   workflowInfo,
@@ -23,6 +24,7 @@ import type {
   AgentRunRecord,
   AgentToolExecutionIdentity,
   AgentToolResultReference,
+  EffectiveTenantPolicy,
   FlowExecutionPlan,
   FlowExecutionPlanTool,
   HumanTask,
@@ -50,7 +52,33 @@ const userInputResponseSignal = defineSignal<[UserInputResponseSignalInput]>(WOR
 type PiActivities = {
   createAgentRunActivity(input: CreateAgentRunActivityInput): Promise<AgentRunRecord>;
   loadAgentExecutionPlanByRefActivity(executionPlanRef: string, tenantId?: string): Promise<AgentExecutionPlan>;
-  loadExecutionPlanByRefActivity(executionPlanRef: string): Promise<FlowExecutionPlan>;
+  loadExecutionPlanByRefActivity(executionPlanRef: string, tenantId?: string): Promise<FlowExecutionPlan>;
+  loadTenantPolicySnapshotActivity(input: {
+    tenant_id: string;
+    user_id: string;
+    task_run_id: string;
+    workflow_id: string;
+    request_id: string;
+    execution_plan_ref: string;
+    execution_plan_hash: string;
+    execution_plan_type: 'flow' | 'agent';
+    tenant_policy_snapshot_ref?: string;
+    tenant_policy_hash?: string;
+  }): Promise<EffectiveTenantPolicy>;
+  deriveTenantPolicySnapshotActivity(input: {
+    tenant_id: string;
+    user_id: string;
+    task_run_id: string;
+    workflow_id: string;
+    request_id: string;
+    parent_snapshot_ref: string;
+    target_execution_plan_ref: string;
+    target_execution_plan_hash: string;
+    target_execution_plan_type: 'flow' | 'agent';
+    derivation_type: 'flow_agent_child' | 'workflow_handoff' | 'nested_handoff';
+    tenant_policy_snapshot_ref?: string;
+    tenant_policy_hash?: string;
+  }): Promise<EffectiveTenantPolicy>;
   loadPiRuntimeConfigActivity(): Promise<PiRuntimeConfigActivityResult>;
   runPiSegmentActivity(input: {
     agent_run_id: string;
@@ -184,6 +212,8 @@ export const PI_ACTIVITY_OPTIONS = {
 const readActivities = proxyActivities<Pick<PiActivities,
   'loadAgentExecutionPlanByRefActivity'
   | 'loadExecutionPlanByRefActivity'
+  | 'loadTenantPolicySnapshotActivity'
+  | 'deriveTenantPolicySnapshotActivity'
   | 'loadPiRuntimeConfigActivity'
 >>(PI_ACTIVITY_OPTIONS.read);
 
@@ -209,6 +239,8 @@ const toolCommitActivities = proxyActivities<Pick<PiActivities, 'commitToolActiv
 const {
   loadAgentExecutionPlanByRefActivity,
   loadExecutionPlanByRefActivity,
+  loadTenantPolicySnapshotActivity,
+  deriveTenantPolicySnapshotActivity,
   loadPiRuntimeConfigActivity,
 } = readActivities;
 
@@ -262,17 +294,36 @@ export async function piDurableAgentWorkflow(
     execution_plan_ref: executionPlan.execution_plan_ref,
     execution_plan_hash: executionPlan.execution_plan_hash,
   };
+  const policy = context.tenant_policy_snapshot_ref && context.tenant_policy_hash && patched('pi-effective-tenant-policy-v1')
+    ? await loadTenantPolicySnapshotActivity({
+        ...executionContext,
+        execution_plan_ref: executionPlan.execution_plan_ref,
+        execution_plan_hash: executionPlan.execution_plan_hash,
+        execution_plan_type: 'agent',
+      })
+    : undefined;
+  const activeBudget = policy?.budget ?? executionPlan.budget;
   const runtimeConfig = await loadPiRuntimeConfigActivity();
   const continueAsNewSegmentThreshold = input.continue_as_new_segment_threshold
     ?? runtimeConfig.max_segments_before_continue_as_new;
   const agentRun = await createAgentRunActivity({
-    ...context,
+    ...executionContext,
     ...(input.agent_run_id ? { agent_run_id: input.agent_run_id } : {}),
     workflow_run_id: workflowRunId,
     execution_plan_ref: executionPlan.execution_plan_ref,
     ...(input.parent_workflow_id ? { parent_workflow_id: input.parent_workflow_id } : {}),
     execution_mode: input.execution_mode ?? 'mediated_tool_call',
   });
+  if (policy && !modelAllowedByPolicy(policy, executionPlan.model_policy)) {
+    return await failAgentRun(
+      agentRun.agent_run_id,
+      'AGENT_MODEL_DENIED_BY_TENANT_POLICY',
+      `Agent model is not allowed by tenant policy snapshot: ${executionPlan.model_policy}`,
+      undefined,
+      usageFromLedger(normalizeLedger(input.budget_ledger)),
+      executionContext,
+    );
+  }
 
   let contextSnapshotRef = input.context_snapshot_ref;
   let segmentIndex = input.segment_index ?? 0;
@@ -289,13 +340,13 @@ export async function piDurableAgentWorkflow(
     usage: usageFromLedger(ledger),
   });
 
-  while (segmentIndex < executionPlan.budget.max_segments) {
+  while (segmentIndex < activeBudget.max_segments) {
     ledger = { ...ledger, elapsed_duration_ms: elapsedMs(startedAtMs) };
-    const exhaustedBeforeSegment = budgetExceededForLedger(executionPlan.budget, ledger);
+    const exhaustedBeforeSegment = budgetExceededForLedger(activeBudget, ledger);
     if (exhaustedBeforeSegment) {
       return await budgetExceeded(agentRun.agent_run_id, exhaustedBeforeSegment.code, exhaustedBeforeSegment.message, contextSnapshotRef, ledger, executionContext);
     }
-    const remainingBeforeSegment = remainingBudget(executionPlan.budget, ledger);
+    const remainingBeforeSegment = remainingBudget(activeBudget, ledger);
 
     const segment = await runPiSegmentActivity({
       agent_run_id: agentRun.agent_run_id,
@@ -328,7 +379,7 @@ export async function piDurableAgentWorkflow(
       usage: segment.usage,
     });
 
-    const postSegmentBudget = budgetExceededForLedger(executionPlan.budget, ledger);
+    const postSegmentBudget = budgetExceededForLedger(activeBudget, ledger);
     if (postSegmentBudget && segment.status !== 'completed') {
         return await budgetExceeded(agentRun.agent_run_id, postSegmentBudget.code, postSegmentBudget.message, contextSnapshotRef, ledger, executionContext);
     }
@@ -365,6 +416,7 @@ export async function piDurableAgentWorkflow(
         proposals: segment.proposed_tool_calls,
         currentToolCallCount: ledger.tool_call_count,
         decisions: humanDecisions,
+        ...(policy ? { policy } : {}),
       });
       ledger = {
         ...ledger,
@@ -374,7 +426,7 @@ export async function piDurableAgentWorkflow(
         agent_run_id: agentRun.agent_run_id,
         previous_context_snapshot_ref: segment.context_snapshot_ref,
         tool_results: toolOutcome.results,
-        max_context_bytes: executionPlan.budget.max_context_bytes,
+        max_context_bytes: activeBudget.max_context_bytes,
         request_context: executionContext,
       });
       contextSnapshotRef = afterToolSnapshotRef;
@@ -428,7 +480,7 @@ export async function piDurableAgentWorkflow(
         human_task_id: humanTask.human_task_id,
         response: response.response,
         responded_by: response.responded_by,
-        max_context_bytes: executionPlan.budget.max_context_bytes,
+        max_context_bytes: activeBudget.max_context_bytes,
         request_context: executionContext,
       });
       contextSnapshotRef = afterUserSnapshotRef;
@@ -449,11 +501,21 @@ export async function piDurableAgentWorkflow(
     if (segment.status === 'handoff_requested') {
       const beforeHandoffLedger = ledger;
       ledger = { ...ledger, handoff_count: ledger.handoff_count + 1 };
-      if (beforeHandoffLedger.handoff_count >= executionPlan.budget.max_handoffs) {
+      if (beforeHandoffLedger.handoff_count >= activeBudget.max_handoffs) {
         return await budgetExceeded(agentRun.agent_run_id, 'AGENT_HANDOFF_BUDGET_EXCEEDED', 'Handoff budget exceeded', contextSnapshotRef, ledger, executionContext);
       }
       if (!executionPlan.allowed_handoffs.includes(segment.target_execution_plan_ref)) {
         return await failAgentRun(agentRun.agent_run_id, 'HANDOFF_DENIED', `Unauthorized handoff target: ${segment.target_execution_plan_ref}`, contextSnapshotRef, usageFromLedger(ledger), executionContext);
+      }
+      if (policy && !handoffAllowedByPolicy(policy, segment.target_execution_plan_ref)) {
+        return await failAgentRun(
+          agentRun.agent_run_id,
+          'HANDOFF_DENIED_BY_TENANT_POLICY',
+          `Workflow handoff is not allowed by tenant policy snapshot: ${segment.target_execution_plan_ref}`,
+          contextSnapshotRef,
+          usageFromLedger(ledger),
+          executionContext,
+        );
       }
 
       await updateAgentRunActivity({ agent_run_id: agentRun.agent_run_id, status: 'handing_off', handoff_count: ledger.handoff_count });
@@ -465,6 +527,7 @@ export async function piDurableAgentWorkflow(
         targetExecutionPlanRef: segment.target_execution_plan_ref,
         arguments: segment.arguments,
         chain: input.handoff_chain ?? [executionPlan.execution_plan_ref],
+        ...(policy ? { policy } : {}),
       });
       await updateAgentStepActivity({
         stable_step_key: stableStepKey(agentRun.agent_run_id, segmentIndex),
@@ -489,7 +552,7 @@ export async function piDurableAgentWorkflow(
         agent_run_id: agentRun.agent_run_id,
         previous_context_snapshot_ref: segment.context_snapshot_ref,
         tool_results: [handoffResult],
-        max_context_bytes: executionPlan.budget.max_context_bytes,
+        max_context_bytes: activeBudget.max_context_bytes,
         request_context: executionContext,
       });
       contextSnapshotRef = afterHandoffSnapshotRef;
@@ -541,6 +604,7 @@ export async function piDurableAgentWorkflow(
 async function executeProposedTools(input: {
   context: ActivityContext;
   executionPlan: AgentExecutionPlan;
+  policy?: EffectiveTenantPolicy;
   agentRunId: string;
   segmentIndex: number;
   proposals: ProposedToolCall[];
@@ -550,9 +614,10 @@ async function executeProposedTools(input: {
   const results: AgentAuthoritativeToolResult[] = [];
   const humanTaskIds: string[] = [];
   let chargedToolCallCount = 0;
+  const activeBudget = input.policy?.budget ?? input.executionPlan.budget;
   for (const proposal of input.proposals.slice().sort((a, b) => a.source_order - b.source_order)) {
     chargedToolCallCount += 1;
-    if (input.currentToolCallCount + chargedToolCallCount > input.executionPlan.budget.max_tool_calls) {
+    if (input.currentToolCallCount + chargedToolCallCount > activeBudget.max_tool_calls) {
       results.push(deniedToolResult(proposal, 'AGENT_TOOL_BUDGET_EXCEEDED', 'Tool call budget exceeded'));
       continue;
     }
@@ -566,6 +631,11 @@ async function executeProposedTools(input: {
       continue;
     }
     if (plannedTool.risk_level === 'L3') {
+      const previewPolicyError = toolPolicyError(input.policy, plannedTool, 'preview');
+      if (previewPolicyError) {
+        results.push(deniedToolResult(proposal, previewPolicyError.code, previewPolicyError.message));
+        continue;
+      }
       const preview = await previewToolActivity(input.context, plannedTool, proposal.arguments, toolIdentity(input, proposal, 'preview'));
       if (preview.status === 'denied') {
         results.push(deniedToolResult(proposal, preview.error?.code ?? 'TOOL_PREVIEW_DENIED', preview.error?.message ?? 'Tool preview denied', preview.audit_event_id));
@@ -594,6 +664,11 @@ async function executeProposedTools(input: {
         results.push(deniedToolResult(proposal, 'HUMAN_TASK_REJECTED', `Human task ${decision?.status ?? 'missing'}: ${humanTask.human_task_id}`));
         continue;
       }
+      const commitPolicyError = toolPolicyError(input.policy, plannedTool, 'commit');
+      if (commitPolicyError) {
+        results.push(deniedToolResult(proposal, commitPolicyError.code, commitPolicyError.message));
+        continue;
+      }
       const commit = await commitToolActivity(input.context, preview.tool_call_id, plannedTool, proposal.arguments, toolIdentity(input, proposal, 'commit'));
       results.push({
         tool_call_id: proposal.call_id,
@@ -608,6 +683,11 @@ async function executeProposedTools(input: {
         content: [{ type: 'text', text: summarizeToolResult(commit.result ?? commit.error ?? commit.status) }],
         details: { status: commit.status, result: commit.result ?? null, error: commit.error ?? null },
       });
+      continue;
+    }
+    const invokePolicyError = toolPolicyError(input.policy, plannedTool, 'invoke');
+    if (invokePolicyError) {
+      results.push(deniedToolResult(proposal, invokePolicyError.code, invokePolicyError.message));
       continue;
     }
     const invoke = await invokeToolActivity(input.context, plannedTool, proposal.arguments, toolIdentity(input, proposal, 'invoke'));
@@ -636,6 +716,7 @@ async function executeWorkflowHandoff(input: {
   targetExecutionPlanRef: string;
   arguments: Record<string, unknown>;
   chain: string[];
+  policy?: EffectiveTenantPolicy;
 }): Promise<Record<string, unknown> & { status: 'completed' | 'failed'; child_workflow_id: string; error_code?: string; error_message?: string }> {
   if (input.chain.includes(input.targetExecutionPlanRef)) {
     return {
@@ -645,7 +726,7 @@ async function executeWorkflowHandoff(input: {
       error_message: `Recursive workflow handoff denied: ${input.targetExecutionPlanRef}`,
     };
   }
-  const targetPlan = await loadExecutionPlanByRefActivity(input.targetExecutionPlanRef);
+  const targetPlan = await loadExecutionPlanByRefActivity(input.targetExecutionPlanRef, input.context.tenant_id);
   if (targetPlan.flow_spec.runtime.workflow_type !== 'ConfigDrivenWorkflow') {
     return {
       status: 'failed',
@@ -654,6 +735,18 @@ async function executeWorkflowHandoff(input: {
       error_message: 'Workflow handoff target must be ConfigDrivenWorkflow',
     };
   }
+  const childPolicy = input.policy
+    ? await deriveTenantPolicySnapshotActivity({
+        ...input.context,
+        parent_snapshot_ref: input.policy.snapshot_ref,
+        target_execution_plan_ref: targetPlan.execution_plan_ref,
+        target_execution_plan_hash: targetPlan.execution_plan_hash,
+        target_execution_plan_type: 'flow',
+        derivation_type: input.policy.derivation_type === 'root' ? 'workflow_handoff' : 'nested_handoff',
+        tenant_policy_snapshot_ref: input.policy.snapshot_ref,
+        tenant_policy_hash: input.policy.snapshot_hash,
+      })
+    : undefined;
 
   const childWorkflowId = [
     sanitizeWorkflowId(input.context.workflow_id),
@@ -677,6 +770,9 @@ async function executeWorkflowHandoff(input: {
         execution_plan_ref: targetPlan.execution_plan_ref,
         flow_sha256: targetPlan.flow_sha256,
         request_id: input.context.request_id,
+        ...(childPolicy ? { tenant_policy_snapshot_ref: childPolicy.snapshot_ref } : {}),
+        ...(childPolicy ? { tenant_policy_hash: childPolicy.snapshot_hash } : {}),
+        ...(input.context.tenant_admission_id ? { tenant_admission_id: input.context.tenant_admission_id } : {}),
         input: input.arguments,
       }],
     });
@@ -915,6 +1011,51 @@ function resolvePlannedAgentTool(plan: AgentExecutionPlan, proposal: ProposedToo
         risk_level: entry.risk_level,
       }
     : undefined;
+}
+
+function modelAllowedByPolicy(policy: EffectiveTenantPolicy, modelPolicy: string): boolean {
+  return policy.allowed_models.some((rule) => rule.model_id === modelPolicy);
+}
+
+function handoffAllowedByPolicy(policy: EffectiveTenantPolicy, targetExecutionPlanRef: string): boolean {
+  return policy.allowed_handoffs.some((rule) =>
+    rule.execution_plan_refs?.includes(targetExecutionPlanRef) || rule.flow_id === targetExecutionPlanRef);
+}
+
+function toolPolicyError(
+  policy: EffectiveTenantPolicy | undefined,
+  tool: FlowExecutionPlanTool,
+  operation: 'invoke' | 'preview' | 'commit',
+): { code: string; message: string } | undefined {
+  if (!policy) {
+    return undefined;
+  }
+  const denied = policy.denied_tools.some((rule) => rule.tool_name === tool.tool_name && ruleMatchesVersion(rule, tool.tool_version));
+  if (denied) {
+    return {
+      code: 'TOOL_DENIED_BY_TENANT_POLICY',
+      message: `Tool denied by tenant policy snapshot: ${tool.tool_name}@${tool.tool_version}`,
+    };
+  }
+  const allowed = policy.allowed_tools.some((rule) =>
+    rule.tool_name === tool.tool_name
+    && ruleMatchesVersion(rule, tool.tool_version)
+    && rule.allowed_operations.includes(operation)
+    && (!rule.max_risk_level || riskRank(tool.risk_level) <= riskRank(rule.max_risk_level)));
+  return allowed
+    ? undefined
+    : {
+        code: 'TOOL_DENIED_BY_TENANT_POLICY',
+        message: `Tool operation is not allowed by tenant policy snapshot: ${tool.tool_name}@${tool.tool_version}:${operation}`,
+      };
+}
+
+function ruleMatchesVersion(rule: { versions?: string[] | undefined }, version: string): boolean {
+  return !rule.versions?.length || rule.versions.includes(version);
+}
+
+function riskRank(riskLevel: string): number {
+  return Number(riskLevel.slice(1));
 }
 
 function deniedToolResult(proposal: ProposedToolCall, code: string, message: string, auditEventId?: string): AgentAuthoritativeToolResult {

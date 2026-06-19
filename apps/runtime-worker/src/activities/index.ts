@@ -5,6 +5,7 @@ import {
 } from '@temporalio/activity';
 import {
   agentUsageSchema,
+  effectiveTenantPolicySchema,
   piSegmentRequestSchema,
   piSegmentResultSchema,
   flowExecutionPlanSchema,
@@ -31,6 +32,7 @@ import {
   type ToolCommitResponse,
   type ToolInvokeResponse,
   type ToolPreviewResponse,
+  type EffectiveTenantPolicy,
 } from '@dar/contracts';
 import { ToolGatewayClient } from '@dar/tool-client';
 import type { UserMessage } from '@earendil-works/pi-ai';
@@ -49,6 +51,9 @@ import {
   parseDbFlowSnapshotRef,
   TaskRunRepository,
   TenantAgentAdmissionRepository,
+  TenantRuntimePolicyResolver,
+  TenantRuntimePolicySnapshotRepository,
+  effectivePolicyFromSnapshot,
 } from '@dar/db';
 import { createDeterministicPiStream, type DeterministicPiScenario } from '../agent/deterministic-pi-stream.js';
 import { createModelGatewayModel, createModelGatewayPiStream } from '../agent/model-gateway-pi-stream.js';
@@ -69,6 +74,11 @@ const NON_RETRYABLE_ERROR_CODES = new Set([
   'TOOL_POLICY_DENIED',
   'TOOL_HASH_MISMATCH',
   'TOOL_RISK_MISMATCH',
+  'TENANT_POLICY_HASH_MISMATCH',
+  'EXECUTION_PLAN_HASH_MISMATCH',
+  'AGENT_MODEL_DENIED_BY_TENANT_POLICY',
+  'HANDOFF_DENIED_BY_TENANT_POLICY',
+  'TOOL_DENIED_BY_TENANT_POLICY',
   'HUMAN_CONFIRMATION_REQUIRED',
   'IDEMPOTENCY_CONFLICT',
   'PI_SEGMENT_NON_RETRYABLE',
@@ -129,6 +139,20 @@ export interface ActivityContext {
   tenant_policy_snapshot_ref?: string;
   tenant_policy_hash?: string;
   tenant_admission_id?: string;
+}
+
+export interface LoadTenantPolicySnapshotActivityInput extends ActivityContext {
+  execution_plan_ref: string;
+  execution_plan_hash: string;
+  execution_plan_type: 'flow' | 'agent';
+}
+
+export interface DeriveTenantPolicySnapshotActivityInput extends ActivityContext {
+  parent_snapshot_ref: string;
+  target_execution_plan_ref: string;
+  target_execution_plan_hash: string;
+  target_execution_plan_type: 'flow' | 'agent';
+  derivation_type: 'flow_agent_child' | 'workflow_handoff' | 'nested_handoff';
 }
 
 export interface CreateHumanTaskActivityInput {
@@ -235,6 +259,52 @@ export async function loadAgentExecutionPlanByRefActivity(
   });
 }
 
+export async function loadTenantPolicySnapshotActivity(
+  input: LoadTenantPolicySnapshotActivityInput,
+): Promise<EffectiveTenantPolicy> {
+  return classifyActivityFailure('loadTenantPolicySnapshotActivity', async () => {
+    if (!input.tenant_policy_snapshot_ref || !input.tenant_policy_hash) {
+      throw ApplicationFailure.nonRetryable('Tenant policy snapshot identity is required', 'POLICY_DENIED');
+    }
+    const snapshot = await new TenantRuntimePolicySnapshotRepository(getProcessDb()).getByRef(
+      input.tenant_policy_snapshot_ref,
+      { tenantId: input.tenant_id },
+    );
+    if (!snapshot) {
+      throw ApplicationFailure.nonRetryable('Tenant policy snapshot not found', 'NOT_FOUND');
+    }
+    if (snapshot.snapshot_hash !== input.tenant_policy_hash) {
+      throw ApplicationFailure.nonRetryable('TENANT_POLICY_HASH_MISMATCH', 'TENANT_POLICY_HASH_MISMATCH');
+    }
+    if (
+      snapshot.execution_plan_ref !== input.execution_plan_ref
+      || snapshot.execution_plan_hash !== input.execution_plan_hash
+      || snapshot.execution_plan_type !== input.execution_plan_type
+    ) {
+      throw ApplicationFailure.nonRetryable('EXECUTION_PLAN_HASH_MISMATCH', 'EXECUTION_PLAN_HASH_MISMATCH');
+    }
+    return effectiveTenantPolicySchema.parse(effectivePolicyFromSnapshot(snapshot));
+  });
+}
+
+export async function deriveTenantPolicySnapshotActivity(
+  input: DeriveTenantPolicySnapshotActivityInput,
+): Promise<EffectiveTenantPolicy> {
+  return classifyActivityFailure('deriveTenantPolicySnapshotActivity', async () => {
+    const result = await new TenantRuntimePolicyResolver(getProcessDb()).deriveForExecutionPlan({
+      tenant_id: input.tenant_id,
+      user_id: input.user_id,
+      parent_snapshot_ref: input.parent_snapshot_ref,
+      target_execution_plan_ref: input.target_execution_plan_ref,
+      target_execution_plan_hash: input.target_execution_plan_hash,
+      target_execution_plan_type: input.target_execution_plan_type,
+      derivation_type: input.derivation_type,
+      request_id: input.request_id,
+    });
+    return effectiveTenantPolicySchema.parse(effectivePolicyFromSnapshot(result.snapshot));
+  });
+}
+
 export async function createAgentRunActivity(input: CreateAgentRunActivityInput): Promise<AgentRunRecord> {
   return classifyActivityFailure('createAgentRunActivity', async () => {
     const db = getProcessDb();
@@ -243,6 +313,22 @@ export async function createAgentRunActivity(input: CreateAgentRunActivityInput)
     });
     if (!executionPlan) {
       throw ApplicationFailure.nonRetryable(`AgentExecutionPlan not found: ${input.execution_plan_ref}`, 'NOT_FOUND');
+    }
+    const policySnapshot = input.tenant_policy_snapshot_ref
+      ? await new TenantRuntimePolicySnapshotRepository(db).getByRef(input.tenant_policy_snapshot_ref, { tenantId: input.tenant_id })
+      : undefined;
+    if (input.tenant_policy_snapshot_ref && !policySnapshot) {
+      throw ApplicationFailure.nonRetryable('Tenant policy snapshot not found', 'NOT_FOUND');
+    }
+    if (policySnapshot && input.tenant_policy_hash && policySnapshot.snapshot_hash !== input.tenant_policy_hash) {
+      throw ApplicationFailure.nonRetryable('TENANT_POLICY_HASH_MISMATCH', 'TENANT_POLICY_HASH_MISMATCH');
+    }
+    if (policySnapshot && (
+      policySnapshot.execution_plan_ref !== executionPlan.execution_plan_ref
+      || policySnapshot.execution_plan_hash !== executionPlan.execution_plan_hash
+      || policySnapshot.execution_plan_type !== 'agent'
+    )) {
+      throw ApplicationFailure.nonRetryable('EXECUTION_PLAN_HASH_MISMATCH', 'EXECUTION_PLAN_HASH_MISMATCH');
     }
     const agentRun = await new AgentRunRepository(db).create({
       ...(input.agent_run_id ? { agentRunId: input.agent_run_id } : {}),
@@ -254,8 +340,9 @@ export async function createAgentRunActivity(input: CreateAgentRunActivityInput)
       ...(input.parent_workflow_id ? { parentWorkflowId: input.parent_workflow_id } : {}),
       executionMode: input.execution_mode ?? 'mediated_tool_call',
       executionPlan,
-      ...(input.tenant_policy_snapshot_ref ? { tenantPolicySnapshotRef: input.tenant_policy_snapshot_ref } : {}),
-      ...(input.tenant_policy_hash ? { tenantPolicyHash: input.tenant_policy_hash } : {}),
+      ...(policySnapshot ? { tenantPolicySnapshotRef: policySnapshot.snapshot_ref } : {}),
+      ...(policySnapshot ? { tenantPolicyVersion: policySnapshot.source_policy_version } : {}),
+      ...(policySnapshot ? { tenantPolicyHash: policySnapshot.snapshot_hash } : {}),
       ...(input.tenant_admission_id ? { tenantAdmissionId: input.tenant_admission_id } : {}),
     });
     if (input.tenant_admission_id) {
@@ -650,10 +737,10 @@ export async function loadFlowSpecByRefActivity(flowSnapshotRef: string): Promis
   throw new Error(`Unknown flow snapshot ref: ${flowSnapshotRef}`);
 }
 
-export async function loadExecutionPlanByRefActivity(executionPlanRef: string): Promise<FlowExecutionPlan> {
+export async function loadExecutionPlanByRefActivity(executionPlanRef: string, tenantId?: string): Promise<FlowExecutionPlan> {
   return classifyActivityFailure('loadExecutionPlanByRefActivity', async () => {
     const db = getProcessDb();
-    const plan = await new FlowExecutionPlanRepository(db).getByRef(executionPlanRef);
+    const plan = await new FlowExecutionPlanRepository(db).getByRef(executionPlanRef, tenantId ? { tenantId } : {});
     if (!plan) {
       throw ApplicationFailure.nonRetryable(`FlowExecutionPlan not found: ${executionPlanRef}`, 'NOT_FOUND');
     }
@@ -809,6 +896,9 @@ async function classifyActivityFailure<T>(
 }
 
 function classifyErrorCode(message: string): string | undefined {
+  if (/TENANT_POLICY_HASH_MISMATCH|EXECUTION_PLAN_HASH_MISMATCH|AGENT_MODEL_DENIED_BY_TENANT_POLICY|HANDOFF_DENIED_BY_TENANT_POLICY|TOOL_DENIED_BY_TENANT_POLICY/u.test(message)) {
+    return message.match(/TENANT_POLICY_HASH_MISMATCH|EXECUTION_PLAN_HASH_MISMATCH|AGENT_MODEL_DENIED_BY_TENANT_POLICY|HANDOFF_DENIED_BY_TENANT_POLICY|TOOL_DENIED_BY_TENANT_POLICY/u)?.[0];
+  }
   if (/validation|invalid|schema|parse/iu.test(message)) {
     return 'VALIDATION_FAILED';
   }

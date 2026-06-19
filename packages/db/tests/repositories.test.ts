@@ -302,6 +302,123 @@ describe('db repositories', () => {
     await expect(admissionRepo.getActiveCount(policy.tenant_id)).resolves.toBe(0);
   });
 
+  it('creates immutable tenant policy snapshots with root and child lineage in the snapshot hash', async () => {
+    const policy = tenantRuntimePolicySchema.parse({
+      tenant_id: 'tenant_policy_lineage_test',
+      version: 1,
+      status: 'published',
+      allowed_tools: [{
+        tool_name: 'knowledge.search',
+        versions: ['1.0.0'],
+        allowed_operations: ['invoke'],
+        max_risk_level: 'L1',
+      }],
+      denied_tools: [],
+      allowed_models: [{ model_id: 'deterministic:readonly_tool' }],
+      denied_models: [],
+      allowed_handoffs: [],
+      denied_handoffs: [],
+      budget_cap: {
+        max_segments: 2,
+        max_model_turns: 2,
+        max_tool_calls: 1,
+        max_total_tokens: 1000,
+      },
+      max_concurrent_agent_runs: 1,
+    });
+    const policyHash = hashTenantRuntimePolicy(policy);
+    const resolvedPolicy = {
+      resolved_allowed_tools: policy.allowed_tools,
+      resolved_denied_tools: policy.denied_tools,
+      resolved_allowed_models: policy.allowed_models,
+      resolved_allowed_handoffs: policy.allowed_handoffs,
+      resolved_budget: {
+        max_segments: 2,
+        max_model_turns: 2,
+        max_tool_calls: 1,
+        max_input_tokens: 0,
+        max_output_tokens: 0,
+        max_total_tokens: 1000,
+        max_duration_ms: 300000,
+        max_handoffs: 0,
+        max_context_bytes: 262144,
+      },
+      max_concurrent_agent_runs: 1,
+    };
+    const repository = new TenantRuntimePolicySnapshotRepository(new FakeDb({
+      tenant_runtime_policy_snapshot: [],
+    }) as never);
+
+    const root = await repository.createImmutableSnapshot({
+      tenantId: policy.tenant_id,
+      policy,
+      policyHash,
+      executionPlanRef: 'db://flow-execution-plan/root',
+      executionPlanHash: 'a'.repeat(64),
+      executionPlanType: 'flow',
+      resolvedPolicy,
+    });
+    expect(root).toMatchObject({
+      tenant_id: policy.tenant_id,
+      root_snapshot_ref: root.snapshot_ref,
+      derivation_type: 'root',
+      lineage_depth: 0,
+      source_policy_version: 1,
+      source_policy_hash: policyHash,
+    });
+    expect(root.parent_snapshot_ref).toBeUndefined();
+
+    const child = await repository.createImmutableSnapshot({
+      tenantId: policy.tenant_id,
+      policy,
+      policyHash,
+      executionPlanRef: 'db://agent-execution-plan/child',
+      executionPlanHash: 'b'.repeat(64),
+      executionPlanType: 'agent',
+      rootSnapshotRef: root.snapshot_ref,
+      parentSnapshotRef: root.snapshot_ref,
+      derivationType: 'flow_agent_child',
+      lineageDepth: 1,
+      resolvedPolicy,
+    });
+    expect(child).toMatchObject({
+      tenant_id: policy.tenant_id,
+      root_snapshot_ref: root.snapshot_ref,
+      parent_snapshot_ref: root.snapshot_ref,
+      derivation_type: 'flow_agent_child',
+      lineage_depth: 1,
+      execution_plan_ref: 'db://agent-execution-plan/child',
+    });
+    expect(child.snapshot_hash).not.toBe(root.snapshot_hash);
+
+    const siblingWithDifferentParent = await repository.createImmutableSnapshot({
+      tenantId: policy.tenant_id,
+      policy,
+      policyHash,
+      executionPlanRef: 'db://agent-execution-plan/child',
+      executionPlanHash: 'b'.repeat(64),
+      executionPlanType: 'agent',
+      rootSnapshotRef: root.snapshot_ref,
+      parentSnapshotRef: 'db://tenant-runtime-policy-snapshot/different_parent',
+      derivationType: 'flow_agent_child',
+      lineageDepth: 1,
+      resolvedPolicy,
+    });
+    expect(siblingWithDifferentParent.snapshot_hash).not.toBe(child.snapshot_hash);
+
+    await expect(repository.createImmutableSnapshot({
+      tenantId: policy.tenant_id,
+      policy,
+      policyHash,
+      executionPlanRef: 'db://flow-execution-plan/invalid',
+      executionPlanHash: 'c'.repeat(64),
+      executionPlanType: 'flow',
+      parentSnapshotRef: root.snapshot_ref,
+      derivationType: 'root',
+      resolvedPolicy,
+    })).rejects.toThrow(/Root TenantRuntimePolicySnapshot/u);
+  });
+
   it('stores and verifies AgentExecutionPlan by immutable ref without adapter secrets', async () => {
     const now = '2026-01-01T00:00:00.000Z';
     const hash = 'd'.repeat(64);

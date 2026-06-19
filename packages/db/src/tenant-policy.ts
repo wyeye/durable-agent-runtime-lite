@@ -3,6 +3,7 @@ import type {
   AgentExecutionPlan,
   FlowExecutionPlan,
   TenantPolicyDecision,
+  TenantPolicySnapshotDerivationType,
   TenantPolicyHandoffRule,
   TenantPolicyOperation,
   TenantPolicyToolRule,
@@ -11,6 +12,7 @@ import type {
   ToolRiskLevel,
 } from '@dar/contracts';
 import {
+  effectiveTenantPolicySchema,
   agentBudgetSchema,
   registryValidationResultSchema,
   tenantPolicyDecisionSchema,
@@ -52,6 +54,19 @@ export interface TenantRuntimePolicyResolverInput {
   request_id?: string;
   mode?: TenantRuntimePolicyMode;
 }
+
+export interface TenantRuntimePolicyDeriveInput {
+  tenant_id: string;
+  user_id: string;
+  parent_snapshot_ref: string;
+  target_execution_plan_ref: string;
+  target_execution_plan_hash?: string;
+  target_execution_plan_type: 'flow' | 'agent';
+  derivation_type: Exclude<TenantPolicySnapshotDerivationType, 'root'>;
+  request_id?: string;
+}
+
+export type EffectiveTenantPolicy = ReturnType<typeof effectivePolicyFromSnapshot>;
 
 export interface TenantRuntimePolicyResolverResult {
   snapshot: TenantRuntimePolicySnapshot;
@@ -167,6 +182,8 @@ export class TenantRuntimePolicyReleaseService {
 }
 
 export class TenantRuntimePolicyResolver {
+  static readonly maxLineageDepth = 8;
+
   constructor(private readonly db: Kysely<Database>) {}
 
   async resolve(input: TenantRuntimePolicyResolverInput): Promise<TenantRuntimePolicyResolverResult> {
@@ -195,6 +212,8 @@ export class TenantRuntimePolicyResolver {
       executionPlanRef: plan.execution_plan_ref,
       executionPlanHash: plan.execution_plan_hash,
       executionPlanType: input.execution_plan_type,
+      derivationType: 'root',
+      lineageDepth: 0,
       resolvedPolicy: effective,
     });
     const decision = tenantPolicyDecisionSchema.parse({
@@ -212,6 +231,94 @@ export class TenantRuntimePolicyResolver {
     await this.appendResolveAudit(input, 'policy.snapshot.created', 'succeeded', decision.reason_code, snapshot);
     await this.appendResolveAudit(input, 'policy.resolve.allowed', 'allowed', decision.reason_code, snapshot);
     return { snapshot, decision };
+  }
+
+  async deriveForExecutionPlan(input: TenantRuntimePolicyDeriveInput): Promise<TenantRuntimePolicyResolverResult> {
+    const snapshotRepository = new TenantRuntimePolicySnapshotRepository(this.db);
+    const parent = await snapshotRepository.getByRef(input.parent_snapshot_ref, { tenantId: input.tenant_id });
+    if (!parent) {
+      throw new TenantRuntimePolicyError('TENANT_POLICY_PARENT_SNAPSHOT_NOT_FOUND', 'Parent tenant policy snapshot not found', 404);
+    }
+    if (parent.tenant_id !== input.tenant_id) {
+      throw new TenantRuntimePolicyError('TENANT_POLICY_SNAPSHOT_TENANT_MISMATCH', 'Policy snapshot tenant mismatch', 403);
+    }
+    if (parent.lineage_depth >= TenantRuntimePolicyResolver.maxLineageDepth) {
+      throw new TenantRuntimePolicyError('TENANT_POLICY_LINEAGE_DEPTH_EXCEEDED', 'Tenant policy snapshot lineage depth exceeded', 409);
+    }
+    const root = await snapshotRepository.getByRef(parent.root_snapshot_ref, { tenantId: input.tenant_id });
+    if (!root) {
+      throw new TenantRuntimePolicyError('TENANT_POLICY_ROOT_SNAPSHOT_NOT_FOUND', 'Root tenant policy snapshot not found', 404);
+    }
+    if (root.tenant_id !== parent.tenant_id) {
+      throw new TenantRuntimePolicyError('TENANT_POLICY_SNAPSHOT_TENANT_MISMATCH', 'Policy snapshot root tenant mismatch', 403);
+    }
+    const policy = await new TenantRuntimePolicyRepository(this.db).getByTenantAndVersion(
+      input.tenant_id,
+      root.source_policy_version,
+    );
+    if (!policy) {
+      throw new TenantRuntimePolicyError('TENANT_RUNTIME_POLICY_NOT_FOUND', 'Source tenant runtime policy version not found', 403);
+    }
+    const policyHash = hashTenantRuntimePolicy(policy);
+    if (policyHash !== root.source_policy_hash || policyHash !== parent.source_policy_hash) {
+      await this.appendResolveAudit({
+        tenant_id: input.tenant_id,
+        user_id: input.user_id,
+        execution_plan_ref: input.target_execution_plan_ref,
+        execution_plan_type: input.target_execution_plan_type,
+        ...(input.target_execution_plan_hash ? { execution_plan_hash: input.target_execution_plan_hash } : {}),
+        ...(input.request_id ? { request_id: input.request_id } : {}),
+      }, 'policy.snapshot.hash_mismatch', 'denied', 'TENANT_POLICY_HASH_MISMATCH', parent);
+      throw new TenantRuntimePolicyError('TENANT_POLICY_HASH_MISMATCH', 'Source tenant policy hash mismatch', 409);
+    }
+    const plan = await this.loadExecutionPlan({
+      tenant_id: input.tenant_id,
+      user_id: input.user_id,
+      execution_plan_ref: input.target_execution_plan_ref,
+      execution_plan_type: input.target_execution_plan_type,
+      mode: 'required',
+      ...(input.target_execution_plan_hash ? { execution_plan_hash: input.target_execution_plan_hash } : {}),
+      ...(input.request_id ? { request_id: input.request_id } : {}),
+    });
+    if (input.target_execution_plan_hash && plan.execution_plan_hash !== input.target_execution_plan_hash) {
+      throw new TenantRuntimePolicyError('EXECUTION_PLAN_HASH_MISMATCH', 'Execution plan hash mismatch', 409);
+    }
+    const effective = resolveEffectivePolicy(policy, plan);
+    const child = await snapshotRepository.createImmutableSnapshot({
+      tenantId: input.tenant_id,
+      policy,
+      policyHash,
+      executionPlanRef: plan.execution_plan_ref,
+      executionPlanHash: plan.execution_plan_hash,
+      executionPlanType: input.target_execution_plan_type,
+      rootSnapshotRef: root.snapshot_ref,
+      parentSnapshotRef: parent.snapshot_ref,
+      derivationType: input.derivation_type,
+      lineageDepth: parent.lineage_depth + 1,
+      resolvedPolicy: effective,
+    });
+    const decision = tenantPolicyDecisionSchema.parse({
+      decision: 'allow',
+      reason_code: 'TENANT_POLICY_SNAPSHOT_DERIVED',
+      reason_summary: 'Tenant policy snapshot derived for execution plan lineage',
+      snapshot_ref: child.snapshot_ref,
+      snapshot_hash: child.snapshot_hash,
+      matched_rules: [],
+      effective_budget: child.resolved_budget,
+      effective_allowed_tools: child.resolved_allowed_tools,
+      effective_allowed_models: child.resolved_allowed_models,
+      effective_allowed_handoffs: child.resolved_allowed_handoffs,
+    });
+    await this.appendResolveAudit({
+      tenant_id: input.tenant_id,
+      user_id: input.user_id,
+      execution_plan_ref: plan.execution_plan_ref,
+      execution_plan_hash: plan.execution_plan_hash,
+      execution_plan_type: input.target_execution_plan_type,
+      mode: 'required',
+      ...(input.request_id ? { request_id: input.request_id } : {}),
+    }, 'policy.snapshot.derived', 'succeeded', decision.reason_code, child);
+    return { snapshot: child, decision };
   }
 
   private async loadExecutionPlan(input: TenantRuntimePolicyResolverInput): Promise<FlowExecutionPlan | AgentExecutionPlan> {
@@ -256,10 +363,33 @@ export class TenantRuntimePolicyResolver {
   }
 }
 
+export function effectivePolicyFromSnapshot(snapshot: TenantRuntimePolicySnapshot) {
+  return effectiveTenantPolicySchema.parse({
+    tenant_id: snapshot.tenant_id,
+    snapshot_ref: snapshot.snapshot_ref,
+    snapshot_hash: snapshot.snapshot_hash,
+    source_policy_version: snapshot.source_policy_version,
+    source_policy_hash: snapshot.source_policy_hash,
+    execution_plan_ref: snapshot.execution_plan_ref,
+    execution_plan_hash: snapshot.execution_plan_hash,
+    execution_plan_type: snapshot.execution_plan_type,
+    root_snapshot_ref: snapshot.root_snapshot_ref,
+    ...(snapshot.parent_snapshot_ref ? { parent_snapshot_ref: snapshot.parent_snapshot_ref } : {}),
+    derivation_type: snapshot.derivation_type,
+    lineage_depth: snapshot.lineage_depth,
+    allowed_tools: snapshot.resolved_allowed_tools,
+    denied_tools: snapshot.resolved_denied_tools,
+    allowed_models: snapshot.resolved_allowed_models,
+    allowed_handoffs: snapshot.resolved_allowed_handoffs,
+    budget: snapshot.resolved_budget,
+    max_concurrent_agent_runs: snapshot.max_concurrent_agent_runs,
+  });
+}
+
 export function resolveEffectivePolicy(
   policy: TenantRuntimePolicy,
   plan: FlowExecutionPlan | AgentExecutionPlan,
-): Omit<TenantRuntimePolicySnapshot, 'snapshot_id' | 'snapshot_ref' | 'tenant_id' | 'source_policy_version' | 'source_policy_hash' | 'execution_plan_ref' | 'execution_plan_hash' | 'execution_plan_type' | 'snapshot_hash' | 'created_at'> {
+): Omit<TenantRuntimePolicySnapshot, 'snapshot_id' | 'snapshot_ref' | 'tenant_id' | 'root_snapshot_ref' | 'parent_snapshot_ref' | 'derivation_type' | 'lineage_depth' | 'source_policy_version' | 'source_policy_hash' | 'execution_plan_ref' | 'execution_plan_hash' | 'execution_plan_type' | 'snapshot_hash' | 'created_at'> {
   const planTools = planToolEntries(plan);
   const planModels = planModelEntries(plan);
   const planHandoffs = planHandoffEntries(plan);
@@ -305,15 +435,7 @@ export function assertSnapshotAllowsTool(input: {
   operation: TenantPolicyOperation;
   riskLevel: ToolRiskLevel;
 }): void {
-  if (input.snapshot.tenant_id !== input.tenantId) {
-    throw new TenantRuntimePolicyError('TENANT_POLICY_SNAPSHOT_TENANT_MISMATCH', 'Policy snapshot tenant mismatch', 403);
-  }
-  if (input.snapshot.snapshot_hash !== input.snapshotHash) {
-    throw new TenantRuntimePolicyError('TENANT_POLICY_HASH_MISMATCH', 'Policy snapshot hash mismatch', 409);
-  }
-  if (input.snapshot.execution_plan_ref !== input.executionPlanRef || input.snapshot.execution_plan_hash !== input.executionPlanHash) {
-    throw new TenantRuntimePolicyError('EXECUTION_PLAN_HASH_MISMATCH', 'Execution plan hash mismatch', 409);
-  }
+  assertSnapshotIdentity(input);
   const denied = input.snapshot.resolved_denied_tools.some((rule) => rule.tool_name === input.toolName && ruleMatchesVersion(rule, input.toolVersion));
   if (denied) {
     throw new TenantRuntimePolicyError('TOOL_DENIED_BY_TENANT_POLICY', 'Tool denied by tenant policy', 403);
@@ -325,6 +447,54 @@ export function assertSnapshotAllowsTool(input: {
   );
   if (!allowed) {
     throw new TenantRuntimePolicyError('TOOL_DENIED_BY_TENANT_POLICY', 'Tool is not allowed by tenant policy snapshot', 403);
+  }
+}
+
+export function assertSnapshotAllowsModel(input: {
+  snapshot: TenantRuntimePolicySnapshot;
+  tenantId: string;
+  snapshotHash: string;
+  executionPlanRef: string;
+  executionPlanHash: string;
+  modelPolicy: string;
+}): void {
+  assertSnapshotIdentity(input);
+  const allowed = input.snapshot.resolved_allowed_models.some((rule) => rule.model_id === input.modelPolicy);
+  if (!allowed) {
+    throw new TenantRuntimePolicyError('AGENT_MODEL_DENIED_BY_TENANT_POLICY', 'Agent model is not allowed by tenant policy snapshot', 403);
+  }
+}
+
+export function assertSnapshotAllowsHandoff(input: {
+  snapshot: TenantRuntimePolicySnapshot;
+  tenantId: string;
+  snapshotHash: string;
+  executionPlanRef: string;
+  executionPlanHash: string;
+  targetExecutionPlanRef: string;
+}): void {
+  assertSnapshotIdentity(input);
+  const allowed = input.snapshot.resolved_allowed_handoffs.some((rule) => handoffRuleMatches(rule, input.targetExecutionPlanRef));
+  if (!allowed) {
+    throw new TenantRuntimePolicyError('HANDOFF_DENIED_BY_TENANT_POLICY', 'Workflow handoff is not allowed by tenant policy snapshot', 403);
+  }
+}
+
+function assertSnapshotIdentity(input: {
+  snapshot: TenantRuntimePolicySnapshot;
+  tenantId: string;
+  snapshotHash: string;
+  executionPlanRef: string;
+  executionPlanHash: string;
+}): void {
+  if (input.snapshot.tenant_id !== input.tenantId) {
+    throw new TenantRuntimePolicyError('TENANT_POLICY_SNAPSHOT_TENANT_MISMATCH', 'Policy snapshot tenant mismatch', 403);
+  }
+  if (input.snapshot.snapshot_hash !== input.snapshotHash) {
+    throw new TenantRuntimePolicyError('TENANT_POLICY_HASH_MISMATCH', 'Policy snapshot hash mismatch', 409);
+  }
+  if (input.snapshot.execution_plan_ref !== input.executionPlanRef || input.snapshot.execution_plan_hash !== input.executionPlanHash) {
+    throw new TenantRuntimePolicyError('EXECUTION_PLAN_HASH_MISMATCH', 'Execution plan hash mismatch', 409);
   }
 }
 

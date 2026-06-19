@@ -33,6 +33,9 @@
     "smoke:pi-restart-resume-e2e": "PI_SMOKE_SCENARIO=restart_resume PI_SMOKE_MODE=deterministic tsx scripts/smoke-pi-e2e.ts",
     "smoke:pi-worker-crash-resume-e2e": "PI_SMOKE_MODE=deterministic tsx scripts/smoke-pi-worker-crash-resume-e2e.ts",
     "smoke:pi-model-gateway-e2e": "PI_SMOKE_SCENARIO=model_gateway PI_SMOKE_MODE=model_gateway tsx scripts/smoke-pi-e2e.ts",
+    "smoke:tenant-policy-e2e": "TENANT_POLICY_SMOKE_SCENARIO=policy tsx scripts/smoke-tenant-policy-e2e.ts",
+    "smoke:tenant-policy-snapshot-e2e": "TENANT_POLICY_SMOKE_SCENARIO=snapshot tsx scripts/smoke-tenant-policy-e2e.ts",
+    "smoke:tenant-concurrency-e2e": "TENANT_POLICY_SMOKE_SCENARIO=concurrency tsx scripts/smoke-tenant-policy-e2e.ts",
     "temporal:export-replay-fixtures": "tsx scripts/export-temporal-replay-fixtures.ts"
   },
   "devDependencies": {

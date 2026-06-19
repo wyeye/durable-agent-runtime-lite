@@ -20,6 +20,7 @@ import type {
   TaskRun,
   TenantAgentAdmission,
   TenantAdmissionStatus,
+  TenantPolicySnapshotDerivationType,
   TenantRuntimePolicy,
   TenantRuntimePolicySnapshot,
   ToolCallLog,
@@ -296,7 +297,11 @@ export interface CreateTenantPolicySnapshotInput {
   executionPlanRef: string;
   executionPlanHash: string;
   executionPlanType: 'flow' | 'agent';
-  resolvedPolicy: Omit<TenantRuntimePolicySnapshot, 'snapshot_id' | 'snapshot_ref' | 'tenant_id' | 'source_policy_version' | 'source_policy_hash' | 'execution_plan_ref' | 'execution_plan_hash' | 'execution_plan_type' | 'snapshot_hash' | 'created_at'>;
+  rootSnapshotRef?: string;
+  parentSnapshotRef?: string;
+  derivationType?: TenantPolicySnapshotDerivationType;
+  lineageDepth?: number;
+  resolvedPolicy: Omit<TenantRuntimePolicySnapshot, 'snapshot_id' | 'snapshot_ref' | 'tenant_id' | 'root_snapshot_ref' | 'parent_snapshot_ref' | 'derivation_type' | 'lineage_depth' | 'source_policy_version' | 'source_policy_hash' | 'execution_plan_ref' | 'execution_plan_hash' | 'execution_plan_type' | 'snapshot_hash' | 'created_at'>;
 }
 
 export interface TenantAdmissionReserveInput {
@@ -308,9 +313,22 @@ export interface TenantAdmissionReserveInput {
 
 export interface TenantAdmissionListOptions extends RepositoryTenantOptions {
   status?: TenantAdmissionStatus;
+  taskRunId?: string;
+  agentRunId?: string;
   limit?: number;
   offset?: number;
   staleBefore?: string;
+}
+
+export interface TenantPolicySnapshotListOptions extends RepositoryTenantOptions {
+  executionPlanRef?: string;
+  sourcePolicyVersion?: number;
+  status?: TenantRuntimePolicy['status'];
+  derivationType?: TenantPolicySnapshotDerivationType;
+  rootSnapshotRef?: string;
+  parentSnapshotRef?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface ListAgentRunsOptions extends RepositoryTenantOptions {
@@ -2478,8 +2496,23 @@ export class TenantRuntimePolicySnapshotRepository {
     const createdAt = new Date().toISOString();
     const snapshotId = `tenant_policy_snapshot_${randomUUID()}`;
     const snapshotRef = buildTenantPolicySnapshotRef(snapshotId);
+    const derivationType = input.derivationType ?? 'root';
+    const lineageDepth = input.lineageDepth ?? 0;
+    const rootSnapshotRef = input.rootSnapshotRef ?? snapshotRef;
+    const parentSnapshotRef = input.parentSnapshotRef;
+    if (derivationType === 'root') {
+      if (parentSnapshotRef || lineageDepth !== 0 || rootSnapshotRef !== snapshotRef) {
+        throw new Error('Root TenantRuntimePolicySnapshot must not have a parent and must point root_snapshot_ref to itself');
+      }
+    } else if (!parentSnapshotRef || lineageDepth <= 0 || rootSnapshotRef === snapshotRef) {
+      throw new Error('Child TenantRuntimePolicySnapshot requires parent/root lineage');
+    }
     const snapshotContent = {
       tenant_id: input.tenantId,
+      root_snapshot_ref: rootSnapshotRef,
+      parent_snapshot_ref: parentSnapshotRef ?? null,
+      derivation_type: derivationType,
+      lineage_depth: lineageDepth,
       source_policy_version: input.policy.version,
       source_policy_hash: input.policyHash,
       execution_plan_ref: input.executionPlanRef,
@@ -2495,7 +2528,22 @@ export class TenantRuntimePolicySnapshotRepository {
     const snapshotWithoutHash = {
       snapshot_id: snapshotId,
       snapshot_ref: snapshotRef,
-      ...snapshotContent,
+      tenant_id: input.tenantId,
+      root_snapshot_ref: rootSnapshotRef,
+      ...(parentSnapshotRef ? { parent_snapshot_ref: parentSnapshotRef } : {}),
+      derivation_type: derivationType,
+      lineage_depth: lineageDepth,
+      source_policy_version: input.policy.version,
+      source_policy_hash: input.policyHash,
+      execution_plan_ref: input.executionPlanRef,
+      execution_plan_hash: input.executionPlanHash,
+      execution_plan_type: input.executionPlanType,
+      resolved_allowed_tools: input.resolvedPolicy.resolved_allowed_tools,
+      resolved_denied_tools: input.resolvedPolicy.resolved_denied_tools,
+      resolved_allowed_models: input.resolvedPolicy.resolved_allowed_models,
+      resolved_allowed_handoffs: input.resolvedPolicy.resolved_allowed_handoffs,
+      resolved_budget: input.resolvedPolicy.resolved_budget,
+      max_concurrent_agent_runs: input.resolvedPolicy.max_concurrent_agent_runs,
       created_at: createdAt,
     };
     const snapshotHash = hashJson(snapshotContent);
@@ -2507,6 +2555,10 @@ export class TenantRuntimePolicySnapshotRepository {
       snapshot_id: parsed.snapshot_id,
       snapshot_ref: parsed.snapshot_ref,
       tenant_id: parsed.tenant_id,
+      root_snapshot_ref: parsed.root_snapshot_ref,
+      parent_snapshot_ref: parsed.parent_snapshot_ref ?? null,
+      derivation_type: parsed.derivation_type,
+      lineage_depth: parsed.lineage_depth,
       source_policy_version: parsed.source_policy_version,
       source_policy_hash: parsed.source_policy_hash,
       execution_plan_ref: parsed.execution_plan_ref,
@@ -2562,11 +2614,35 @@ export class TenantRuntimePolicySnapshotRepository {
     return Boolean(snapshot && snapshot.snapshot_hash === expectedHash);
   }
 
-  async listByTenant(tenantId: string, options: { limit?: number; offset?: number } = {}): Promise<TenantRuntimePolicySnapshot[]> {
-    const rows = await this.db
+  async listByTenant(tenantId: string, options: TenantPolicySnapshotListOptions = {}): Promise<TenantRuntimePolicySnapshot[]> {
+    let query = this.db
       .selectFrom('tenant_runtime_policy_snapshot')
       .selectAll()
-      .where('tenant_id', '=', tenantId)
+      .where('tenant_id', '=', tenantId);
+    if (options.executionPlanRef) {
+      query = query.where('execution_plan_ref', '=', options.executionPlanRef);
+    }
+    if (options.sourcePolicyVersion) {
+      query = query.where('source_policy_version', '=', options.sourcePolicyVersion);
+    }
+    if (options.derivationType) {
+      query = query.where('derivation_type', '=', options.derivationType);
+    }
+    if (options.rootSnapshotRef) {
+      query = query.where('root_snapshot_ref', '=', options.rootSnapshotRef);
+    }
+    if (options.parentSnapshotRef) {
+      query = query.where('parent_snapshot_ref', '=', options.parentSnapshotRef);
+    }
+    if (options.status) {
+      query = query
+        .innerJoin('tenant_runtime_policy', (join) =>
+          join
+            .onRef('tenant_runtime_policy.tenant_id', '=', 'tenant_runtime_policy_snapshot.tenant_id')
+            .onRef('tenant_runtime_policy.version', '=', 'tenant_runtime_policy_snapshot.source_policy_version'))
+        .where('tenant_runtime_policy.status', '=', options.status);
+    }
+    const rows = await query
       .orderBy('created_at', 'desc')
       .limit(limit(options.limit))
       .offset(offset(options.offset))
@@ -2592,6 +2668,19 @@ export class TenantAgentAdmissionRepository {
 
   async reserve(input: TenantAdmissionReserveInput): Promise<{ accepted: boolean; admission?: TenantAgentAdmission; activeCount: number }> {
     return withPolicyTransaction(this.db, async (trx) => {
+      await acquireTenantAdmissionLock(trx, input.tenantId);
+      const existing = await this.scoped(trx).getByTaskRun(input.taskRunId, { tenantId: input.tenantId });
+      if (existing) {
+        if (existing.policy_snapshot_ref !== input.policySnapshotRef) {
+          throw new Error('TENANT_AGENT_ADMISSION_SNAPSHOT_CONFLICT');
+        }
+        if (existing.status === 'reserved' || existing.status === 'active') {
+          return { accepted: true, admission: existing, activeCount: await activeAdmissionCount(trx, input.tenantId) };
+        }
+        if (existing.status === 'rejected') {
+          return { accepted: false, admission: existing, activeCount: await activeAdmissionCount(trx, input.tenantId) };
+        }
+      }
       const activeCount = await activeAdmissionCount(trx, input.tenantId);
       if (activeCount >= input.maxConcurrentAgentRuns) {
         const rejected = await insertAdmission(trx, {
@@ -2723,6 +2812,12 @@ export class TenantAgentAdmissionRepository {
     if (options.status) {
       query = query.where('status', '=', options.status);
     }
+    if (options.taskRunId) {
+      query = query.where('task_run_id', '=', options.taskRunId);
+    }
+    if (options.agentRunId) {
+      query = query.where('agent_run_id', '=', options.agentRunId);
+    }
     const rows = await query
       .orderBy('updated_at', 'desc')
       .limit(limit(options.limit))
@@ -2765,6 +2860,10 @@ export class TenantAgentAdmissionRepository {
       .returningAll()
       .executeTakeFirst();
     return row ? mapTenantAgentAdmission(row) : undefined;
+  }
+
+  private scoped(db: Kysely<Database>): TenantAgentAdmissionRepository {
+    return new TenantAgentAdmissionRepository(db);
   }
 }
 
@@ -3594,6 +3693,10 @@ function mapTenantRuntimePolicySnapshot(row: Selectable<TenantRuntimePolicySnaps
     snapshot_id: row.snapshot_id,
     snapshot_ref: row.snapshot_ref,
     tenant_id: row.tenant_id,
+    root_snapshot_ref: row.root_snapshot_ref ?? row.snapshot_ref,
+    ...(row.parent_snapshot_ref ? { parent_snapshot_ref: row.parent_snapshot_ref } : {}),
+    derivation_type: row.derivation_type ?? 'root',
+    lineage_depth: row.lineage_depth ?? 0,
     source_policy_version: row.source_policy_version,
     source_policy_hash: row.source_policy_hash,
     execution_plan_ref: row.execution_plan_ref,
@@ -3690,6 +3793,10 @@ async function activeAdmissionCount(db: Kysely<Database>, tenantId: string): Pro
   return Number(row?.count ?? 0);
 }
 
+async function acquireTenantAdmissionLock(db: Kysely<Database>, tenantId: string): Promise<void> {
+  await sql`select pg_advisory_xact_lock(hashtextextended(${`tenant_agent_admission:${tenantId}`}, 0))`.execute(db);
+}
+
 async function insertAdmission(
   db: Kysely<Database>,
   input: {
@@ -3720,11 +3827,21 @@ async function insertAdmission(
   const saved = await db
     .insertInto('tenant_agent_admission')
     .values(row)
-    .onConflict((oc) => oc.column('task_run_id').doUpdateSet({
-      updated_at: now,
-    }))
+    .onConflict((oc) => oc.column('task_run_id').doNothing())
     .returningAll()
-    .executeTakeFirstOrThrow();
+    .executeTakeFirst();
+  if (!saved) {
+    const existing = await db
+      .selectFrom('tenant_agent_admission')
+      .selectAll()
+      .where('task_run_id', '=', input.taskRunId)
+      .where('tenant_id', '=', input.tenantId)
+      .executeTakeFirst();
+    if (!existing) {
+      throw new Error(`TenantAgentAdmission insert conflict but existing admission was not found: ${input.taskRunId}`);
+    }
+    return mapTenantAgentAdmission(existing);
+  }
   return mapTenantAgentAdmission(saved);
 }
 

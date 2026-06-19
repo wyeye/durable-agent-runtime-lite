@@ -484,10 +484,13 @@ describe('contracts schemas', () => {
     expect(() => tenantRuntimePolicySchema.parse({ ...policy, budget_cap: { max_segments: 0 } })).toThrow();
 
     expect(tenantRuntimePolicySnapshotSchema.parse({
-      snapshot_id: 'snapshot_1',
-      snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
-      tenant_id: 'tenant_1',
-      source_policy_version: 1,
+	      snapshot_id: 'snapshot_1',
+	      snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
+	      tenant_id: 'tenant_1',
+	      root_snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
+	      derivation_type: 'root',
+	      lineage_depth: 0,
+	      source_policy_version: 1,
       source_policy_hash: hash,
       execution_plan_ref: 'db://agent-execution-plan/agent_plan_1',
       execution_plan_hash: hash,

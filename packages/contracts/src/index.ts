@@ -21,6 +21,12 @@ export const tenantAdmissionStatusSchema = z.enum([
   'orphaned',
   'reconciled',
 ]);
+export const tenantPolicySnapshotDerivationTypeSchema = z.enum([
+  'root',
+  'flow_agent_child',
+  'workflow_handoff',
+  'nested_handoff',
+]);
 export const specStatusSchema = z.enum([
   'draft',
   'validated',
@@ -184,6 +190,10 @@ export const tenantRuntimePolicySnapshotSchema = z.object({
   snapshot_id: z.string().min(1),
   snapshot_ref: z.string().min(1),
   tenant_id: z.string().min(1),
+  root_snapshot_ref: z.string().min(1),
+  parent_snapshot_ref: z.string().min(1).optional(),
+  derivation_type: tenantPolicySnapshotDerivationTypeSchema,
+  lineage_depth: z.number().int().nonnegative(),
   source_policy_version: z.number().int().positive(),
   source_policy_hash: z.string().regex(/^[a-f0-9]{64}$/u),
   execution_plan_ref: z.string().min(1),
@@ -287,6 +297,22 @@ export const paginationRequestSchema = z.object({
 export const tenantPolicyQuerySchema = paginationRequestSchema.extend({
   tenant_id: z.string().min(1).optional(),
   status: tenantRuntimePolicyStatusSchema.optional(),
+});
+
+export const tenantPolicySnapshotQuerySchema = paginationRequestSchema.extend({
+  tenant_id: z.string().min(1).optional(),
+  execution_plan_ref: z.string().min(1).optional(),
+  source_policy_version: z.coerce.number().int().positive().optional(),
+  derivation_type: tenantPolicySnapshotDerivationTypeSchema.optional(),
+  root_snapshot_ref: z.string().min(1).optional(),
+  parent_snapshot_ref: z.string().min(1).optional(),
+});
+
+export const tenantAgentAdmissionQuerySchema = paginationRequestSchema.extend({
+  tenant_id: z.string().min(1).optional(),
+  status: tenantAdmissionStatusSchema.optional(),
+  task_run_id: z.string().min(1).optional(),
+  agent_run_id: z.string().min(1).optional(),
 });
 
 export const paginatedResponseSchema = <TItem extends z.ZodType>(itemSchema: TItem) =>
@@ -1196,6 +1222,27 @@ export const piSegmentRequestSchema = z.object({
   tenant_policy_hash: sha256Schema.optional(),
 });
 
+export const effectiveTenantPolicySchema = z.object({
+  tenant_id: z.string().min(1),
+  snapshot_ref: z.string().min(1),
+  snapshot_hash: sha256Schema,
+  source_policy_version: z.number().int().positive(),
+  source_policy_hash: sha256Schema,
+  execution_plan_ref: z.string().min(1),
+  execution_plan_hash: sha256Schema,
+  execution_plan_type: z.enum(['flow', 'agent']),
+  root_snapshot_ref: z.string().min(1),
+  parent_snapshot_ref: z.string().min(1).optional(),
+  derivation_type: tenantPolicySnapshotDerivationTypeSchema,
+  lineage_depth: z.number().int().nonnegative(),
+  allowed_tools: z.array(tenantPolicyToolRuleSchema).default([]),
+  denied_tools: z.array(tenantPolicyToolRuleSchema).default([]),
+  allowed_models: z.array(tenantPolicyModelRuleSchema).default([]),
+  allowed_handoffs: z.array(tenantPolicyHandoffRuleSchema).default([]),
+  budget: agentBudgetSchema,
+  max_concurrent_agent_runs: z.number().int().positive(),
+});
+
 export const userInputBoundaryRequestSchema = z.object({
   question: z.string().min(1),
   requested_schema: jsonObjectSchema.default({}),
@@ -1374,6 +1421,7 @@ export type TenantRuntimePolicyStatus = z.infer<typeof tenantRuntimePolicyStatus
 export type TenantPolicyOperation = z.infer<typeof tenantPolicyOperationSchema>;
 export type TenantPolicyDecisionValue = z.infer<typeof tenantPolicyDecisionValueSchema>;
 export type TenantAdmissionStatus = z.infer<typeof tenantAdmissionStatusSchema>;
+export type TenantPolicySnapshotDerivationType = z.infer<typeof tenantPolicySnapshotDerivationTypeSchema>;
 export type TenantPolicyToolRule = z.infer<typeof tenantPolicyToolRuleSchema>;
 export type TenantPolicyModelRule = z.infer<typeof tenantPolicyModelRuleSchema>;
 export type TenantPolicyHandoffRule = z.infer<typeof tenantPolicyHandoffRuleSchema>;
@@ -1383,6 +1431,8 @@ export type TenantRuntimePolicySnapshot = z.infer<typeof tenantRuntimePolicySnap
 export type TenantPolicyDecision = z.infer<typeof tenantPolicyDecisionSchema>;
 export type TenantAgentAdmission = z.infer<typeof tenantAgentAdmissionSchema>;
 export type TenantPolicyQuery = z.infer<typeof tenantPolicyQuerySchema>;
+export type TenantPolicySnapshotQuery = z.infer<typeof tenantPolicySnapshotQuerySchema>;
+export type TenantAgentAdmissionQuery = z.infer<typeof tenantAgentAdmissionQuerySchema>;
 export type TenantPolicyCreateDraftRequest = z.infer<typeof tenantPolicyCreateDraftRequestSchema>;
 export type TenantPolicyUpdateDraftRequest = z.infer<typeof tenantPolicyUpdateDraftRequestSchema>;
 export type TenantPolicyValidateResponse = z.infer<typeof tenantPolicyValidateResponseSchema>;
@@ -1490,6 +1540,7 @@ export type ResolvedAgentPlan = z.infer<typeof resolvedAgentPlanSchema>;
 export type AgentExecutionPlan = z.infer<typeof agentExecutionPlanSchema>;
 export type PiContextSnapshotRef = z.infer<typeof piContextSnapshotRefSchema>;
 export type PiSegmentRequest = z.infer<typeof piSegmentRequestSchema>;
+export type EffectiveTenantPolicy = z.infer<typeof effectiveTenantPolicySchema>;
 export type PiSegmentResult = z.infer<typeof piSegmentResultSchema>;
 export type AgentStepRecord = z.infer<typeof agentStepRecordSchema>;
 export type AgentToolResultReference = z.infer<typeof agentToolResultReferenceSchema>;
