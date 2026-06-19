@@ -22,6 +22,7 @@ const userId = process.env.SMOKE_USER_ID ?? 'pi_smoke_user';
 const scenario = process.env.PI_SMOKE_SCENARIO ?? 'readonly_tool';
 const mode = process.env.PI_SMOKE_MODE ?? (scenario === 'model_gateway' ? 'model_gateway' : 'deterministic');
 const requestId = `pi_smoke_${scenario}_${Date.now()}`;
+const runtimeHeaders = authHeaders(`${requestId}_runtime`);
 
 async function main() {
   const db = createDb({ databaseUrl });
@@ -234,7 +235,7 @@ async function checkHealth(url: string, appName: string): Promise<void> {
 async function postJson<T = unknown>(url: string, payload: unknown): Promise<T> {
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { ...runtimeHeaders, 'content-type': 'application/json' },
     body: JSON.stringify(payload),
   });
   const body = (await response.json()) as StandardResponse<T>;
@@ -245,7 +246,7 @@ async function postJson<T = unknown>(url: string, payload: unknown): Promise<T> 
 }
 
 async function getJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+  const response = await fetch(url, { headers: runtimeHeaders });
   const body = (await response.json()) as StandardResponse<T>;
   if (!response.ok || body.success !== true) {
     throw new Error(`GET ${url} failed: ${response.status} ${JSON.stringify(body)}`);
@@ -255,6 +256,15 @@ async function getJson<T>(url: string): Promise<T> {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, '');
+}
+
+function authHeaders(requestIdValue: string): Record<string, string> {
+  return {
+    'x-user-id': userId,
+    'x-tenant-id': tenantId,
+    'x-roles': 'capability_operator',
+    'x-request-id': requestIdValue,
+  };
 }
 
 main().catch((error: unknown) => {

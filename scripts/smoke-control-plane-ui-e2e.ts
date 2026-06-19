@@ -363,12 +363,15 @@ async function putJson<T>(page: PageLike, url: string, payload: unknown, headers
 }
 
 async function runtimePostJson<T>(page: PageLike, url: string, payload: unknown): Promise<T> {
-  const response = await page.request.post(url, { data: payload });
+  const response = await page.request.post(url, {
+    headers: operatorHeaders,
+    data: payload,
+  });
   return parseStandardResponse<T>(response, 'POST', url);
 }
 
 async function runtimeGetJson<T>(page: PageLike, url: string): Promise<T> {
-  const response = await page.request.get(url);
+  const response = await page.request.get(url, { headers: operatorHeaders });
   return parseStandardResponse<T>(response, 'GET', url);
 }
 

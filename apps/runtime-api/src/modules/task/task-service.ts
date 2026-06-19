@@ -312,8 +312,11 @@ export class TaskService {
 
   async list(input: unknown): Promise<TaskRun[]> {
     const query = taskRunQuerySchema.parse(input);
+    if (!query.tenant_id) {
+      throw new Error('tenant_id is required for task_run query');
+    }
     return this.taskStore.list({
-      tenantId: query.tenant_id ?? 'default',
+      tenantId: query.tenant_id,
       ...(query.status ? { status: query.status } : {}),
       ...(query.flow_id ? { flowId: query.flow_id } : {}),
       ...(query.workflow_id ? { workflowId: query.workflow_id } : {}),

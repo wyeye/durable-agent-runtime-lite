@@ -72,8 +72,10 @@ The compose file intentionally sets:
 ```text
 RUNTIME_API_ROUTE_SOURCE=db
 RUNTIME_API_WORKFLOW_STARTER=temporal
+RUNTIME_API_AUTH_MODE=header
 RUNTIME_WORKER_MODE=temporal
 TOOL_GATEWAY_REGISTRY_SOURCE=db
+TOOL_GATEWAY_AUTH_MODE=service_token
 TOOL_GATEWAY_URL=http://tool-gateway:3200
 CONTROL_PLANE_AUTH_MODE=header
 RUNTIME_API_URL=http://runtime-api:3000
@@ -81,6 +83,8 @@ TOOL_GATEWAY_URL=http://tool-gateway:3200
 ```
 
 Production-like Docker paths must not use memory sources, `defaultRouteSpecs`, `sample_flow@1`, or memory tool registry. `runtime-api` only starts Temporal workflows; tool invocation happens in `runtime-worker` activities through `tool-gateway`.
+
+Local compose sets dev-only service-token placeholders for the `runtime-worker -> tool-gateway` and `control-plane -> tool-gateway` calls. Real deployments must inject `TOOL_GATEWAY_RUNTIME_WORKER_TOKEN`, `TOOL_GATEWAY_CONTROL_PLANE_TOKEN`, `RUNTIME_WORKER_TOOL_GATEWAY_TOKEN`, and `CONTROL_PLANE_TOOL_GATEWAY_TOKEN` through environment or secret management.
 
 Successful smoke output includes `ok: true`, a `task_run_id`, a `workflow_id`, `completed` task status, approved `human_task`, committed `tool_call_log`, DB audit events for `knowledge.search`, `tool.preview`, `human_task.approve`, `tool.commit`, and DB idempotency records for tool invoke/commit.
 
@@ -166,6 +170,7 @@ DATABASE_URL=postgres://dar:dar_local_password@postgres:5432/durable_agent_runti
 RUNTIME_API_URL=http://runtime-api:3000
 TOOL_GATEWAY_URL=http://tool-gateway:3200
 CONTROL_PLANE_AUTH_MODE=header
+CONTROL_PLANE_TOOL_GATEWAY_TOKEN=<secret>
 CONTROL_PLANE_SWAGGER_ENABLED=true
 ```
 

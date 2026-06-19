@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AuditEvent, HumanTask, IdempotencyRecord, ToolCallLog, ToolManifest } from '@dar/contracts';
+import type { RuntimeConfig } from '@dar/config';
+import { buildServiceIdentityHeaders } from '@dar/security';
 import { buildServer, createToolGatewayService } from '../src/index.js';
 import type { ToolManifestRegistry } from '../src/modules/tool-registry.js';
 import {
@@ -142,7 +144,43 @@ const productionConfig = {
   RUNTIME_API_WORKFLOW_STARTER: 'mock',
   RUNTIME_API_ROUTE_SOURCE: 'db',
   TOOL_GATEWAY_REGISTRY_SOURCE: 'memory',
+  MODEL_GATEWAY_MODEL: 'dar-local-model',
+  MODEL_GATEWAY_TIMEOUT_MS: 30_000,
+  MODEL_GATEWAY_MAX_RETRIES: 1,
+  PI_AGENT_MODE: 'disabled',
+  PI_CONTEXT_MAX_BYTES: 262_144,
+  PI_SEGMENT_TIMEOUT_MS: 120_000,
+  PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW: 20,
+  RUNTIME_API_AUTH_MODE: 'header',
+  TOOL_GATEWAY_AUTH_MODE: 'service_token',
+  TOOL_GATEWAY_RUNTIME_WORKER_TOKEN: 'worker-token',
+  TOOL_GATEWAY_CONTROL_PLANE_TOKEN: 'control-token',
+  CONTROL_PLANE_AUTH_MODE: 'header',
+  CONTROL_PLANE_SWAGGER_ENABLED: true,
 } as const;
+
+const serviceAuthConfig: RuntimeConfig = {
+  ...productionConfig,
+  NODE_ENV: 'test',
+  APP_ENV: 'test',
+  TOOL_GATEWAY_REGISTRY_SOURCE: 'memory',
+};
+
+const runtimeWorkerHeaders = buildServiceIdentityHeaders({
+  serviceId: 'runtime-worker',
+  token: 'worker-token',
+  requestId: 'req_service_worker',
+  tenantId: 'tenant_1',
+  userId: 'user_1',
+});
+
+const controlPlaneHeaders = buildServiceIdentityHeaders({
+  serviceId: 'control-plane',
+  token: 'control-token',
+  requestId: 'req_service_control',
+  tenantId: 'tenant_1',
+  userId: 'operator_1',
+});
 
 describe('tool-gateway invoke', () => {
   it('invokes knowledge.search through mock adapter', async () => {
@@ -688,6 +726,80 @@ describe('tool-gateway invoke', () => {
     expect(() => createToolGatewayService(productionConfig)).toThrow(
       'TOOL_GATEWAY_REGISTRY_SOURCE=db is required in production',
     );
+  });
+
+  it('requires service token for Tool Gateway operations when enabled', async () => {
+    const server = buildServer(new ToolService(), serviceAuthConfig);
+
+    const missing = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/knowledge.search/invoke',
+      payload: {
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_service_missing' },
+        arguments: { query: 'mvp' },
+        idempotency_key: 'task_service_missing:knowledge.search',
+      },
+    });
+    expect(missing.statusCode).toBe(401);
+
+    const wrongToken = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/knowledge.search/invoke',
+      headers: buildServiceIdentityHeaders({ serviceId: 'runtime-worker', token: 'wrong-token' }),
+      payload: {
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_service_wrong' },
+        arguments: { query: 'mvp' },
+        idempotency_key: 'task_service_wrong:knowledge.search',
+      },
+    });
+    expect(wrongToken.statusCode).toBe(401);
+
+    await server.close();
+  });
+
+  it('allows runtime-worker tool execution and denies control-plane invoke', async () => {
+    const server = buildServer(new ToolService(), serviceAuthConfig);
+    const payload = {
+      tool_version: '1.0.0',
+      tenant_id: 'tenant_1',
+      user_context: { user_id: 'user_1' },
+      task_context: { task_run_id: 'task_service_allowed' },
+      arguments: { query: 'mvp' },
+      idempotency_key: 'task_service_allowed:knowledge.search',
+      request_id: 'req_service_allowed',
+    };
+
+    const denied = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/knowledge.search/invoke',
+      headers: controlPlaneHeaders,
+      payload,
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const allowed = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/knowledge.search/invoke',
+      headers: runtimeWorkerHeaders,
+      payload,
+    });
+    expect(allowed.statusCode).toBe(200);
+    expect(allowed.json().data.status).toBe('succeeded');
+
+    const audit = await server.inject({
+      method: 'GET',
+      url: '/v1/audit-events?tenant_id=tenant_1',
+      headers: controlPlaneHeaders,
+    });
+    expect(audit.statusCode).toBe(200);
+
+    await server.close();
   });
 
   it('queries audit events and tool calls with tenant filters and masks sensitive payloads', async () => {

@@ -1,5 +1,5 @@
 import type { AuditEvent, ToolCallLog } from '@dar/contracts';
-import { maskSensitiveFields } from '@dar/security';
+import { buildServiceIdentityHeaders, maskSensitiveFields } from '@dar/security';
 import type { ForwardHeaders } from './http-client.js';
 import { DownstreamClient } from './http-client.js';
 
@@ -12,10 +12,14 @@ export interface ToolGatewayOperationsClient {
 export class ToolGatewayClient implements ToolGatewayOperationsClient {
   private readonly client: DownstreamClient;
 
-  constructor(baseUrl: string, timeoutMs?: number) {
+  constructor(baseUrl: string, timeoutMs?: number, serviceToken?: string) {
     this.client = new DownstreamClient({
       baseUrl,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      defaultHeaders: buildServiceIdentityHeaders({
+        serviceId: 'control-plane',
+        ...(serviceToken ? { token: serviceToken } : {}),
+      }),
     });
   }
 

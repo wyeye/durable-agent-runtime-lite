@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { RuntimeConfig } from '@dar/config';
 import type { HumanTask, RouteSpec, TaskRun, WorkflowStartResponse } from '@dar/contracts';
 import type { HumanTaskDecisionSignalInput, UserInputResponseSignalInput } from '@dar/temporal';
 import { buildServer } from '../src/index.js';
@@ -78,6 +79,54 @@ const dbOnlyRoute: RouteSpec = {
     confidence_threshold: 0.5,
     ambiguous_threshold: 0.3,
   },
+};
+
+const headerAuthConfig: RuntimeConfig = {
+  NODE_ENV: 'production',
+  APP_ENV: 'production',
+  APP_VERSION: '0.1.5',
+  HOST: '0.0.0.0',
+  DATABASE_URL: 'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime',
+  VALKEY_URL: 'redis://localhost:16380',
+  TEMPORAL_ADDRESS: 'localhost:7233',
+  TEMPORAL_NAMESPACE: 'default',
+  MODEL_GATEWAY_BASE_URL: 'http://localhost:4100',
+  MODEL_GATEWAY_API_KEY: 'dev-only-placeholder',
+  MODEL_GATEWAY_MODEL: 'dar-local-model',
+  MODEL_GATEWAY_TIMEOUT_MS: 30_000,
+  MODEL_GATEWAY_MAX_RETRIES: 1,
+  PI_AGENT_MODE: 'disabled',
+  PI_CONTEXT_MAX_BYTES: 262_144,
+  PI_SEGMENT_TIMEOUT_MS: 120_000,
+  PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW: 20,
+  RUNTIME_API_AUTH_MODE: 'header',
+  JWT_ISSUER: 'http://localhost:3000',
+  JWT_AUDIENCE: 'durable-agent-runtime-lite',
+  LOG_LEVEL: 'info',
+  CONTROL_PLANE_PORT: 3000,
+  RUNTIME_API_PORT: 3001,
+  RUNTIME_WORKER_PORT: 3002,
+  TOOL_GATEWAY_PORT: 3003,
+  RUNTIME_WORKER_MODE: 'mock',
+  RUNTIME_API_WORKFLOW_STARTER: 'mock',
+  RUNTIME_API_ROUTE_SOURCE: 'memory',
+  TOOL_GATEWAY_REGISTRY_SOURCE: 'memory',
+  TOOL_GATEWAY_AUTH_MODE: 'disabled',
+  CONTROL_PLANE_AUTH_MODE: 'header',
+  CONTROL_PLANE_SWAGGER_ENABLED: true,
+};
+
+const operatorHeaders = {
+  'x-user-id': 'operator_1',
+  'x-tenant-id': 'tenant_1',
+  'x-roles': 'capability_operator',
+  'x-request-id': 'req_auth_1',
+};
+
+const auditorHeaders = {
+  'x-user-id': 'auditor_1',
+  'x-tenant-id': 'tenant_1',
+  'x-roles': 'auditor',
 };
 
 describe('runtime-api router and task endpoints', () => {
@@ -410,6 +459,12 @@ describe('runtime-api router and task endpoints', () => {
         RUNTIME_API_WORKFLOW_STARTER: 'mock',
         RUNTIME_API_ROUTE_SOURCE: 'memory',
         TOOL_GATEWAY_REGISTRY_SOURCE: 'db',
+        RUNTIME_API_AUTH_MODE: 'header',
+        TOOL_GATEWAY_AUTH_MODE: 'service_token',
+        TOOL_GATEWAY_RUNTIME_WORKER_TOKEN: 'worker-token',
+        TOOL_GATEWAY_CONTROL_PLANE_TOKEN: 'control-token',
+        CONTROL_PLANE_AUTH_MODE: 'header',
+        CONTROL_PLANE_SWAGGER_ENABLED: true,
       }),
     ).toThrow('RUNTIME_API_ROUTE_SOURCE=db is required in production');
   });
@@ -600,6 +655,116 @@ describe('runtime-api router and task endpoints', () => {
     expect(replay.statusCode).toBe(200);
     expect(replay.json().data.idempotent_replay).toBe(true);
     expect(signals).toHaveLength(1);
+
+    await server.close();
+  });
+
+  it('requires production identity headers and rejects body identity mismatch', async () => {
+    const server = buildServer(undefined, undefined, undefined, undefined, headerAuthConfig);
+
+    const missing = await server.inject({
+      method: 'POST',
+      url: '/v1/agent-tasks',
+      payload: {
+        tenant_id: 'tenant_1',
+        user_id: 'user_1',
+        agent_execution_plan_ref: 'db://agent-execution-plan/agent_plan_1',
+        input: { text: 'run exact agent' },
+      },
+    });
+    expect(missing.statusCode).toBe(401);
+
+    const tenantMismatch = await server.inject({
+      method: 'POST',
+      url: '/v1/agent-tasks',
+      headers: operatorHeaders,
+      payload: {
+        tenant_id: 'tenant_2',
+        user_id: 'operator_1',
+        agent_execution_plan_ref: 'db://agent-execution-plan/agent_plan_1',
+        input: { text: 'run exact agent' },
+      },
+    });
+    expect(tenantMismatch.statusCode).toBe(403);
+
+    const userMismatch = await server.inject({
+      method: 'POST',
+      url: '/v1/agent-tasks',
+      headers: operatorHeaders,
+      payload: {
+        tenant_id: 'tenant_1',
+        user_id: 'other_user',
+        agent_execution_plan_ref: 'db://agent-execution-plan/agent_plan_1',
+        input: { text: 'run exact agent' },
+      },
+    });
+    expect(userMismatch.statusCode).toBe(403);
+
+    await server.close();
+  });
+
+  it('creates agent task from authenticated header identity instead of body fallback', async () => {
+    const workflowStarts: unknown[] = [];
+    const server = buildServer(
+      new TaskService({
+        workflowStarter: {
+          async start(request) {
+            workflowStarts.push(request);
+            return {
+              workflow_id: request.workflow_id,
+              task_run_id: request.task_run_id,
+              started: true,
+              mode: 'mock',
+            };
+          },
+        },
+      }),
+      undefined,
+      undefined,
+      undefined,
+      headerAuthConfig,
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/agent-tasks',
+      headers: operatorHeaders,
+      payload: {
+        agent_execution_plan_ref: 'db://agent-execution-plan/agent_plan_1',
+        input: { text: 'run exact agent' },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(workflowStarts[0]).toMatchObject({
+      tenant_id: 'tenant_1',
+      user_id: 'operator_1',
+      request_id: 'req_auth_1',
+    });
+
+    await server.close();
+  });
+
+  it('rejects cross-tenant query and auditor writes under header auth', async () => {
+    const server = buildServer(undefined, undefined, undefined, undefined, headerAuthConfig);
+
+    const crossTenant = await server.inject({
+      method: 'GET',
+      url: '/v1/tasks?tenant_id=tenant_2',
+      headers: operatorHeaders,
+    });
+    expect(crossTenant.statusCode).toBe(403);
+
+    const auditorWrite = await server.inject({
+      method: 'POST',
+      url: '/v1/agent-tasks',
+      headers: auditorHeaders,
+      payload: {
+        agent_execution_plan_ref: 'db://agent-execution-plan/agent_plan_1',
+        input: { text: 'run exact agent' },
+      },
+    });
+    expect(auditorWrite.statusCode).toBe(403);
 
     await server.close();
   });

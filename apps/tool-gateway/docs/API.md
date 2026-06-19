@@ -25,12 +25,32 @@ DB 模式下：
 
 ```text
 TOOL_GATEWAY_REGISTRY_SOURCE=db
+TOOL_GATEWAY_AUTH_MODE=service_token
 DATABASE_URL=postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
 HOST=0.0.0.0
 PORT=3200
 ```
 
 生产或 Docker smoke 路径不能使用 memory registry。缺失 ToolManifest 必须返回 `TOOL_NOT_FOUND`，不能回退到内置 `knowledge.search` 或 `record.write.mock`。
+
+## Service Identity
+
+Production requires service-token authentication. Requests must include:
+
+```text
+x-service-id
+authorization: Bearer <service-token>
+x-request-id
+x-tenant-id
+x-user-id
+```
+
+Allowed service IDs:
+
+- `runtime-worker`: ToolManifest read, invoke, preview, commit.
+- `control-plane`: ToolManifest read, AuditEvent read, ToolCall read.
+
+`runtime-api` is intentionally not an allowed Tool Gateway caller. Missing or invalid tokens return `401`; a valid service token without permission for the operation returns `403`. Tokens are read only from environment variables and must not be logged or baked into container images.
 
 ## Endpoints
 
@@ -112,6 +132,9 @@ L3 commit 会校验：
 
 - `DATABASE_URL`：DB 模式使用的 PostgreSQL URL。
 - `TOOL_GATEWAY_REGISTRY_SOURCE=memory|db`：ToolManifest source。
+- `TOOL_GATEWAY_AUTH_MODE=disabled|service_token`：service identity mode；production requires `service_token`。
+- `TOOL_GATEWAY_RUNTIME_WORKER_TOKEN`：token accepted for the `runtime-worker` service.
+- `TOOL_GATEWAY_CONTROL_PLANE_TOKEN`：token accepted for the `control-plane` service.
 
 ## Local DB Registry Flow
 

@@ -72,6 +72,9 @@ services:
       DATABASE_URL: postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
       VALKEY_URL: redis://valkey:6379
       TOOL_GATEWAY_REGISTRY_SOURCE: db
+      TOOL_GATEWAY_AUTH_MODE: service_token
+      TOOL_GATEWAY_RUNTIME_WORKER_TOKEN: ${TOOL_GATEWAY_RUNTIME_WORKER_TOKEN:-dev-only-runtime-worker-token}
+      TOOL_GATEWAY_CONTROL_PLANE_TOKEN: ${TOOL_GATEWAY_CONTROL_PLANE_TOKEN:-dev-only-control-plane-token}
       LOG_LEVEL: info
     ports:
       - "${TOOL_GATEWAY_HOST_PORT:-3200}:3200"
@@ -96,6 +99,7 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
       TOOL_GATEWAY_URL: http://tool-gateway:3200
+      RUNTIME_WORKER_TOOL_GATEWAY_TOKEN: ${RUNTIME_WORKER_TOOL_GATEWAY_TOKEN:-dev-only-runtime-worker-token}
       RUNTIME_WORKER_MODE: temporal
       MODEL_GATEWAY_BASE_URL: ${MODEL_GATEWAY_BASE_URL:-http://host.docker.internal:4100}
       MODEL_GATEWAY_API_KEY: ${MODEL_GATEWAY_API_KEY:-dev-only-placeholder}
@@ -135,6 +139,7 @@ services:
       TEMPORAL_NAMESPACE: default
       RUNTIME_API_ROUTE_SOURCE: db
       RUNTIME_API_WORKFLOW_STARTER: temporal
+      RUNTIME_API_AUTH_MODE: header
       LOG_LEVEL: info
     ports:
       - "${RUNTIME_API_HOST_PORT:-3000}:3000"
@@ -159,6 +164,7 @@ services:
       DATABASE_URL: postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
       RUNTIME_API_URL: http://runtime-api:3000
       TOOL_GATEWAY_URL: http://tool-gateway:3200
+      CONTROL_PLANE_TOOL_GATEWAY_TOKEN: ${CONTROL_PLANE_TOOL_GATEWAY_TOKEN:-dev-only-control-plane-token}
       CONTROL_PLANE_AUTH_MODE: header
       CONTROL_PLANE_SWAGGER_ENABLED: "true"
       LOG_LEVEL: info

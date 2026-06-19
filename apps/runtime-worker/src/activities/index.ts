@@ -88,6 +88,16 @@ function getProcessDb(): ReturnType<typeof createDb> {
   return processDb;
 }
 
+function createToolGatewayClient(config = loadConfig()): ToolGatewayClient {
+  return new ToolGatewayClient({
+    baseUrl: getToolGatewayUrl(config),
+    serviceIdentity: {
+      serviceId: 'runtime-worker',
+      ...(config.RUNTIME_WORKER_TOOL_GATEWAY_TOKEN ? { token: config.RUNTIME_WORKER_TOOL_GATEWAY_TOKEN } : {}),
+    },
+  });
+}
+
 export interface ActivityContext {
   tenant_id: string;
   user_id: string;
@@ -402,7 +412,7 @@ export async function invokeToolActivity(
   identity?: AgentToolExecutionIdentity,
 ): Promise<ToolInvokeResponse> {
   const config = loadConfig();
-  const client = new ToolGatewayClient({ baseUrl: getToolGatewayUrl(config) });
+  const client = createToolGatewayClient(config);
   return client.invoke(
     toolInvokeRequestSchema.parse({
       tool_name: tool.tool_name,
@@ -426,7 +436,7 @@ export async function previewToolActivity(
   identity?: AgentToolExecutionIdentity,
 ): Promise<ToolPreviewResponse> {
   const config = loadConfig();
-  const client = new ToolGatewayClient({ baseUrl: getToolGatewayUrl(config) });
+  const client = createToolGatewayClient(config);
   return client.preview(
     toolPreviewRequestSchema.parse({
       tool_name: tool.tool_name,
@@ -451,7 +461,7 @@ export async function commitToolActivity(
   identity?: AgentToolExecutionIdentity,
 ): Promise<ToolCommitResponse> {
   const config = loadConfig();
-  const client = new ToolGatewayClient({ baseUrl: getToolGatewayUrl(config) });
+  const client = createToolGatewayClient(config);
   return client.commit(
     toolCommitRequestSchema.parse({
       tool_call_id: toolCallId,

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   AuthError,
+  ServiceAuthError,
+  StaticServiceTokenVerifier,
+  buildServiceIdentityHeaders,
   hasControlPlanePermission,
   parseAuthContext,
   requireAuthContext,
@@ -32,7 +35,7 @@ describe('control-plane header auth and RBAC', () => {
         nodeEnv: 'production',
         testIdentity: { tenant_id: 'tenant_1', user_id: 'admin', roles: ['platform_admin'] },
       }),
-    ).toThrow(/not allowed in production/);
+    ).toThrow(/Header authentication is required in production/);
   });
 
   it('allows disabled auth only outside production with explicit test identity', () => {
@@ -57,5 +60,64 @@ describe('control-plane header auth and RBAC', () => {
     expect(hasControlPlanePermission(auditor, 'registry:read')).toBe(true);
     expect(hasControlPlanePermission(auditor, 'registry:write')).toBe(false);
     expect(() => requireControlPlanePermission(auditor, 'human_task:decide')).toThrow(AuthError);
+  });
+});
+
+describe('service token auth', () => {
+  it('verifies service identity with constant-time token path and permissions', () => {
+    const verifier = new StaticServiceTokenVerifier({
+      authMode: 'service_token',
+      nodeEnv: 'production',
+      tokens: {
+        'runtime-worker': 'worker-token',
+        'control-plane': 'control-token',
+      },
+    });
+
+    const identity = verifier.verify({
+      ...buildServiceIdentityHeaders({
+        serviceId: 'runtime-worker',
+        token: 'worker-token',
+        requestId: 'req_1',
+        tenantId: 'tenant_1',
+        userId: 'user_1',
+      }),
+    }, 'tool:invoke');
+
+    expect(identity).toMatchObject({
+      service_id: 'runtime-worker',
+      request_id: 'req_1',
+      tenant_id: 'tenant_1',
+      user_id: 'user_1',
+    });
+  });
+
+  it('rejects missing, mismatched, and unauthorized service tokens', () => {
+    const verifier = new StaticServiceTokenVerifier({
+      authMode: 'service_token',
+      nodeEnv: 'production',
+      tokens: {
+        'runtime-worker': 'worker-token',
+        'control-plane': 'control-token',
+      },
+    });
+
+    expect(() => verifier.verify({ 'x-service-id': 'runtime-worker' }, 'tool:invoke')).toThrow(ServiceAuthError);
+    expect(() =>
+      verifier.verify(buildServiceIdentityHeaders({ serviceId: 'runtime-worker', token: 'control-token' }), 'tool:invoke'),
+    ).toThrow(/Invalid service bearer token/);
+    expect(() =>
+      verifier.verify(buildServiceIdentityHeaders({ serviceId: 'control-plane', token: 'control-token' }), 'tool:invoke'),
+    ).toThrow(/not allowed/);
+  });
+
+  it('does not allow disabled service auth in production', () => {
+    const verifier = new StaticServiceTokenVerifier({
+      authMode: 'disabled',
+      nodeEnv: 'production',
+      tokens: {},
+    });
+
+    expect(() => verifier.verify({}, 'tool:invoke')).toThrow(/not allowed in production/);
   });
 });

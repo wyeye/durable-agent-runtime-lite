@@ -320,7 +320,7 @@ async function previewRoute(keyword: string): Promise<RouterPreviewResponse> {
     request_id: `${requestPrefix}_preview_${keyword}`,
     channel: 'api',
     input: { text: `please run ${keyword}` },
-  });
+  }, operatorHeaders);
 }
 
 async function checkHealth(url: string, label: string): Promise<void> {

@@ -11,6 +11,27 @@ export const authContextSchema = z.object({
 
 export type AuthContext = z.infer<typeof authContextSchema>;
 
+export const serviceIdSchema = z.enum(['runtime-worker', 'control-plane']);
+export type ServiceId = z.infer<typeof serviceIdSchema>;
+
+export const servicePermissionSchema = z.enum([
+  'tool_manifest:read',
+  'tool:invoke',
+  'tool:preview',
+  'tool:commit',
+  'audit:read',
+  'tool_call:read',
+]);
+export type ServicePermission = z.infer<typeof servicePermissionSchema>;
+
+export const serviceIdentitySchema = z.object({
+  service_id: serviceIdSchema,
+  request_id: z.string().optional(),
+  tenant_id: z.string().optional(),
+  user_id: z.string().optional(),
+});
+export type ServiceIdentity = z.infer<typeof serviceIdentitySchema>;
+
 export const controlPlaneRoleSchema = z.enum(['platform_admin', 'capability_operator', 'auditor']);
 export type ControlPlaneRole = z.infer<typeof controlPlaneRoleSchema>;
 
@@ -37,6 +58,75 @@ export class AuthError extends Error {
   ) {
     super(message);
     this.name = 'AuthError';
+  }
+}
+
+export class ServiceAuthError extends Error {
+  constructor(
+    readonly code: 'UNAUTHORIZED' | 'FORBIDDEN',
+    message: string,
+    readonly details: Record<string, unknown> = {},
+  ) {
+    super(message);
+    this.name = 'ServiceAuthError';
+  }
+}
+
+export interface StaticServiceTokenVerifierOptions {
+  authMode: 'service_token' | 'disabled';
+  nodeEnv?: string;
+  tokens: Partial<Record<ServiceId, string | undefined>>;
+}
+
+export class StaticServiceTokenVerifier {
+  constructor(private readonly options: StaticServiceTokenVerifierOptions) {}
+
+  verify(
+    headers: Record<string, string | string[] | undefined>,
+    permission: ServicePermission,
+  ): ServiceIdentity {
+    const production = this.options.nodeEnv === 'production';
+    if (this.options.authMode === 'disabled') {
+      if (production) {
+        throw new ServiceAuthError('UNAUTHORIZED', 'TOOL_GATEWAY_AUTH_MODE=disabled is not allowed in production');
+      }
+      return serviceIdentitySchema.parse({
+        service_id: headerValue(headers, 'x-service-id') ?? 'runtime-worker',
+        request_id: headerValue(headers, 'x-request-id'),
+        tenant_id: headerValue(headers, 'x-tenant-id'),
+        user_id: headerValue(headers, 'x-user-id'),
+      });
+    }
+
+    const serviceIdValue = headerValue(headers, 'x-service-id');
+    const parsedServiceId = serviceIdSchema.safeParse(serviceIdValue);
+    if (!parsedServiceId.success) {
+      throw new ServiceAuthError('UNAUTHORIZED', 'Missing or invalid service identity');
+    }
+
+    const token = bearerToken(headerValue(headers, 'authorization'));
+    if (!token) {
+      throw new ServiceAuthError('UNAUTHORIZED', 'Missing service bearer token');
+    }
+
+    const expectedToken = this.options.tokens[parsedServiceId.data];
+    if (!expectedToken || !constantTimeEqual(token, expectedToken)) {
+      throw new ServiceAuthError('UNAUTHORIZED', 'Invalid service bearer token');
+    }
+
+    if (!serviceHasPermission(parsedServiceId.data, permission)) {
+      throw new ServiceAuthError('FORBIDDEN', 'Service is not allowed to perform this operation', {
+        service_id: parsedServiceId.data,
+        permission,
+      });
+    }
+
+    return serviceIdentitySchema.parse({
+      service_id: parsedServiceId.data,
+      request_id: headerValue(headers, 'x-request-id'),
+      tenant_id: headerValue(headers, 'x-tenant-id'),
+      user_id: headerValue(headers, 'x-user-id'),
+    });
   }
 }
 
@@ -83,12 +173,13 @@ export function requireAuthContext(
     authMode: 'header' | 'disabled';
     nodeEnv?: string;
     testIdentity?: AuthContext;
+    requireRoles?: boolean;
   },
 ): AuthContext {
   const isProduction = options.nodeEnv === 'production';
   if (options.authMode === 'disabled') {
     if (isProduction) {
-      throw new AuthError('UNAUTHORIZED', 'CONTROL_PLANE_AUTH_MODE=disabled is not allowed in production');
+      throw new AuthError('UNAUTHORIZED', 'Header authentication is required in production');
     }
     if (options.testIdentity) {
       return authContextSchema.parse(options.testIdentity);
@@ -97,9 +188,41 @@ export function requireAuthContext(
 
   const parsed = parseOptionalAuthContext(headers);
   if (!parsed) {
-    throw new AuthError('UNAUTHORIZED', 'Missing control-plane identity headers');
+    throw new AuthError('UNAUTHORIZED', 'Missing identity headers');
+  }
+  if (options.requireRoles && parsed.roles.length === 0) {
+    throw new AuthError('UNAUTHORIZED', 'Missing identity roles header');
   }
   return parsed;
+}
+
+export function servicePermissionsForService(serviceId: ServiceId): ServicePermission[] {
+  switch (serviceId) {
+    case 'runtime-worker':
+      return ['tool_manifest:read', 'tool:invoke', 'tool:preview', 'tool:commit'];
+    case 'control-plane':
+      return ['tool_manifest:read', 'audit:read', 'tool_call:read'];
+  }
+}
+
+export function serviceHasPermission(serviceId: ServiceId, permission: ServicePermission): boolean {
+  return servicePermissionsForService(serviceId).includes(permission);
+}
+
+export function buildServiceIdentityHeaders(input: {
+  serviceId: ServiceId;
+  token?: string;
+  requestId?: string;
+  tenantId?: string;
+  userId?: string;
+}): Record<string, string> {
+  return {
+    'x-service-id': input.serviceId,
+    ...(input.token ? { authorization: `Bearer ${input.token}` } : {}),
+    ...(input.requestId ? { 'x-request-id': input.requestId } : {}),
+    ...(input.tenantId ? { 'x-tenant-id': input.tenantId } : {}),
+    ...(input.userId ? { 'x-user-id': input.userId } : {}),
+  };
 }
 
 export function hasControlPlanePermission(auth: AuthContext, permission: ControlPlanePermission): boolean {
@@ -140,6 +263,27 @@ export function permissionsForRole(role: string): ControlPlanePermission[] {
 
 function parseRoles(value: string | undefined): string[] {
   return value?.split(',').map((role) => role.trim()).filter(Boolean) ?? [];
+}
+
+function bearerToken(value: string | undefined): string | undefined {
+  const match = /^Bearer\s+(.+)$/iu.exec(value ?? '');
+  return match?.[1];
+}
+
+function headerValue(headers: Record<string, string | string[] | undefined>, name: string): string | undefined {
+  const value = headers[name] ?? headers[name.toLowerCase()];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function constantTimeEqual(actual: string, expected: string): boolean {
+  const maxLength = Math.max(actual.length, expected.length);
+  let diff = actual.length ^ expected.length;
+  for (let index = 0; index < maxLength; index += 1) {
+    const actualCode = index < actual.length ? actual.charCodeAt(index) : 0;
+    const expectedCode = index < expected.length ? expected.charCodeAt(index) : 0;
+    diff |= actualCode ^ expectedCode;
+  }
+  return diff === 0;
 }
 
 export function maskSensitiveFields(value: unknown): unknown {

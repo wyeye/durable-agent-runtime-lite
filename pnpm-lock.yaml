@@ -528,6 +528,9 @@ importers:
       '@dar/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@dar/security':
+        specifier: workspace:*
+        version: link:../security
       undici:
         specifier: ^7.0.0
         version: 7.28.0

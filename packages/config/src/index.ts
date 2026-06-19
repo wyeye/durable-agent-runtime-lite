@@ -17,6 +17,7 @@ const stringSchema = (defaultValue: string) =>
 const urlSchema = (defaultValue: string) =>
   z.preprocess(emptyToUndefined, z.string().url().default(defaultValue));
 const optionalUrlSchema = z.preprocess(emptyToUndefined, z.string().url().optional());
+const optionalStringSchema = z.preprocess(emptyToUndefined, z.string().min(1).optional());
 const optionalPortSchema = z.preprocess(
   emptyToUndefined,
   z.coerce.number().int().min(1).max(65_535).optional(),
@@ -56,6 +57,10 @@ export const runtimeConfigSchema = z.object({
   TOOL_GATEWAY_BASE_URL: optionalUrlSchema,
   TOOL_GATEWAY_URL: optionalUrlSchema,
   RUNTIME_API_URL: optionalUrlSchema,
+  RUNTIME_API_AUTH_MODE: z.preprocess(
+    emptyToUndefined,
+    z.enum(['header', 'disabled']).default('disabled'),
+  ),
   JWT_ISSUER: urlSchema('http://localhost:3000'),
   JWT_AUDIENCE: stringSchema('durable-agent-runtime-lite'),
   LOG_LEVEL: z.preprocess(
@@ -74,6 +79,14 @@ export const runtimeConfigSchema = z.object({
   ),
   RUNTIME_API_ROUTE_SOURCE: z.preprocess(emptyToUndefined, z.enum(['db', 'memory']).default('memory')),
   TOOL_GATEWAY_REGISTRY_SOURCE: z.preprocess(emptyToUndefined, z.enum(['db', 'memory']).default('memory')),
+  TOOL_GATEWAY_AUTH_MODE: z.preprocess(
+    emptyToUndefined,
+    z.enum(['service_token', 'disabled']).default('disabled'),
+  ),
+  TOOL_GATEWAY_RUNTIME_WORKER_TOKEN: optionalStringSchema,
+  TOOL_GATEWAY_CONTROL_PLANE_TOKEN: optionalStringSchema,
+  RUNTIME_WORKER_TOOL_GATEWAY_TOKEN: optionalStringSchema,
+  CONTROL_PLANE_TOOL_GATEWAY_TOKEN: optionalStringSchema,
   CONTROL_PLANE_AUTH_MODE: z.preprocess(
     emptyToUndefined,
     z.enum(['header', 'disabled']).default('header'),

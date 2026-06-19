@@ -4,9 +4,18 @@ import { ZodError } from 'zod';
 import type { StandardErrorResponse, StandardSuccessResponse } from '@dar/contracts';
 import { getAppPort, loadConfig } from '@dar/config';
 import { createLogger } from '@dar/logger';
+import { AuthError } from '@dar/security';
 import { HumanTaskService } from './modules/human-task/human-task-service.js';
 import { createRuntimeApiTaskService, TaskService } from './modules/task/task-service.js';
 import { AgentRunService } from './modules/task/agent-run-service.js';
+import {
+  readAuth,
+  requireDecisionAuth,
+  requireWriteAuth,
+  runtimeAuthPlugin,
+  withAuthBody,
+  withAuthQuery,
+} from './plugins/auth.js';
 
 const appName = 'runtime-api' as const;
 const logger = createLogger(appName);
@@ -52,6 +61,16 @@ function toErrorResponse(error: unknown, traceId?: string): StandardErrorRespons
   return response;
 }
 
+function errorStatus(error: unknown): number {
+  if (error instanceof ZodError) {
+    return 400;
+  }
+  if (error instanceof AuthError) {
+    return error.code === 'UNAUTHORIZED' ? 401 : 403;
+  }
+  return 500;
+}
+
 function getTraceId(body: unknown): string | undefined {
   if (body && typeof body === 'object' && 'trace_id' in body) {
     const traceId = (body as { trace_id?: unknown }).trace_id;
@@ -71,8 +90,10 @@ export function buildServer(
   readiness: RuntimeApiReadiness = { routeSource: 'memory', workflowStarter: 'mock' },
   humanTaskService = new HumanTaskService(),
   agentRunService = new AgentRunService(),
+  config = loadConfig(),
 ): FastifyInstance {
   const server = Fastify({ logger: false });
+  runtimeAuthPlugin(server, { config });
 
   server.get('/healthz', async () => ({
     status: 'ok',
@@ -94,9 +115,10 @@ export function buildServer(
     const traceId = getTraceId(request.body);
 
     try {
-      return toSuccessResponse(await taskService.preview(request.body), traceId);
+      const auth = request.authContext ? readAuth(request) : undefined;
+      return toSuccessResponse(await taskService.preview(withAuthBody(request, request.body, auth)), traceId);
     } catch (error) {
-      reply.code(error instanceof ZodError ? 400 : 500);
+      reply.code(errorStatus(error));
       return toErrorResponse(error, traceId);
     }
   });
@@ -105,60 +127,63 @@ export function buildServer(
     const traceId = getTraceId(request.body);
 
     try {
-      return toSuccessResponse(await taskService.create(request.body), traceId);
+      const auth = requireWriteAuth(request);
+      return toSuccessResponse(await taskService.create(withAuthBody(request, request.body, auth)), traceId);
     } catch (error) {
-      reply.code(error instanceof ZodError ? 400 : 500);
+      reply.code(errorStatus(error));
       return toErrorResponse(error, traceId);
     }
   });
 
   server.get('/v1/tasks', async (request, reply) => {
     try {
-      return toSuccessResponse(await taskService.list(request.query));
+      const auth = request.authContext ? readAuth(request) : undefined;
+      return toSuccessResponse(await taskService.list(withAuthQuery(request.query, auth)));
     } catch (error) {
-      reply.code(error instanceof ZodError ? 400 : 500);
+      reply.code(errorStatus(error));
       return toErrorResponse(error);
     }
   });
 
   server.get('/v1/tasks/:taskRunId', async (request, reply) => {
     const { taskRunId } = request.params as { taskRunId: string };
-    const taskRun = await taskService.get(taskRunId);
-    const { tenant_id: tenantId } = request.query as { tenant_id?: string };
-    if (!taskRun || (tenantId && taskRun.tenant_id !== tenantId)) {
-      reply.code(404);
-      return {
-        success: false,
-        data: null,
-        error: { code: 'TASK_RUN_NOT_FOUND', message: '任务不存在' },
-      };
+    try {
+      const auth = request.authContext ? readAuth(request) : undefined;
+      const query = withAuthQuery(request.query, auth);
+      const taskRun = await taskService.get(taskRunId);
+      const { tenant_id: tenantId } = query as { tenant_id?: string };
+      if (!taskRun || (tenantId && taskRun.tenant_id !== tenantId)) {
+        reply.code(404);
+        return {
+          success: false,
+          data: null,
+          error: { code: 'TASK_RUN_NOT_FOUND', message: '任务不存在' },
+        };
+      }
+      return toSuccessResponse(taskRun);
+    } catch (error) {
+      reply.code(errorStatus(error));
+      return toErrorResponse(error);
     }
-
-    return toSuccessResponse(taskRun);
   });
 
   server.post('/v1/agent-tasks', async (request, reply) => {
     const traceId = getTraceId(request.body);
     try {
-      return toSuccessResponse(await taskService.createAgentTask({
-        ...(request.body as Record<string, unknown>),
-        user_id: headerValue(request, 'x-user-id') ?? stringValue((request.body as { user_id?: unknown }).user_id),
-        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.body as { tenant_id?: unknown }).tenant_id) ?? 'default',
-      }), traceId);
+      const auth = requireWriteAuth(request);
+      return toSuccessResponse(await taskService.createAgentTask(withAuthBody(request, request.body, auth)), traceId);
     } catch (error) {
-      reply.code(error instanceof ZodError ? 400 : 500);
+      reply.code(errorStatus(error));
       return toErrorResponse(error, traceId);
     }
   });
 
   server.get('/v1/agent-runs', async (request, reply) => {
     try {
-      return toSuccessResponse(await agentRunService.list({
-        ...(request.query as Record<string, unknown>),
-        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.query as { tenant_id?: unknown }).tenant_id) ?? 'default',
-      }));
+      const auth = request.authContext ? readAuth(request) : undefined;
+      return toSuccessResponse(await agentRunService.list(withAuthQuery(request.query, auth)));
     } catch (error) {
-      reply.code(error instanceof ZodError ? 400 : 500);
+      reply.code(errorStatus(error));
       return toErrorResponse(error);
     }
   });
@@ -166,10 +191,8 @@ export function buildServer(
   server.get('/v1/agent-runs/:agentRunId', async (request, reply) => {
     const { agentRunId } = request.params as { agentRunId: string };
     try {
-      const result = await agentRunService.get(agentRunId, {
-        ...(request.query as Record<string, unknown>),
-        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.query as { tenant_id?: unknown }).tenant_id) ?? 'default',
-      });
+      const auth = request.authContext ? readAuth(request) : undefined;
+      const result = await agentRunService.get(agentRunId, withAuthQuery(request.query, auth));
       if (!result) {
         reply.code(404);
         return {
@@ -180,7 +203,7 @@ export function buildServer(
       }
       return toSuccessResponse(result);
     } catch (error) {
-      reply.code(error instanceof ZodError ? 400 : 500);
+      reply.code(errorStatus(error));
       return toErrorResponse(error);
     }
   });
@@ -188,25 +211,20 @@ export function buildServer(
   server.get('/v1/agent-runs/:agentRunId/steps', async (request, reply) => {
     const { agentRunId } = request.params as { agentRunId: string };
     try {
-      return toSuccessResponse(await agentRunService.listSteps(agentRunId, {
-        ...(request.query as Record<string, unknown>),
-        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.query as { tenant_id?: unknown }).tenant_id) ?? 'default',
-      }));
+      const auth = request.authContext ? readAuth(request) : undefined;
+      return toSuccessResponse(await agentRunService.listSteps(agentRunId, withAuthQuery(request.query, auth)));
     } catch (error) {
-      reply.code(error instanceof ZodError ? 400 : 500);
+      reply.code(errorStatus(error));
       return toErrorResponse(error);
     }
   });
 
   server.get('/v1/human-tasks', async (request, reply) => {
     try {
-      return toSuccessResponse(await humanTaskService.list({
-        ...(request.query as Record<string, unknown>),
-        user_id: headerValue(request, 'x-user-id') ?? stringValue((request.query as { user_id?: unknown }).user_id),
-        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.query as { tenant_id?: unknown }).tenant_id) ?? 'default',
-      }));
+      const auth = request.authContext ? readAuth(request) : undefined;
+      return toSuccessResponse(await humanTaskService.list(withAuthQuery(request.query, auth)));
     } catch (error) {
-      reply.code(error instanceof ZodError ? 400 : 500);
+      reply.code(errorStatus(error));
       return toErrorResponse(error);
     }
   });
@@ -214,11 +232,8 @@ export function buildServer(
   server.get('/v1/human-tasks/:humanTaskId', async (request, reply) => {
     const { humanTaskId } = request.params as { humanTaskId: string };
     try {
-      const result = await humanTaskService.get(humanTaskId, {
-        ...(request.query as Record<string, unknown>),
-        user_id: headerValue(request, 'x-user-id') ?? stringValue((request.query as { user_id?: unknown }).user_id),
-        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.query as { tenant_id?: unknown }).tenant_id) ?? 'default',
-      });
+      const auth = request.authContext ? readAuth(request) : undefined;
+      const result = await humanTaskService.get(humanTaskId, withAuthQuery(request.query, auth));
       if (!result) {
         reply.code(404);
         return {
@@ -229,7 +244,7 @@ export function buildServer(
       }
       return toSuccessResponse(result);
     } catch (error) {
-      reply.code(error instanceof ZodError ? 400 : 500);
+      reply.code(errorStatus(error));
       return toErrorResponse(error);
     }
   });
@@ -238,11 +253,8 @@ export function buildServer(
     const { humanTaskId } = request.params as { humanTaskId: string };
     const traceId = getTraceId(request.body);
     try {
-      const result = await humanTaskService.approve(humanTaskId, {
-        ...(request.body as Record<string, unknown>),
-        user_id: headerValue(request, 'x-user-id') ?? stringValue((request.body as { user_id?: unknown }).user_id),
-        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.body as { tenant_id?: unknown }).tenant_id) ?? 'default',
-      });
+      const auth = requireDecisionAuth(request);
+      const result = await humanTaskService.approve(humanTaskId, withAuthBody(request, request.body, auth));
       if (!result) {
         reply.code(404);
         return {
@@ -253,7 +265,7 @@ export function buildServer(
       }
       return toSuccessResponse(result, traceId);
     } catch (error) {
-      reply.code(error instanceof ZodError ? 400 : 500);
+      reply.code(errorStatus(error));
       return toErrorResponse(error, traceId);
     }
   });
@@ -262,11 +274,8 @@ export function buildServer(
     const { humanTaskId } = request.params as { humanTaskId: string };
     const traceId = getTraceId(request.body);
     try {
-      const result = await humanTaskService.reject(humanTaskId, {
-        ...(request.body as Record<string, unknown>),
-        user_id: headerValue(request, 'x-user-id') ?? stringValue((request.body as { user_id?: unknown }).user_id),
-        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.body as { tenant_id?: unknown }).tenant_id) ?? 'default',
-      });
+      const auth = requireDecisionAuth(request);
+      const result = await humanTaskService.reject(humanTaskId, withAuthBody(request, request.body, auth));
       if (!result) {
         reply.code(404);
         return {
@@ -277,7 +286,7 @@ export function buildServer(
       }
       return toSuccessResponse(result, traceId);
     } catch (error) {
-      reply.code(error instanceof ZodError ? 400 : 500);
+      reply.code(errorStatus(error));
       return toErrorResponse(error, traceId);
     }
   });
@@ -286,11 +295,8 @@ export function buildServer(
     const { humanTaskId } = request.params as { humanTaskId: string };
     const traceId = getTraceId(request.body);
     try {
-      const result = await humanTaskService.respond(humanTaskId, {
-        ...(request.body as Record<string, unknown>),
-        user_id: headerValue(request, 'x-user-id') ?? stringValue((request.body as { user_id?: unknown }).user_id),
-        tenant_id: headerValue(request, 'x-tenant-id') ?? stringValue((request.body as { tenant_id?: unknown }).tenant_id) ?? 'default',
-      });
+      const auth = requireWriteAuth(request);
+      const result = await humanTaskService.respond(humanTaskId, withAuthBody(request, request.body, auth));
       if (!result) {
         reply.code(404);
         return {
@@ -301,7 +307,7 @@ export function buildServer(
       }
       return toSuccessResponse(result, traceId);
     } catch (error) {
-      reply.code(error instanceof ZodError ? 400 : 500);
+      reply.code(errorStatus(error));
       return toErrorResponse(error, traceId);
     }
   });
@@ -315,7 +321,7 @@ export async function start(): Promise<void> {
   const server = buildServer(taskService, {
     routeSource: config.RUNTIME_API_ROUTE_SOURCE,
     workflowStarter: config.RUNTIME_API_WORKFLOW_STARTER,
-  }, humanTaskService, agentRunService);
+  }, humanTaskService, agentRunService, config);
   const port = getAppPort(appName, config);
 
   server.addHook('onClose', async () => {
@@ -333,16 +339,4 @@ if (isMain) {
     logger.error({ err: error }, `${appName} startup failed`);
     process.exit(1);
   });
-}
-
-function headerValue(request: { headers: Record<string, string | string[] | undefined> }, name: string): string | undefined {
-  const value = request.headers[name];
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return typeof value === 'string' ? value : undefined;
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }

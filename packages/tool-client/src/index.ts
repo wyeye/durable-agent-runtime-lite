@@ -15,10 +15,15 @@ import {
   type ToolPreviewRequest,
   type ToolPreviewResponse,
 } from '@dar/contracts';
+import { buildServiceIdentityHeaders, type ServiceId } from '@dar/security';
 
 export interface ToolGatewayClientOptions {
   baseUrl: string;
   defaultHeaders?: Record<string, string>;
+  serviceIdentity?: {
+    serviceId: ServiceId;
+    token?: string;
+  };
 }
 
 export class ToolGatewayClient {
@@ -27,7 +32,15 @@ export class ToolGatewayClient {
 
   constructor(options: ToolGatewayClientOptions) {
     this.baseUrl = new URL(options.baseUrl);
-    this.defaultHeaders = options.defaultHeaders ?? {};
+    this.defaultHeaders = {
+      ...(options.serviceIdentity
+        ? buildServiceIdentityHeaders({
+            serviceId: options.serviceIdentity.serviceId,
+            ...(options.serviceIdentity.token ? { token: options.serviceIdentity.token } : {}),
+          })
+        : {}),
+      ...(options.defaultHeaders ?? {}),
+    };
   }
 
   async invoke(payload: ToolInvokeRequest): Promise<ToolInvokeResponse> {

@@ -11,20 +11,21 @@ export interface ForwardHeaders {
 export interface HttpClientOptions {
   baseUrl: string;
   timeoutMs?: number;
+  defaultHeaders?: Record<string, string>;
 }
 
 export class DownstreamClient {
   constructor(private readonly options: HttpClientOptions) {}
 
   async get<T>(path: string, headers: ForwardHeaders): Promise<T> {
-    return this.request<T>(path, { method: 'GET', headers: forwardHeaders(headers) });
+    return this.request<T>(path, { method: 'GET', headers: this.headers(headers) });
   }
 
   async post<T>(path: string, body: unknown, headers: ForwardHeaders): Promise<T> {
     return this.request<T>(path, {
       method: 'POST',
       headers: {
-        ...forwardHeaders(headers),
+        ...this.headers(headers),
         'content-type': 'application/json',
       },
       body: JSON.stringify(body),
@@ -60,6 +61,13 @@ export class DownstreamClient {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  private headers(headers: ForwardHeaders): Record<string, string> {
+    return {
+      ...(this.options.defaultHeaders ?? {}),
+      ...forwardHeaders(headers),
+    };
   }
 }
 

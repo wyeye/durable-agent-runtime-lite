@@ -24,8 +24,12 @@ describe('ToolGatewayClient', () => {
   it('posts to tool-specific invoke endpoint and unwraps standard response', async () => {
     let observedUrl = '';
     let observedBody = '';
+    let observedServiceId = '';
+    let observedAuthorization = '';
     const server = await startTestServer((request, response) => {
       observedUrl = request.url ?? '';
+      observedServiceId = String(request.headers['x-service-id'] ?? '');
+      observedAuthorization = String(request.headers.authorization ?? '');
       request.on('data', (chunk: Buffer) => {
         observedBody += chunk.toString('utf8');
       });
@@ -47,7 +51,10 @@ describe('ToolGatewayClient', () => {
     });
 
     try {
-      const client = new ToolGatewayClient({ baseUrl: server.baseUrl });
+      const client = new ToolGatewayClient({
+        baseUrl: server.baseUrl,
+        serviceIdentity: { serviceId: 'runtime-worker', token: 'worker-token' },
+      });
       const result = await client.invoke({
         tool_name: 'knowledge.search',
         tool_version: '1.0.0',
@@ -60,6 +67,8 @@ describe('ToolGatewayClient', () => {
       });
 
       expect(observedUrl).toBe('/v1/tools/knowledge.search/invoke');
+      expect(observedServiceId).toBe('runtime-worker');
+      expect(observedAuthorization).toBe('Bearer worker-token');
       expect(JSON.parse(observedBody)).toMatchObject({ tool_name: 'knowledge.search' });
       expect(result.status).toBe('succeeded');
       expect(result.audit_event_id).toBe('audit_1');

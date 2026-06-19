@@ -12,6 +12,11 @@ import type {
 import { getAppPort, loadConfig } from '@dar/config';
 import { createLogger } from '@dar/logger';
 import {
+  ServiceAuthError,
+  StaticServiceTokenVerifier,
+  type ServicePermission,
+} from '@dar/security';
+import {
   AuditEventRepository,
   closeDb,
   createDb,
@@ -49,6 +54,18 @@ function failure(error: unknown): StandardErrorResponse {
   };
 }
 
+function authFailure(error: ServiceAuthError): StandardErrorResponse {
+  return {
+    success: false,
+    data: null,
+    error: {
+      code: error.code,
+      message: error.message,
+      ...(Object.keys(error.details).length > 0 ? { details: error.details } : {}),
+    },
+  };
+}
+
 function runtimeFailure(error: RuntimeError): StandardErrorResponse {
   return {
     success: false,
@@ -75,8 +92,20 @@ function deniedError(result: ToolInvokeResponse | ToolPreviewResponse | ToolComm
   };
 }
 
-export function buildServer(toolService = new ToolService()): FastifyInstance {
+export function buildServer(toolService = new ToolService(), config: RuntimeConfig = loadConfig()): FastifyInstance {
   const server = Fastify({ logger: false });
+  const serviceVerifier = new StaticServiceTokenVerifier({
+    authMode: config.TOOL_GATEWAY_AUTH_MODE,
+    nodeEnv: config.NODE_ENV,
+    tokens: {
+      'runtime-worker': config.TOOL_GATEWAY_RUNTIME_WORKER_TOKEN,
+      'control-plane': config.TOOL_GATEWAY_CONTROL_PLANE_TOKEN,
+    },
+  });
+
+  function authorize(request: { headers: Record<string, string | string[] | undefined> }, permission: ServicePermission): void {
+    serviceVerifier.verify(request.headers, permission);
+  }
 
   server.get('/healthz', async () => ({
     status: 'ok',
@@ -92,25 +121,46 @@ export function buildServer(toolService = new ToolService()): FastifyInstance {
     },
   }));
 
-  server.get('/v1/tools', async (request) => {
-    const { tenant_id: tenantId } = request.query as { tenant_id?: string };
-    return success(await toolService.listTools(tenantId));
+  server.get('/v1/tools', async (request, reply) => {
+    try {
+      authorize(request, 'tool_manifest:read');
+      const { tenant_id: tenantId } = request.query as { tenant_id?: string };
+      return success(await toolService.listTools(tenantId));
+    } catch (error) {
+      if (error instanceof ServiceAuthError) {
+        reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
+        return authFailure(error);
+      }
+      reply.code(500);
+      return failure(error);
+    }
   });
 
   server.get('/v1/tools/:toolName', async (request, reply) => {
-    const { toolName } = request.params as { toolName: string };
-    const { tenant_id: tenantId } = request.query as { tenant_id?: string };
-    const manifest = await toolService.getTool(toolName, tenantId);
-    if (!manifest) {
-      reply.code(404);
-      return { success: false, data: null, error: { code: 'TOOL_NOT_FOUND', message: '工具未注册' } };
+    try {
+      authorize(request, 'tool_manifest:read');
+      const { toolName } = request.params as { toolName: string };
+      const { tenant_id: tenantId } = request.query as { tenant_id?: string };
+      const manifest = await toolService.getTool(toolName, tenantId);
+      if (!manifest) {
+        reply.code(404);
+        return { success: false, data: null, error: { code: 'TOOL_NOT_FOUND', message: '工具未注册' } };
+      }
+      return success(manifest);
+    } catch (error) {
+      if (error instanceof ServiceAuthError) {
+        reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
+        return authFailure(error);
+      }
+      reply.code(500);
+      return failure(error);
     }
-    return success(manifest);
   });
 
   server.post('/v1/tools/:toolName/invoke', async (request, reply) => {
     const { toolName } = request.params as { toolName: string };
     try {
+      authorize(request, 'tool:invoke');
       const result = await toolService.invoke(toolName, request.body);
       if (result.status === 'denied') {
         reply.code(deniedStatusCode(result));
@@ -140,6 +190,10 @@ export function buildServer(toolService = new ToolService()): FastifyInstance {
       );
       return success(result);
     } catch (error) {
+      if (error instanceof ServiceAuthError) {
+        reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
+        return authFailure(error);
+      }
       reply.code(error instanceof ZodError ? 400 : 500);
       return failure(error);
     }
@@ -148,6 +202,7 @@ export function buildServer(toolService = new ToolService()): FastifyInstance {
   server.post('/v1/tools/:toolName/preview', async (request, reply) => {
     const { toolName } = request.params as { toolName: string };
     try {
+      authorize(request, 'tool:preview');
       const result = await toolService.preview(toolName, request.body);
       if (result.status === 'denied') {
         reply.code(deniedStatusCode(result as unknown as ToolInvokeResponse));
@@ -155,6 +210,10 @@ export function buildServer(toolService = new ToolService()): FastifyInstance {
       }
       return success(result);
     } catch (error) {
+      if (error instanceof ServiceAuthError) {
+        reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
+        return authFailure(error);
+      }
       reply.code(error instanceof ZodError ? 400 : 500);
       return failure(error);
     }
@@ -163,6 +222,7 @@ export function buildServer(toolService = new ToolService()): FastifyInstance {
   server.post('/v1/tools/:toolName/commit', async (request, reply) => {
     const { toolName } = request.params as { toolName: string };
     try {
+      authorize(request, 'tool:commit');
       const result = await toolService.commit(toolName, request.body);
       if (result.status === 'denied' || result.status === 'failed') {
         reply.code(result.error?.code === 'TOOL_NOT_FOUND' || result.error?.code === 'TOOL_CALL_NOT_FOUND' ? 404 : 400);
@@ -170,41 +230,89 @@ export function buildServer(toolService = new ToolService()): FastifyInstance {
       }
       return success(result);
     } catch (error) {
+      if (error instanceof ServiceAuthError) {
+        reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
+        return authFailure(error);
+      }
       reply.code(error instanceof ZodError ? 400 : 500);
       return failure(error);
     }
   });
 
-  server.get('/v1/audit-events', async (request) => success(await toolService.listAuditEvents(request.query)));
+  server.get('/v1/audit-events', async (request, reply) => {
+    try {
+      authorize(request, 'audit:read');
+      return success(await toolService.listAuditEvents(request.query));
+    } catch (error) {
+      if (error instanceof ServiceAuthError) {
+        reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
+        return authFailure(error);
+      }
+      reply.code(500);
+      return failure(error);
+    }
+  });
 
-  server.get('/v1/tool-calls', async (request) => success(await toolService.listToolCalls(request.query)));
+  server.get('/v1/tool-calls', async (request, reply) => {
+    try {
+      authorize(request, 'tool_call:read');
+      return success(await toolService.listToolCalls(request.query));
+    } catch (error) {
+      if (error instanceof ServiceAuthError) {
+        reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
+        return authFailure(error);
+      }
+      reply.code(500);
+      return failure(error);
+    }
+  });
 
   server.get('/v1/tool-calls/:toolCallId', async (request, reply) => {
-    const { toolCallId } = request.params as { toolCallId: string };
-    const toolCall = await toolService.getToolCall(toolCallId);
-    if (!toolCall) {
-      reply.code(404);
-      return {
-        success: false,
-        data: null,
-        error: { code: 'TOOL_CALL_NOT_FOUND', message: '工具调用记录不存在' },
-      };
+    try {
+      authorize(request, 'tool_call:read');
+      const { toolCallId } = request.params as { toolCallId: string };
+      const toolCall = await toolService.getToolCall(toolCallId);
+      if (!toolCall) {
+        reply.code(404);
+        return {
+          success: false,
+          data: null,
+          error: { code: 'TOOL_CALL_NOT_FOUND', message: '工具调用记录不存在' },
+        };
+      }
+      return success(toolCall);
+    } catch (error) {
+      if (error instanceof ServiceAuthError) {
+        reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
+        return authFailure(error);
+      }
+      reply.code(500);
+      return failure(error);
     }
-    return success(toolCall);
   });
 
   server.get('/v1/idempotency-records/:idempotencyKey', async (request, reply) => {
-    const { idempotencyKey } = request.params as { idempotencyKey: string };
-    const record = await toolService.getIdempotencyRecord(idempotencyKey);
-    if (!record) {
-      reply.code(404);
-      return {
-        success: false,
-        data: null,
-        error: { code: 'IDEMPOTENCY_RECORD_NOT_FOUND', message: '幂等记录不存在' },
-      };
+    try {
+      authorize(request, 'tool_call:read');
+      const { idempotencyKey } = request.params as { idempotencyKey: string };
+      const record = await toolService.getIdempotencyRecord(idempotencyKey);
+      if (!record) {
+        reply.code(404);
+        return {
+          success: false,
+          data: null,
+          error: { code: 'IDEMPOTENCY_RECORD_NOT_FOUND', message: '幂等记录不存在' },
+        };
+      }
+      return success(record);
+    } catch (error) {
+      if (error instanceof ServiceAuthError) {
+        reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
+        return authFailure(error);
+      }
+      reply.code(500);
+      return failure(error);
     }
-    return success(record);
   });
 
   return server;
@@ -218,6 +326,15 @@ export interface ToolGatewayServiceHandle {
 export function createToolGatewayService(config: RuntimeConfig = loadConfig()): ToolGatewayServiceHandle {
   if (isProductionRuntime(config) && config.TOOL_GATEWAY_REGISTRY_SOURCE !== 'db') {
     throw new Error('TOOL_GATEWAY_REGISTRY_SOURCE=db is required in production');
+  }
+  if (isProductionRuntime(config) && config.TOOL_GATEWAY_AUTH_MODE !== 'service_token') {
+    throw new Error('TOOL_GATEWAY_AUTH_MODE=service_token is required in production');
+  }
+  if (
+    isProductionRuntime(config)
+    && (!config.TOOL_GATEWAY_RUNTIME_WORKER_TOKEN || !config.TOOL_GATEWAY_CONTROL_PLANE_TOKEN)
+  ) {
+    throw new Error('Tool Gateway service tokens are required in production');
   }
 
   if (config.TOOL_GATEWAY_REGISTRY_SOURCE === 'db') {
@@ -247,7 +364,7 @@ function isProductionRuntime(config: RuntimeConfig): boolean {
 export async function start(): Promise<void> {
   const config = loadConfig();
   const { toolService, close } = createToolGatewayService(config);
-  const server = buildServer(toolService);
+  const server = buildServer(toolService, config);
   const port = getAppPort(appName, config);
 
   server.addHook('onClose', async () => {

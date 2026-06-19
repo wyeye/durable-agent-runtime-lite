@@ -27,8 +27,11 @@ export class AgentRunService {
 
   async list(input: unknown): Promise<{ agent_runs: AgentRunRecord[] }> {
     const query = agentRunQuerySchema.parse(input);
+    if (!query.tenant_id) {
+      throw new Error('tenant_id is required for agent_run query');
+    }
     const agentRuns = await this.runStore.list({
-      tenantId: query.tenant_id ?? 'default',
+      tenantId: query.tenant_id,
       ...(query.task_run_id ? { taskRunId: query.task_run_id } : {}),
       ...(query.agent_id ? { agentId: query.agent_id } : {}),
       ...(query.status ? { status: query.status } : {}),
@@ -40,7 +43,10 @@ export class AgentRunService {
 
   async get(agentRunId: string, input: unknown): Promise<{ agent_run: AgentRunRecord } | undefined> {
     const query = agentRunQuerySchema.parse(input);
-    const agentRun = await this.runStore.get(agentRunId, { tenantId: query.tenant_id ?? 'default' });
+    if (!query.tenant_id) {
+      throw new Error('tenant_id is required for agent_run query');
+    }
+    const agentRun = await this.runStore.get(agentRunId, { tenantId: query.tenant_id });
     return agentRun ? { agent_run: agentRun } : undefined;
   }
 

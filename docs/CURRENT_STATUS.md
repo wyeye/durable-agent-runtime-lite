@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated for AR-1.1: Pi runtime hardening, handoff, and local Pi smoke baseline.
+Last updated for AR-1.2 partial: runtime-api production auth and tool-gateway service identity guardrails.
 
 ## Completed Platform Capabilities
 
@@ -41,6 +41,10 @@ Last updated for AR-1.1: Pi runtime hardening, handoff, and local Pi smoke basel
 35. Model Gateway contract with structured assistant text/tool-call blocks and usage mapping.
 36. Dev/test mock Model Gateway under `devtools/mock-server`.
 37. Pi runtime smoke scripts for readonly, L3, user input, handoff, restart/resume, and model gateway paths.
+38. runtime-api header auth mode with production fail-closed identity requirements.
+39. runtime-api tenant/user mismatch checks for body/query identity fields and no default tenant fallback on protected routes.
+40. tool-gateway service-token identity checks for runtime-worker and control-plane callers.
+41. runtime-worker Tool Gateway client and control-plane BFF inject service identity headers.
 
 ## Completed In AR-0
 
@@ -134,9 +138,19 @@ Production requires:
 
 ```text
 CONTROL_PLANE_AUTH_MODE=header
+RUNTIME_API_AUTH_MODE=header
+TOOL_GATEWAY_AUTH_MODE=service_token
 ```
 
-`disabled` auth mode is allowed only in development/test. Production never silently uses a default administrator.
+`disabled` auth mode is allowed only in development/test. Production never silently uses a default administrator, default runtime user, default tenant, or anonymous Tool Gateway caller.
+
+Tool Gateway service identities:
+
+- `runtime-worker` may read ToolManifest safe views and call invoke / preview / commit.
+- `control-plane` may read ToolManifest, AuditEvent, and ToolCall data for BFF operations.
+- `runtime-api` has no Tool Gateway service identity and must not call Tool Gateway.
+
+Service tokens are read from environment variables and are not baked into images. Docker Compose uses clearly marked local dev-only placeholder values so local smoke paths can exercise the service-auth flow.
 
 ## Primary Docs
 
@@ -191,6 +205,10 @@ This stage intentionally does not implement:
 6. Enterprise SSO.
 7. Random gray traffic splitting.
 8. Any fifth production app or production container.
+9. TenantRuntimePolicy tables, snapshots, resolver, and policy enforcement.
+10. Temporal Workflow replay fixture suite and upgrade compatibility gate.
+11. Full OpenTelemetry trace/metric instrumentation across all four apps.
+12. GitHub Actions Docker integration workflow.
 
 ## Suggested Next Batch
 

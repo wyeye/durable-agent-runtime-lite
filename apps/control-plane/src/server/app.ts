@@ -44,7 +44,11 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
   const app = Fastify({ logger: false });
   const registryService: RegistryApi = options.registryService ?? new RegistryApiService(requireDb(db));
   const runtimeApiClient = options.runtimeApiClient ?? new RuntimeApiClient(getRuntimeApiUrl(config));
-  const toolGatewayClient = options.toolGatewayClient ?? new ToolGatewayClient(getToolGatewayUrl(config));
+  const toolGatewayClient = options.toolGatewayClient ?? new ToolGatewayClient(
+    getToolGatewayUrl(config),
+    undefined,
+    config.CONTROL_PLANE_TOOL_GATEWAY_TOKEN,
+  );
 
   if (createdDb) {
     app.addHook('onClose', async () => {
@@ -99,6 +103,9 @@ function validateControlPlaneConfig(config: RuntimeConfig): void {
   }
   if (isProduction && !config.TOOL_GATEWAY_URL && !config.TOOL_GATEWAY_BASE_URL) {
     throw new Error('TOOL_GATEWAY_URL is required in production');
+  }
+  if (isProduction && !config.CONTROL_PLANE_TOOL_GATEWAY_TOKEN) {
+    throw new Error('CONTROL_PLANE_TOOL_GATEWAY_TOKEN is required in production');
   }
 }
 

@@ -15,6 +15,7 @@ const tenantId = process.env.SMOKE_TENANT_ID ?? 'default';
 const userId = process.env.SMOKE_USER_ID ?? 'smoke_user';
 const requestId = `smoke_temporal_db_${Date.now()}`;
 const smokeText = 'db-smoke 真实链路验证';
+const runtimeHeaders = authHeaders(`${requestId}_runtime`);
 
 interface RunTaskData {
   task_run_id: string;
@@ -227,7 +228,7 @@ async function checkHealth(url: string, appName: string): Promise<void> {
 async function postJson<T>(url: string, payload: unknown): Promise<T> {
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { ...runtimeHeaders, 'content-type': 'application/json' },
     body: JSON.stringify(payload),
   });
   const body = (await response.json()) as StandardResponse<T>;
@@ -238,7 +239,7 @@ async function postJson<T>(url: string, payload: unknown): Promise<T> {
 }
 
 async function getJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+  const response = await fetch(url, { headers: runtimeHeaders });
   const body = (await response.json()) as StandardResponse<T>;
   if (!response.ok || body.success !== true) {
     throw new Error(`GET ${url} failed: ${response.status} ${JSON.stringify(body)}`);
@@ -404,6 +405,15 @@ async function reportFailure(
 
 function trimTrailingSlash(value: string): string {
   return value.endsWith('/') ? value.slice(0, -1) : value;
+}
+
+function authHeaders(requestIdValue: string): Record<string, string> {
+  return {
+    'x-user-id': userId,
+    'x-tenant-id': tenantId,
+    'x-roles': 'capability_operator',
+    'x-request-id': requestIdValue,
+  };
 }
 
 main().catch((error: unknown) => {
