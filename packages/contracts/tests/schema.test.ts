@@ -22,6 +22,10 @@ import {
   humanTaskGetResponseSchema,
   humanTaskListRequestSchema,
   humanTaskListResponseSchema,
+  modelCallAttemptSchema,
+  modelCallRecordSchema,
+  modelGatewayResponseSchema,
+  modelPolicySchema,
   operationAuditQuerySchema,
   paginationRequestSchema,
   promptDefinitionSchema,
@@ -58,6 +62,49 @@ import {
 
 async function readJson<T = unknown>(path: string): Promise<T> {
   return JSON.parse(await readFile(new URL(`../../../${path}`, import.meta.url), 'utf8')) as T;
+}
+
+function resolvedModelPolicyFixture(hash: string, policyId = 'test-model-policy') {
+  return {
+    model_policy_id: policyId,
+    model_policy_version: 1,
+    model_policy_hash: hash,
+    protocol: 'openai_chat_completions',
+    resolved_targets: [
+      {
+        target_id: 'primary',
+        gateway_profile: 'openai-compatible',
+        model_id: 'gpt-test-2026-06-19',
+        priority: 0,
+        enabled: true,
+        capabilities: ['text', 'tools', 'usage'],
+      },
+    ],
+    retry_policy: {
+      max_attempts_per_target: 2,
+      retryable_status_codes: [429, 500, 502, 503, 504],
+      retry_on_timeout: true,
+      retry_on_network_error: true,
+      backoff_ms: 100,
+      max_backoff_ms: 1000,
+    },
+    fallback_policy: {
+      enabled: false,
+      ordered_target_ids: [],
+      eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
+      stop_on_auth_error: true,
+      stop_on_validation_error: true,
+      stop_on_policy_denial: true,
+    },
+    request_policy: {
+      temperature: 0,
+      top_p: 1,
+      max_output_tokens: 500,
+      tool_choice_mode: 'auto',
+      response_format: 'text',
+      allow_parallel_tool_calls: false,
+    },
+  };
 }
 
 describe('contracts schemas', () => {
@@ -273,6 +320,7 @@ describe('contracts schemas', () => {
       ],
     };
     const hash = 'a'.repeat(64);
+    const resolvedModelPolicy = resolvedModelPolicyFixture(hash);
     const plan = flowExecutionPlanSchema.parse({
       execution_plan_id: 'plan_1',
       execution_plan_ref: 'db://flow-execution-plan/plan_1',
@@ -290,7 +338,11 @@ describe('contracts schemas', () => {
           prompt_id: 'prompt_1',
           prompt_version: 3,
           prompt_sha256: hash,
-          model_policy: 'mock',
+          model_policy: 'test-model-policy@1',
+          model_policy_id: 'test-model-policy',
+          model_policy_version: 1,
+          model_policy_hash: hash,
+          resolved_model_policy: resolvedModelPolicy,
           allowed_tools: ['knowledge.search'],
           budget: { max_steps: 4, max_tokens: 1000 },
         },
@@ -318,6 +370,7 @@ describe('contracts schemas', () => {
   it('validates Pi agent runtime DTOs without hidden reasoning fields', () => {
     const hash = 'b'.repeat(64);
     const budget = agentBudgetSchema.parse({ max_segments: 3, max_model_turns: 6, max_tool_calls: 2, max_total_tokens: 1000 });
+    const resolvedModelPolicy = resolvedModelPolicyFixture(hash, 'readonly-policy');
     const allowedTool = {
       tool_name: 'knowledge.search',
       tool_version: '1.0.0',
@@ -334,7 +387,11 @@ describe('contracts schemas', () => {
       prompt_version: 1,
       prompt_sha256: hash,
       system_prompt: 'Answer with tools when useful.',
-      model_policy: 'deterministic:readonly_tool',
+      model_policy: 'readonly-policy@1',
+      model_policy_id: 'readonly-policy',
+      model_policy_version: 1,
+      model_policy_hash: hash,
+      resolved_model_policy: resolvedModelPolicy,
       allowed_tools: [allowedTool],
       allowed_handoffs: ['db://flow-execution-plan/child'],
       budget,
@@ -349,7 +406,11 @@ describe('contracts schemas', () => {
       prompt_id: 'prompt_1',
       prompt_version: 1,
       prompt_sha256: hash,
-      model_policy: 'deterministic:readonly_tool',
+      model_policy: 'readonly-policy@1',
+      model_policy_id: 'readonly-policy',
+      model_policy_version: 1,
+      model_policy_hash: hash,
+      resolved_model_policy: resolvedModelPolicy,
       allowed_tools: [allowedTool],
       allowed_handoffs: ['db://flow-execution-plan/child'],
       budget,
@@ -621,5 +682,170 @@ describe('contracts schemas', () => {
       data: { ok: true },
       error: null,
     }).success).toBe(true);
+  });
+
+  it('validates ModelPolicy, model call ledger, and exact execution-plan lock fields', () => {
+    const hash = 'd'.repeat(64);
+    const policy = modelPolicySchema.parse({
+      model_policy_id: 'readonly-policy',
+      version: 1,
+      status: 'published',
+      protocol: 'openai_chat_completions',
+      targets: [
+        {
+          target_id: 'primary',
+          gateway_profile: 'live-openai-compatible',
+          provider_hint: 'openai-compatible',
+          model_id: 'gpt-test-2026-06-19',
+          priority: 1,
+          enabled: true,
+          capabilities: ['text', 'tools', 'usage', 'tool_choice'],
+          timeout_ms: 15000,
+          input_cost_per_million: 1.25,
+          output_cost_per_million: 5,
+        },
+      ],
+      retry_policy: {
+        max_attempts_per_target: 2,
+        retryable_status_codes: [429, 500, 502, 503, 504],
+        retry_on_timeout: true,
+        retry_on_network_error: true,
+        backoff_ms: 100,
+        max_backoff_ms: 1000,
+      },
+      fallback_policy: {
+        enabled: false,
+        ordered_target_ids: ['primary'],
+        eligible_error_classes: ['rate_limit', 'timeout'],
+        stop_on_auth_error: true,
+        stop_on_validation_error: true,
+        stop_on_policy_denial: true,
+      },
+      request_policy: {
+        temperature: 0,
+        top_p: 1,
+        max_output_tokens: 500,
+        tool_choice_mode: 'required',
+        response_format: 'text',
+        allow_parallel_tool_calls: false,
+      },
+    });
+    expect(policy.targets[0]?.capabilities).toContain('tools');
+    expect(() => modelPolicySchema.parse({
+      ...policy,
+      targets: [{ ...policy.targets[0], gateway_profile: 'https://provider.example/v1' }],
+    })).toThrow();
+    expect(() => modelPolicySchema.parse({
+      ...policy,
+      targets: [{ ...policy.targets[0], model_id: 'api_key:secret-value' }],
+    })).toThrow();
+
+    const response = modelGatewayResponseSchema.parse({
+      response_id: 'resp_1',
+      model: 'gpt-test-2026-06-19',
+      provider: 'openai-compatible',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'tool_call', id: 'call_1', name: 'knowledge.search', arguments: { query: 'target' } },
+        ],
+      },
+      finish_reason: 'tool_call',
+      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15, estimated_total_cost: 0.00005 },
+    });
+    expect(response.message.content[0]).toMatchObject({ type: 'tool_call', name: 'knowledge.search' });
+    expect(() => modelGatewayResponseSchema.parse({
+      message: { role: 'assistant', content: [{ type: 'tool_call', id: 'call_bad', name: 'knowledge.search', arguments: 'nope' }] },
+    })).toThrow();
+
+    expect(modelCallRecordSchema.parse({
+      model_call_id: 'model_call_1',
+      model_request_key: 'model:agent_run_1:segment:0:turn:0',
+      tenant_id: 'tenant_1',
+      agent_run_id: 'agent_run_1',
+      segment_index: 0,
+      model_turn_index: 0,
+      model_policy_id: policy.model_policy_id,
+      model_policy_version: policy.version,
+      model_policy_hash: hash,
+      target_id: 'primary',
+      provider: 'openai-compatible',
+      model_id: 'gpt-test-2026-06-19',
+      protocol: 'openai_chat_completions',
+      status: 'succeeded',
+      request_hash: hash,
+      safe_response_json: { response_id: 'resp_1', message: response.message },
+    }).status).toBe('succeeded');
+
+    expect(modelCallAttemptSchema.parse({
+      attempt_id: 'attempt_1',
+      model_call_id: 'model_call_1',
+      attempt_index: 0,
+      target_id: 'primary',
+      provider: 'openai-compatible',
+      model_id: 'gpt-test-2026-06-19',
+      status: 'succeeded',
+      http_status: 200,
+      response_id: 'resp_1',
+    }).status).toBe('succeeded');
+
+    const executionPlan = agentExecutionPlanSchema.parse({
+      execution_plan_id: 'agent_plan_model_1',
+      execution_plan_ref: 'db://agent-execution-plan/agent_plan_model_1',
+      tenant_id: 'tenant_1',
+      agent_id: 'agent_1',
+      agent_version: 1,
+      agent_sha256: hash,
+      prompt_id: 'prompt_1',
+      prompt_version: 1,
+      prompt_sha256: hash,
+      model_policy: 'readonly-policy@1',
+      model_policy_id: 'readonly-policy',
+      model_policy_version: 1,
+      model_policy_hash: hash,
+      resolved_model_policy: {
+        model_policy_id: 'readonly-policy',
+        model_policy_version: 1,
+        model_policy_hash: hash,
+        protocol: 'openai_chat_completions',
+        resolved_targets: policy.targets,
+        retry_policy: policy.retry_policy,
+        fallback_policy: policy.fallback_policy,
+        request_policy: policy.request_policy,
+      },
+      allowed_tools: [],
+      allowed_handoffs: [],
+      budget: agentBudgetSchema.parse({}),
+      plan: {
+        agent_id: 'agent_1',
+        agent_version: 1,
+        agent_sha256: hash,
+        prompt_id: 'prompt_1',
+        prompt_version: 1,
+        prompt_sha256: hash,
+        system_prompt: 'Use the locked model policy.',
+        model_policy: 'readonly-policy@1',
+        model_policy_id: 'readonly-policy',
+        model_policy_version: 1,
+        model_policy_hash: hash,
+        resolved_model_policy: {
+          model_policy_id: 'readonly-policy',
+          model_policy_version: 1,
+          model_policy_hash: hash,
+          protocol: 'openai_chat_completions',
+          resolved_targets: policy.targets,
+          retry_policy: policy.retry_policy,
+          fallback_policy: policy.fallback_policy,
+          request_policy: policy.request_policy,
+        },
+        allowed_tools: [],
+        allowed_handoffs: [],
+        budget: agentBudgetSchema.parse({}),
+      },
+      generated_at: '2026-06-19T00:00:00.000Z',
+      execution_plan_hash: hash,
+    });
+    expect(executionPlan.model_policy_id).toBe('readonly-policy');
+    expect(JSON.stringify(executionPlan)).not.toMatch(/api[_-]?key|authorization|hidden_reasoning/i);
   });
 });

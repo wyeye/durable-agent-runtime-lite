@@ -5,6 +5,7 @@ import type {
   FlowSpec,
   HumanTask,
   IdempotencyRecord,
+  ResolvedModelPolicy,
   RouteSpec,
   TaskRun,
   ToolCallLog,
@@ -427,6 +428,44 @@ describe('db repositories', () => {
   it('stores and verifies AgentExecutionPlan by immutable ref without adapter secrets', async () => {
     const now = '2026-01-01T00:00:00.000Z';
     const hash = 'd'.repeat(64);
+    const resolvedModelPolicy: ResolvedModelPolicy = {
+      model_policy_id: 'deterministic-final',
+      model_policy_version: 1,
+      model_policy_hash: hash,
+      protocol: 'dar_generate',
+      resolved_targets: [{
+        target_id: 'deterministic-final-target',
+        gateway_profile: 'local-mock',
+        model_id: 'deterministic:final_only',
+        priority: 0,
+        enabled: true,
+        capabilities: ['text'],
+      }],
+      retry_policy: {
+        max_attempts_per_target: 1,
+        retryable_status_codes: [429, 500],
+        retry_on_timeout: true,
+        retry_on_network_error: true,
+        backoff_ms: 0,
+        max_backoff_ms: 0,
+      },
+      fallback_policy: {
+        enabled: false,
+        ordered_target_ids: [],
+        eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
+        stop_on_auth_error: true,
+        stop_on_validation_error: true,
+        stop_on_policy_denial: true,
+      },
+      request_policy: {
+        temperature: 0,
+        top_p: 1,
+        max_output_tokens: 1000,
+        tool_choice_mode: 'auto',
+        response_format: 'text',
+        allow_parallel_tool_calls: false,
+      },
+    };
     const executionPlanRef = buildAgentExecutionPlanRef('agent_plan_1');
     const planWithoutHash = {
       execution_plan_id: 'agent_plan_1',
@@ -439,6 +478,10 @@ describe('db repositories', () => {
       prompt_version: 1,
       prompt_sha256: hash,
       model_policy: 'deterministic:final_only',
+      model_policy_id: resolvedModelPolicy.model_policy_id,
+      model_policy_version: resolvedModelPolicy.model_policy_version,
+      model_policy_hash: resolvedModelPolicy.model_policy_hash,
+      resolved_model_policy: resolvedModelPolicy,
       allowed_tools: [{
         tool_name: 'knowledge.search',
         tool_version: '1.0.0',
@@ -468,6 +511,10 @@ describe('db repositories', () => {
         prompt_sha256: hash,
         system_prompt: 'safe prompt',
         model_policy: 'deterministic:final_only',
+        model_policy_id: resolvedModelPolicy.model_policy_id,
+        model_policy_version: resolvedModelPolicy.model_policy_version,
+        model_policy_hash: resolvedModelPolicy.model_policy_hash,
+        resolved_model_policy: resolvedModelPolicy,
         allowed_tools: [{
           tool_name: 'knowledge.search',
           tool_version: '1.0.0',
@@ -507,6 +554,10 @@ describe('db repositories', () => {
         prompt_version: plan.prompt_version,
         prompt_sha256: plan.prompt_sha256,
         model_policy_json: { value: plan.model_policy },
+        model_policy_id: plan.model_policy_id,
+        model_policy_version: plan.model_policy_version,
+        model_policy_hash: plan.model_policy_hash,
+        resolved_model_policy_json: plan.resolved_model_policy,
         allowed_tools_json: plan.allowed_tools,
         allowed_handoffs_json: plan.allowed_handoffs,
         output_schema_json: null,
@@ -528,6 +579,44 @@ describe('db repositories', () => {
 
   it('compares AgentExecutionPlan content without generated ids or timestamps for idempotent regeneration', () => {
     const hash = 'e'.repeat(64);
+    const resolvedModelPolicy: ResolvedModelPolicy = {
+      model_policy_id: 'deterministic-final',
+      model_policy_version: 1,
+      model_policy_hash: hash,
+      protocol: 'dar_generate',
+      resolved_targets: [{
+        target_id: 'deterministic-final-target',
+        gateway_profile: 'local-mock',
+        model_id: 'deterministic:final_only',
+        priority: 0,
+        enabled: true,
+        capabilities: ['text'],
+      }],
+      retry_policy: {
+        max_attempts_per_target: 1,
+        retryable_status_codes: [429, 500],
+        retry_on_timeout: true,
+        retry_on_network_error: true,
+        backoff_ms: 0,
+        max_backoff_ms: 0,
+      },
+      fallback_policy: {
+        enabled: false,
+        ordered_target_ids: [],
+        eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
+        stop_on_auth_error: true,
+        stop_on_validation_error: true,
+        stop_on_policy_denial: true,
+      },
+      request_policy: {
+        temperature: 0,
+        top_p: 1,
+        max_output_tokens: 1000,
+        tool_choice_mode: 'auto',
+        response_format: 'text',
+        allow_parallel_tool_calls: false,
+      },
+    };
     const basePlan: Omit<AgentExecutionPlan, 'execution_plan_id' | 'execution_plan_ref' | 'execution_plan_hash' | 'generated_at'> = {
       tenant_id: 'tenant_1',
       agent_id: 'agent_1',
@@ -537,6 +626,10 @@ describe('db repositories', () => {
       prompt_version: 1,
       prompt_sha256: hash,
       model_policy: 'deterministic:final_only',
+      model_policy_id: resolvedModelPolicy.model_policy_id,
+      model_policy_version: resolvedModelPolicy.model_policy_version,
+      model_policy_hash: resolvedModelPolicy.model_policy_hash,
+      resolved_model_policy: resolvedModelPolicy,
       allowed_tools: [],
       allowed_handoffs: [],
       budget: {
@@ -559,6 +652,10 @@ describe('db repositories', () => {
         prompt_sha256: hash,
         system_prompt: 'safe prompt',
         model_policy: 'deterministic:final_only',
+        model_policy_id: resolvedModelPolicy.model_policy_id,
+        model_policy_version: resolvedModelPolicy.model_policy_version,
+        model_policy_hash: resolvedModelPolicy.model_policy_hash,
+        resolved_model_policy: resolvedModelPolicy,
         allowed_tools: [],
         allowed_handoffs: [],
         budget: {

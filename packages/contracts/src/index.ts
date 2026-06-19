@@ -39,8 +39,23 @@ export const specStatusTransitionSchema = z.object({
   from: specStatusSchema,
   to: specStatusSchema,
 });
-export const registryResourceTypeSchema = z.enum(['flow', 'route', 'tool', 'agent', 'prompt', 'tenant_runtime_policy']);
+export const registryResourceTypeSchema = z.enum(['flow', 'route', 'tool', 'agent', 'prompt', 'tenant_runtime_policy', 'model_policy']);
 export const capabilityReleaseActionSchema = z.enum(['publish', 'gray', 'rollback', 'disable', 'deprecate']);
+export const modelPolicyStatusSchema = specStatusSchema;
+export const modelGatewayProtocolSchema = z.enum(['dar_generate', 'openai_chat_completions']);
+export const modelCapabilitySchema = z.enum(['text', 'tools', 'json_schema', 'streaming', 'usage', 'tool_choice']);
+export const modelToolChoiceModeSchema = z.enum(['auto', 'none', 'required']);
+export const modelResponseFormatSchema = z.enum(['text', 'json_object', 'json_schema']);
+export const modelCallStatusSchema = z.enum([
+  'queued',
+  'running',
+  'succeeded',
+  'failed',
+  'cancelled',
+  'timed_out',
+  'replayed',
+]);
+export const modelCallAttemptStatusSchema = z.enum(['started', 'succeeded', 'failed', 'skipped']);
 export const flowStepTypeSchema = z.enum(['activity', 'tool', 'agent', 'human_task', 'condition']);
 export const piResultStatusSchema = z.enum([
   'final',
@@ -239,6 +254,208 @@ export const tenantAgentAdmissionSchema = z.object({
   revision: z.number().int().positive().default(1),
 });
 
+const safeModelStringSchema = z.string().min(1).refine((value) => {
+  if (/api[_-]?key|authorization|bearer\s+|secret|password|token|cookie/iu.test(value)) {
+    return false;
+  }
+  return !/^[a-z][a-z0-9+.-]*:\/\//iu.test(value);
+}, 'Model policy fields must not contain credentials or gateway URLs');
+
+export const modelTargetSchema = z.object({
+  target_id: safeModelStringSchema,
+  gateway_profile: safeModelStringSchema,
+  provider_hint: safeModelStringSchema.optional(),
+  model_id: safeModelStringSchema,
+  priority: z.number().int().nonnegative(),
+  enabled: z.boolean().default(true),
+  capabilities: z.array(modelCapabilitySchema).min(1),
+  timeout_ms: z.number().int().positive().optional(),
+  max_retries: z.number().int().nonnegative().max(10).optional(),
+  input_cost_per_million: z.number().nonnegative().optional(),
+  output_cost_per_million: z.number().nonnegative().optional(),
+});
+
+export const modelRetryPolicySchema = z.object({
+  max_attempts_per_target: z.number().int().positive().max(10).default(2),
+  retryable_status_codes: z.array(z.number().int().min(100).max(599)).default([408, 429, 500, 502, 503, 504]),
+  retry_on_timeout: z.boolean().default(true),
+  retry_on_network_error: z.boolean().default(true),
+  backoff_ms: z.number().int().nonnegative().default(250),
+  max_backoff_ms: z.number().int().nonnegative().default(2_000),
+});
+
+export const modelFallbackPolicySchema = z.object({
+  enabled: z.boolean().default(false),
+  ordered_target_ids: z.array(z.string().min(1)).default([]),
+  eligible_error_classes: z.array(z.string().min(1)).default(['rate_limit', 'timeout', 'network', 'upstream_5xx']),
+  stop_on_auth_error: z.boolean().default(true),
+  stop_on_validation_error: z.boolean().default(true),
+  stop_on_policy_denial: z.boolean().default(true),
+});
+
+export const modelRequestPolicySchema = z.object({
+  temperature: z.number().min(0).max(2).default(0.2),
+  top_p: z.number().min(0).max(1).default(1),
+  max_output_tokens: z.number().int().positive().default(1000),
+  tool_choice_mode: modelToolChoiceModeSchema.default('auto'),
+  response_format: modelResponseFormatSchema.default('text'),
+  allow_parallel_tool_calls: z.boolean().default(false),
+});
+
+export const modelPolicySchema = z.object({
+  model_policy_id: z.string().min(1),
+  version: z.number().int().positive(),
+  status: modelPolicyStatusSchema,
+  protocol: modelGatewayProtocolSchema,
+  targets: z.array(modelTargetSchema).min(1),
+  retry_policy: modelRetryPolicySchema.default(() => modelRetryPolicySchema.parse({})),
+  fallback_policy: modelFallbackPolicySchema.default(() => modelFallbackPolicySchema.parse({})),
+  request_policy: modelRequestPolicySchema.default(() => modelRequestPolicySchema.parse({})),
+  revision: z.number().int().positive().default(1),
+  created_by: z.string().min(1).optional(),
+  updated_by: z.string().min(1).optional(),
+  published_by: z.string().min(1).optional(),
+  created_at: z.string().datetime().optional(),
+  updated_at: z.string().datetime().optional(),
+  published_at: z.string().datetime().optional(),
+});
+
+export const resolvedModelPolicySchema = z.object({
+  model_policy_id: z.string().min(1),
+  model_policy_version: z.number().int().positive(),
+  model_policy_hash: z.string().regex(/^[a-f0-9]{64}$/u),
+  protocol: modelGatewayProtocolSchema,
+  resolved_targets: z.array(modelTargetSchema).min(1),
+  retry_policy: modelRetryPolicySchema,
+  fallback_policy: modelFallbackPolicySchema,
+  request_policy: modelRequestPolicySchema,
+});
+
+export const modelPolicyRefSchema = z.object({
+  model_policy_id: z.string().min(1),
+  model_policy_version: z.number().int().positive(),
+  model_policy_hash: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+});
+
+export const modelUsageSchema = z.object({
+  input_tokens: z.number().int().nonnegative().optional(),
+  output_tokens: z.number().int().nonnegative().optional(),
+  total_tokens: z.number().int().nonnegative().optional(),
+  cache_read_tokens: z.number().int().nonnegative().optional(),
+  cache_write_tokens: z.number().int().nonnegative().optional(),
+  estimated_input_cost: z.number().nonnegative().optional(),
+  estimated_output_cost: z.number().nonnegative().optional(),
+  estimated_total_cost: z.number().nonnegative().optional(),
+  currency: z.string().min(1).optional(),
+});
+
+export const modelGatewayContentBlockSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('text'), text: z.string() }),
+  z.object({
+    type: z.literal('tool_call'),
+    id: z.string().min(1),
+    name: z.string().min(1),
+    arguments: jsonObjectSchema.default({}),
+  }),
+]);
+
+export const modelGatewayMessageSchema = z.object({
+  role: z.enum(['system', 'user', 'assistant', 'tool']),
+  content: z.union([z.string(), z.array(modelGatewayContentBlockSchema)]).default(''),
+  tool_call_id: z.string().min(1).optional(),
+  name: z.string().min(1).optional(),
+});
+
+export const modelGatewayToolDefinitionSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  input_schema: jsonObjectSchema.default({}),
+});
+
+export const modelGatewayRequestSchema = z.object({
+  model_request_key: z.string().min(1),
+  model: z.string().min(1),
+  messages: z.array(modelGatewayMessageSchema),
+  tools: z.array(modelGatewayToolDefinitionSchema).default([]),
+  tool_choice: modelToolChoiceModeSchema.default('auto'),
+  response_format: modelResponseFormatSchema.default('text'),
+  temperature: z.number().min(0).max(2).optional(),
+  top_p: z.number().min(0).max(1).optional(),
+  max_output_tokens: z.number().int().positive().optional(),
+  parallel_tool_calls: z.boolean().optional(),
+  request_id: z.string().optional(),
+  task_run_id: z.string().optional(),
+  agent_run_id: z.string().optional(),
+});
+
+export const modelGatewayResponseSchema = z.object({
+  response_id: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  provider: z.string().min(1).optional(),
+  message: z.object({
+    role: z.literal('assistant'),
+    content: z.array(modelGatewayContentBlockSchema).default([]),
+  }),
+  finish_reason: z.enum(['stop', 'tool_call', 'length', 'error']).default('stop'),
+  usage: modelUsageSchema.optional(),
+});
+
+export const modelCallRecordSchema = z.object({
+  model_call_id: z.string().min(1),
+  model_request_key: z.string().min(1),
+  tenant_id: z.string().min(1),
+  user_id: z.string().min(1).optional(),
+  task_run_id: z.string().min(1).optional(),
+  workflow_id: z.string().min(1).optional(),
+  workflow_run_id: z.string().min(1).optional(),
+  agent_run_id: z.string().min(1).optional(),
+  segment_index: z.number().int().nonnegative().optional(),
+  model_turn_index: z.number().int().nonnegative().optional(),
+  model_policy_id: z.string().min(1),
+  model_policy_version: z.number().int().positive(),
+  model_policy_hash: z.string().regex(/^[a-f0-9]{64}$/u),
+  target_id: z.string().min(1).optional(),
+  provider: z.string().min(1).optional(),
+  model_id: z.string().min(1).optional(),
+  protocol: modelGatewayProtocolSchema,
+  attempt_count: z.number().int().nonnegative().default(0),
+  fallback_index: z.number().int().nonnegative().default(0),
+  status: modelCallStatusSchema,
+  finish_reason: z.string().optional(),
+  response_id: z.string().optional(),
+  input_tokens: z.number().int().nonnegative().optional(),
+  output_tokens: z.number().int().nonnegative().optional(),
+  total_tokens: z.number().int().nonnegative().optional(),
+  estimated_cost: z.number().nonnegative().optional(),
+  latency_ms: z.number().int().nonnegative().optional(),
+  error_class: z.string().optional(),
+  error_code: z.string().optional(),
+  request_hash: z.string().regex(/^[a-f0-9]{64}$/u),
+  response_hash: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  safe_response_json: jsonObjectSchema.optional(),
+  started_at: z.string().datetime().optional(),
+  completed_at: z.string().datetime().optional(),
+  created_at: z.string().datetime().optional(),
+  updated_at: z.string().datetime().optional(),
+});
+
+export const modelCallAttemptSchema = z.object({
+  attempt_id: z.string().min(1),
+  model_call_id: z.string().min(1),
+  attempt_index: z.number().int().nonnegative(),
+  target_id: z.string().min(1),
+  provider: z.string().min(1).optional(),
+  model_id: z.string().min(1),
+  status: modelCallAttemptStatusSchema,
+  http_status: z.number().int().min(100).max(599).optional(),
+  error_class: z.string().optional(),
+  error_code: z.string().optional(),
+  latency_ms: z.number().int().nonnegative().optional(),
+  response_id: z.string().optional(),
+  started_at: z.string().datetime().optional(),
+  completed_at: z.string().datetime().optional(),
+});
+
 export const tenantPolicyCreateDraftRequestSchema = z.object({
   policy: tenantRuntimePolicySchema.omit({
     revision: true,
@@ -387,6 +604,53 @@ export const operationAuditQuerySchema = paginationRequestSchema.extend({
   task_run_id: z.string().min(1).optional(),
   tool_name: z.string().min(1).optional(),
   event_type: z.string().min(1).optional(),
+  start_time: z.string().datetime().optional(),
+  end_time: z.string().datetime().optional(),
+});
+
+export const modelPolicyQuerySchema = paginationRequestSchema.extend({
+  model_policy_id: z.string().min(1).optional(),
+  status: modelPolicyStatusSchema.optional(),
+});
+
+export const modelPolicyCreateDraftRequestSchema = z.object({
+  policy: modelPolicySchema.extend({ status: z.literal('draft').default('draft') }),
+});
+
+export const modelPolicyUpdateDraftRequestSchema = z.object({
+  policy: modelPolicySchema.partial().omit({
+    model_policy_id: true,
+    version: true,
+    revision: true,
+    created_at: true,
+    updated_at: true,
+    published_at: true,
+  }),
+  expected_revision: z.number().int().positive(),
+});
+
+export const modelPolicyValidateResponseSchema = z.object({ validation: registryValidationResultSchema });
+export const modelPolicyPublishRequestSchema = publishResourceRequestSchema.extend({
+  expected_revision: z.number().int().positive().optional(),
+});
+export const modelPolicyRollbackRequestSchema = rollbackResourceRequestSchema;
+export const modelConnectionTestRequestSchema = z.object({ request_id: z.string().min(1).optional() });
+export const modelConnectionTestResponseSchema = z.object({
+  reachable: z.boolean(),
+  model: z.string().optional(),
+  latency_ms: z.number().int().nonnegative().optional(),
+  capabilities: z.array(modelCapabilitySchema).default([]),
+  safe_error_code: z.string().optional(),
+});
+
+export const modelCallQuerySchema = paginationRequestSchema.extend({
+  tenant_id: z.string().min(1).optional(),
+  task_run_id: z.string().min(1).optional(),
+  agent_run_id: z.string().min(1).optional(),
+  model_policy_id: z.string().min(1).optional(),
+  model_id: z.string().min(1).optional(),
+  provider: z.string().min(1).optional(),
+  status: modelCallStatusSchema.optional(),
   start_time: z.string().datetime().optional(),
   end_time: z.string().datetime().optional(),
 });
@@ -590,6 +854,7 @@ export const agentSpecSchema = z.object({
   version: z.number().int().positive(),
   prompt_ref: z.string().min(1),
   model_policy: z.string().min(1),
+  model_policy_ref: modelPolicyRefSchema.optional(),
   allowed_tools: z.array(z.string()).default([]),
   allowed_handoffs: z.array(z.string().min(1)).default([]),
   max_steps: z.number().int().positive().default(6),
@@ -648,6 +913,10 @@ export const flowExecutionPlanAgentSchema = z.object({
   prompt_version: z.number().int().positive(),
   prompt_sha256: sha256Schema,
   model_policy: z.string().min(1),
+  model_policy_id: z.string().min(1),
+  model_policy_version: z.number().int().positive(),
+  model_policy_hash: sha256Schema,
+  resolved_model_policy: resolvedModelPolicySchema,
   allowed_tools: z.array(z.string().min(1)),
   agent_execution_plan_ref: z.string().min(1).optional(),
   allowed_handoffs: z.array(z.string().min(1)).default([]),
@@ -1181,6 +1450,10 @@ export const resolvedAgentPlanSchema = z.object({
   prompt_sha256: sha256Schema,
   system_prompt: z.string().min(1),
   model_policy: z.string().min(1),
+  model_policy_id: z.string().min(1),
+  model_policy_version: z.number().int().positive(),
+  model_policy_hash: sha256Schema,
+  resolved_model_policy: resolvedModelPolicySchema,
   allowed_tools: z.array(agentToolPlanEntrySchema).default([]),
   allowed_handoffs: z.array(z.string().min(1)).default([]),
   output_schema: jsonObjectSchema.optional(),
@@ -1198,6 +1471,10 @@ export const agentExecutionPlanSchema = z.object({
   prompt_version: z.number().int().positive(),
   prompt_sha256: sha256Schema,
   model_policy: z.string().min(1),
+  model_policy_id: z.string().min(1),
+  model_policy_version: z.number().int().positive(),
+  model_policy_hash: sha256Schema,
+  resolved_model_policy: resolvedModelPolicySchema,
   allowed_tools: z.array(agentToolPlanEntrySchema).default([]),
   allowed_handoffs: z.array(z.string().min(1)).default([]),
   output_schema: jsonObjectSchema.optional(),
@@ -1376,6 +1653,13 @@ export const agentRunRecordSchema = z.object({
   prompt_id: z.string().min(1),
   prompt_version: z.number().int().positive(),
   model: z.string().min(1),
+  model_policy_id: z.string().min(1).optional(),
+  model_policy_version: z.number().int().positive().optional(),
+  model_policy_hash: sha256Schema.optional(),
+  selected_model_id: z.string().min(1).optional(),
+  selected_provider: z.string().min(1).optional(),
+  fallback_count: z.number().int().nonnegative().default(0),
+  model_call_count: z.number().int().nonnegative().default(0),
   execution_mode: agentExecutionModeSchema,
   tenant_policy_snapshot_ref: z.string().min(1).optional(),
   tenant_policy_version: z.number().int().positive().optional(),
@@ -1424,6 +1708,36 @@ export type RiskLevel = ToolRiskLevel;
 export type ToolInvokeMode = z.infer<typeof toolInvokeModeSchema>;
 export type ToolPolicyDecision = z.infer<typeof toolPolicyDecisionSchema>;
 export type TenantRuntimePolicyStatus = z.infer<typeof tenantRuntimePolicyStatusSchema>;
+export type ModelPolicyStatus = z.infer<typeof modelPolicyStatusSchema>;
+export type ModelGatewayProtocol = z.infer<typeof modelGatewayProtocolSchema>;
+export type ModelCapability = z.infer<typeof modelCapabilitySchema>;
+export type ModelTarget = z.infer<typeof modelTargetSchema>;
+export type ModelRetryPolicy = z.infer<typeof modelRetryPolicySchema>;
+export type ModelFallbackPolicy = z.infer<typeof modelFallbackPolicySchema>;
+export type ModelRequestPolicy = z.infer<typeof modelRequestPolicySchema>;
+export type ModelPolicy = z.infer<typeof modelPolicySchema>;
+export type ResolvedModelPolicy = z.infer<typeof resolvedModelPolicySchema>;
+export type ModelPolicyRef = z.infer<typeof modelPolicyRefSchema>;
+export type ModelCallStatus = z.infer<typeof modelCallStatusSchema>;
+export type ModelCallAttemptStatus = z.infer<typeof modelCallAttemptStatusSchema>;
+export type ModelUsage = z.infer<typeof modelUsageSchema>;
+export type ModelGatewayRequest = z.infer<typeof modelGatewayRequestSchema>;
+export type ModelGatewayResponse = z.infer<typeof modelGatewayResponseSchema>;
+export type ModelGatewayMessage = z.infer<typeof modelGatewayMessageSchema>;
+export type ModelGatewayContentBlock = z.infer<typeof modelGatewayContentBlockSchema>;
+export type ModelGatewayToolCall = Extract<ModelGatewayContentBlock, { type: 'tool_call' }>;
+export type ModelGatewayToolDefinition = z.infer<typeof modelGatewayToolDefinitionSchema>;
+export type ModelCallRecord = z.infer<typeof modelCallRecordSchema>;
+export type ModelCallAttempt = z.infer<typeof modelCallAttemptSchema>;
+export type ModelPolicyQuery = z.infer<typeof modelPolicyQuerySchema>;
+export type ModelPolicyCreateDraftRequest = z.infer<typeof modelPolicyCreateDraftRequestSchema>;
+export type ModelPolicyUpdateDraftRequest = z.infer<typeof modelPolicyUpdateDraftRequestSchema>;
+export type ModelPolicyValidateResponse = z.infer<typeof modelPolicyValidateResponseSchema>;
+export type ModelPolicyPublishRequest = z.infer<typeof modelPolicyPublishRequestSchema>;
+export type ModelPolicyRollbackRequest = z.infer<typeof modelPolicyRollbackRequestSchema>;
+export type ModelConnectionTestRequest = z.infer<typeof modelConnectionTestRequestSchema>;
+export type ModelConnectionTestResponse = z.infer<typeof modelConnectionTestResponseSchema>;
+export type ModelCallQuery = z.infer<typeof modelCallQuerySchema>;
 export type TenantPolicyOperation = z.infer<typeof tenantPolicyOperationSchema>;
 export type TenantPolicyDecisionValue = z.infer<typeof tenantPolicyDecisionValueSchema>;
 export type TenantAdmissionStatus = z.infer<typeof tenantAdmissionStatusSchema>;

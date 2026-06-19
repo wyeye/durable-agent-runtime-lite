@@ -1,5 +1,14 @@
-import { describe, expect, it } from 'vitest';
-import { modelGenerateResponseSchema } from '../src/index.js';
+import { createServer } from 'node:http';
+import { afterEach, describe, expect, it } from 'vitest';
+import { ModelGatewayClient, ModelGatewayError, modelGenerateResponseSchema } from '../src/index.js';
+
+const servers: Array<{ close: () => void }> = [];
+
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve, reject) => {
+    server.close((error?: Error) => error ? reject(error) : resolve());
+  })));
+});
 
 describe('Model Gateway contract', () => {
   it('parses structured assistant tool calls', () => {
@@ -48,5 +57,137 @@ describe('Model Gateway contract', () => {
         finish_reason: 'tool_call',
       }),
     ).toThrow();
+  });
+
+  it('maps OpenAI-compatible chat completion tool calls and usage', async () => {
+    const seen: Array<{ url?: string; idempotencyKey?: string; body: unknown }> = [];
+    const server = createServer((request, response) => {
+      let body = '';
+      request.on('data', (chunk: Buffer) => {
+        body += chunk.toString('utf8');
+      });
+      request.on('end', () => {
+        seen.push({
+          url: request.url,
+          idempotencyKey: request.headers['idempotency-key']?.toString(),
+          body: JSON.parse(body),
+        });
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+          id: 'chatcmpl_1',
+          model: 'gpt-test',
+          choices: [{
+            finish_reason: 'tool_calls',
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [{
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'knowledge.search', arguments: '{"query":"target"}' },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 13, completion_tokens: 5, total_tokens: 18 },
+        }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    servers.push(server);
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('test server did not bind to a TCP port');
+    }
+
+    const client = new ModelGatewayClient({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      apiKey: 'test-key',
+      protocol: 'openai_chat_completions',
+      allowInsecureHttp: true,
+      maxRetries: 0,
+    });
+
+    const response = await client.call({
+      model_request_key: 'model-call-1',
+      model: 'gpt-test',
+      messages: [{ role: 'user', content: 'search target' }],
+      tools: [{ name: 'knowledge.search', input_schema: { type: 'object' } }],
+      tool_choice: 'auto',
+      response_format: 'text',
+    });
+
+    expect(seen[0]).toMatchObject({
+      url: '/v1/chat/completions',
+      idempotencyKey: 'model-call-1',
+    });
+    expect(response.finish_reason).toBe('tool_call');
+    expect(response.usage?.total_tokens).toBe(18);
+    expect(response.message.content[0]).toMatchObject({
+      type: 'tool_call',
+      name: 'knowledge.search',
+      arguments: { query: 'target' },
+    });
+  });
+
+  it('does not retry authentication failures', async () => {
+    let attempts = 0;
+    const server = createServer((_request, response) => {
+      attempts += 1;
+      response.statusCode = 401;
+      response.end(JSON.stringify({ error: { message: 'bad key' } }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    servers.push(server);
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('test server did not bind to a TCP port');
+    }
+    const client = new ModelGatewayClient({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      apiKey: 'bad-key',
+      protocol: 'openai_chat_completions',
+      allowInsecureHttp: true,
+      maxRetries: 2,
+    });
+
+    await expect(client.call({
+      model_request_key: 'auth-fail',
+      model: 'gpt-test',
+      messages: [{ role: 'user', content: 'hello' }],
+      tools: [],
+      tool_choice: 'auto',
+      response_format: 'text',
+    })).rejects.toMatchObject({ code: 'MODEL_GATEWAY_AUTH_FAILED', errorClass: 'auth' });
+    expect(attempts).toBe(1);
+  });
+
+  it('enforces response size limits before parsing provider payloads', async () => {
+    const server = createServer((_request, response) => {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ payload: 'x'.repeat(128) }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    servers.push(server);
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('test server did not bind to a TCP port');
+    }
+    const client = new ModelGatewayClient({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      apiKey: 'test-key',
+      protocol: 'openai_chat_completions',
+      allowInsecureHttp: true,
+      maxResponseBytes: 32,
+      maxRetries: 0,
+    });
+
+    await expect(client.call({
+      model_request_key: 'too-large',
+      model: 'gpt-test',
+      messages: [{ role: 'user', content: 'hello' }],
+      tools: [],
+      tool_choice: 'auto',
+      response_format: 'text',
+    })).rejects.toBeInstanceOf(ModelGatewayError);
   });
 });

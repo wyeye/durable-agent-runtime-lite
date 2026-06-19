@@ -3,6 +3,7 @@ import type {
   CapabilityRelease,
   FlowSpec,
   GrayPolicy,
+  ModelPolicy,
   PaginatedResponse,
   PromptDefinition,
   RegistryResourceType,
@@ -14,7 +15,7 @@ import type {
 } from '@dar/contracts';
 import type { ApiClient } from './client.js';
 
-export type RegistrySpec = FlowSpec | RouteSpec | ToolManifest | AgentSpec | PromptDefinition | TenantRuntimePolicy;
+export type RegistrySpec = FlowSpec | RouteSpec | ToolManifest | AgentSpec | PromptDefinition | TenantRuntimePolicy | ModelPolicy;
 
 export interface RegistryRecord<TSpec extends RegistrySpec = RegistrySpec> {
   tenant_id: string;
@@ -76,6 +77,7 @@ const resourcePaths: Record<RegistryResourceType, string> = {
   agent: 'agents',
   prompt: 'prompts',
   tenant_runtime_policy: 'tenant-runtime-policies',
+  model_policy: 'model-policies',
 };
 
 export function listResources(

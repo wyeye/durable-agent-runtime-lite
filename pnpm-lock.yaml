@@ -17,6 +17,9 @@ importers:
       '@dar/db':
         specifier: workspace:*
         version: link:packages/db
+      '@dar/model-client':
+        specifier: workspace:*
+        version: link:packages/model-client
       '@eslint/js':
         specifier: ^9.0.0
         version: 9.39.4
@@ -464,6 +467,9 @@ importers:
 
   packages/model-client:
     dependencies:
+      '@dar/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       undici:
         specifier: ^7.0.0
         version: 7.28.0

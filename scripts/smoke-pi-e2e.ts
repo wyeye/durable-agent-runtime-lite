@@ -1,16 +1,18 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
-import type { AgentRunRecord, AgentStepRecord, HumanTask, StandardResponse, TaskRun } from '@dar/contracts';
+import type { AgentRunRecord, AgentStepRecord, HumanTask, ModelGatewayProtocol, StandardResponse, TaskRun } from '@dar/contracts';
 import {
   AgentExecutionPlanRepository,
   FlowExecutionPlanRepository,
   FlowDefinitionRepository,
+  ModelPolicyRepository,
   ToolManifestRepository,
   buildExecutionPlanRef,
   closeDb,
   createDb,
   hashJson,
+  hashModelPolicy,
   upsertAgentSpec,
   upsertPromptDefinition,
 } from '@dar/db';
@@ -21,6 +23,8 @@ const tenantId = process.env.SMOKE_TENANT_ID ?? 'default';
 const userId = process.env.SMOKE_USER_ID ?? 'pi_smoke_user';
 const scenario = process.env.PI_SMOKE_SCENARIO ?? 'readonly_tool';
 const mode = process.env.PI_SMOKE_MODE ?? (scenario === 'model_gateway' ? 'model_gateway' : 'deterministic');
+const modelGatewayProtocol = (process.env.MODEL_GATEWAY_PROTOCOL ?? 'openai_chat_completions') as ModelGatewayProtocol;
+const modelGatewayModel = process.env.MODEL_GATEWAY_MODEL ?? 'dar-local-model';
 const requestId = `pi_smoke_${scenario}_${Date.now()}`;
 const runtimeHeaders = authHeaders(`${requestId}_runtime`);
 
@@ -90,6 +94,9 @@ async function seedAgentPlan(db: ReturnType<typeof createDb>): Promise<string> {
   const promptId = `pi_smoke_prompt_${scenario}_${mode}`;
   const agentId = `pi_smoke_agent_${scenario}_${mode}`;
   const modelPolicy = mode === 'model_gateway' ? `model_gateway:${scenario}` : `deterministic:${deterministicScenario(scenario)}`;
+  const modelPolicyId = `pi_smoke_model_${scenario}_${mode}`;
+  const publishedModelPolicy = await seedModelPolicy(db, modelPolicyId, modelPolicy);
+  const modelPolicyHash = hashModelPolicy(publishedModelPolicy);
   await seedTools(db);
   if (scenario === 'handoff') {
     await seedHandoffTarget(db);
@@ -107,6 +114,11 @@ async function seedAgentPlan(db: ReturnType<typeof createDb>): Promise<string> {
     version: 1,
     prompt_ref: `${promptId}@1`,
     model_policy: modelPolicy,
+    model_policy_ref: {
+      model_policy_id: publishedModelPolicy.model_policy_id,
+      model_policy_version: publishedModelPolicy.version,
+      model_policy_hash: modelPolicyHash,
+    },
     allowed_tools: ['knowledge.search@1.0.0', 'record.write.mock@1.0.0'],
     allowed_handoffs: scenario === 'handoff' ? ['db://flow-execution-plan/plan_handoff'] : [],
     max_steps: scenario === 'restart_resume' ? 6 : 4,
@@ -121,6 +133,61 @@ async function seedAgentPlan(db: ReturnType<typeof createDb>): Promise<string> {
     operatorId: 'pi-smoke',
   });
   return plan.execution_plan_ref;
+}
+
+async function seedModelPolicy(db: ReturnType<typeof createDb>, modelPolicyId: string, displayPolicy: string) {
+  const repository = new ModelPolicyRepository(db);
+  const existing = await repository.getByIdAndVersion(modelPolicyId, 1, { tenantId });
+  if (existing?.status === 'published' || existing?.status === 'gray') {
+    return existing;
+  }
+  if (existing) {
+    throw new Error(`ModelPolicy ${modelPolicyId}@1 already exists with non-executable status ${existing.status}`);
+  }
+  await repository.createDraft({
+    model_policy_id: modelPolicyId,
+    version: 1,
+    status: 'draft',
+    protocol: mode === 'model_gateway' ? modelGatewayProtocol : 'dar_generate',
+    targets: [{
+      target_id: `${modelPolicyId}_primary`,
+      gateway_profile: 'local-mock',
+      model_id: mode === 'model_gateway' ? modelGatewayModel : displayPolicy,
+      priority: 0,
+      enabled: true,
+      capabilities: ['text', 'tools', 'usage'],
+    }],
+    retry_policy: {
+      max_attempts_per_target: 2,
+      retryable_status_codes: [429, 500, 502, 503, 504],
+      retry_on_timeout: true,
+      retry_on_network_error: true,
+      backoff_ms: 10,
+      max_backoff_ms: 50,
+    },
+    fallback_policy: {
+      enabled: false,
+      ordered_target_ids: [],
+      eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
+      stop_on_auth_error: true,
+      stop_on_validation_error: true,
+      stop_on_policy_denial: true,
+    },
+    request_policy: {
+      temperature: 0,
+      top_p: 1,
+      max_output_tokens: 1000,
+      tool_choice_mode: 'auto',
+      response_format: 'text',
+      allow_parallel_tool_calls: false,
+    },
+    revision: 1,
+  }, { tenantId, operatorId: 'pi-smoke' });
+  return repository.publish(modelPolicyId, 1, {
+    tenantId,
+    operatorId: 'pi-smoke',
+    releaseNote: `pi smoke ${displayPolicy}`,
+  });
 }
 
 async function seedTools(db: ReturnType<typeof createDb>) {

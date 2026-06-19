@@ -65,13 +65,71 @@ describe('runtime-worker readiness', () => {
 
     await server.close();
   });
+
+  it('reports not_ready when production Model Gateway mode is not openai-compatible', async () => {
+    const server = buildServer({
+      mode: 'temporal',
+      state: { status: 'running', ready: true },
+    }, {
+      ...config(),
+      NODE_ENV: 'production',
+      APP_ENV: 'production',
+      PI_AGENT_MODE: 'model_gateway',
+      MODEL_GATEWAY_MODE: 'mock',
+      MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions',
+      MODEL_GATEWAY_BASE_URL: 'https://model-gateway.example.test',
+      MODEL_GATEWAY_API_KEY: 'live-secret-for-test',
+      MODEL_GATEWAY_ALLOW_INSECURE_HTTP: false,
+    });
+
+    const response = await server.inject({ method: 'GET', url: '/readyz' });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      status: 'not_ready',
+      checks: {
+        pi_agent_mode: 'model_gateway',
+        pi_agent: 'not_ready',
+        pi_error: 'MODEL_GATEWAY_MODE=openai_compatible is required in production',
+      },
+    });
+
+    await server.close();
+  });
+
+  it('reports not_ready when production Model Gateway uses placeholder credentials', async () => {
+    const server = buildServer({
+      mode: 'temporal',
+      state: { status: 'running', ready: true },
+    }, {
+      ...config(),
+      NODE_ENV: 'production',
+      APP_ENV: 'production',
+      PI_AGENT_MODE: 'model_gateway',
+      MODEL_GATEWAY_MODE: 'openai_compatible',
+      MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions',
+      MODEL_GATEWAY_BASE_URL: 'https://model-gateway.example.test',
+      MODEL_GATEWAY_API_KEY: 'dev-only-placeholder',
+      MODEL_GATEWAY_ALLOW_INSECURE_HTTP: false,
+    });
+
+    const response = await server.inject({ method: 'GET', url: '/readyz' });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      status: 'not_ready',
+      checks: {
+        pi_error: 'Production Model Gateway API key must be provided by secret management',
+      },
+    });
+
+    await server.close();
+  });
 });
 
 function config(): RuntimeConfig {
   return {
     NODE_ENV: 'development',
     APP_ENV: 'local',
-    APP_VERSION: '0.1.5',
+    APP_VERSION: '0.8.0',
     HOST: '0.0.0.0',
     DATABASE_URL: 'postgres://user:pass@localhost:5432/db',
     VALKEY_URL: 'redis://localhost:16380',
@@ -80,8 +138,14 @@ function config(): RuntimeConfig {
     MODEL_GATEWAY_BASE_URL: 'http://localhost:4100',
     MODEL_GATEWAY_API_KEY: 'dev-only-placeholder',
     MODEL_GATEWAY_MODEL: 'dar-local-model',
+    MODEL_GATEWAY_MODE: 'disabled',
+    MODEL_GATEWAY_PROTOCOL: 'dar_generate',
     MODEL_GATEWAY_TIMEOUT_MS: 30_000,
     MODEL_GATEWAY_MAX_RETRIES: 1,
+    MODEL_GATEWAY_MAX_RESPONSE_BYTES: 1_000_000,
+    MODEL_GATEWAY_ALLOW_INSECURE_HTTP: true,
+    MODEL_GATEWAY_IDEMPOTENCY_HEADER: 'Idempotency-Key',
+    MODEL_GATEWAY_USER_AGENT: 'durable-agent-runtime-lite/runtime-worker',
     PI_AGENT_MODE: 'disabled',
     PI_CONTEXT_MAX_BYTES: 262_144,
     PI_SEGMENT_TIMEOUT_MS: 120_000,

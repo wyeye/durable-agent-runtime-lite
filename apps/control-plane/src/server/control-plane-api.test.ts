@@ -536,6 +536,8 @@ class FakeRuntimeApiClient {
         prompt_id: 'prompt_1',
         prompt_version: 1,
         model: 'deterministic:final_only',
+        fallback_count: 0,
+        model_call_count: 0,
         execution_mode: 'mediated_tool_call',
         status: 'running',
         current_segment_index: 0,

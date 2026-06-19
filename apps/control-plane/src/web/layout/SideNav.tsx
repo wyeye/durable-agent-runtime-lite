@@ -7,6 +7,7 @@ const items = [
   { key: '/registry/routes', label: <Link to="/registry/routes">Routes</Link> },
   { key: '/registry/tools', label: <Link to="/registry/tools">Tools</Link> },
   { key: '/registry/agents', label: <Link to="/registry/agents">Agents</Link> },
+  { key: '/registry/model-policies', label: <Link to="/registry/model-policies">Model Policies</Link> },
   { key: '/registry/prompts', label: <Link to="/registry/prompts">Prompts</Link> },
   { key: '/releases', label: <Link to="/releases">Release Center</Link> },
   { key: '/human-tasks', label: <Link to="/human-tasks">Human Tasks</Link> },

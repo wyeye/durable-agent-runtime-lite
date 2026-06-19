@@ -6,6 +6,26 @@ interface GenerateRequest {
   messages?: Array<{ role: string; content: string }>;
 }
 
+interface OpenAiChatRequest {
+  model?: string;
+  messages?: Array<{ role: string; content?: string | null }>;
+}
+
+type MockContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool_call'; id: string; name: string; arguments: Record<string, unknown> | string };
+
+interface MockGenerateResponse {
+  id: string;
+  model: string;
+  message: {
+    role: 'assistant';
+    content: MockContentBlock[];
+  };
+  finish_reason: 'stop' | 'tool_call' | 'length' | 'error';
+  usage: ReturnType<typeof usage>;
+}
+
 export function buildServer() {
   const server = Fastify({ logger: false });
 
@@ -35,6 +55,33 @@ export function buildServer() {
     return responseForScenario(scenario, body);
   });
 
+  server.post('/v1/chat/completions', async (request, reply) => {
+    const body = request.body as OpenAiChatRequest;
+    const messages = (body.messages ?? []).map((message) => ({ role: message.role, content: message.content ?? '' }));
+    const scenario = scenarioFromMessages(messages);
+    if (scenario === 'timeout') {
+      await new Promise((resolve) => setTimeout(resolve, 60_000));
+    }
+    if (scenario === 'rate_limit_then_success' && !hasToolResult(messages)) {
+      const count = incrementAttempt('openai_rate_limit_then_success');
+      if (count === 1) {
+        reply.code(429);
+        return { error: { code: 'rate_limit_exceeded', message: 'deterministic rate limit' } };
+      }
+    }
+    if (scenario === 'upstream_500_then_success' && !hasToolResult(messages)) {
+      const count = incrementAttempt('openai_upstream_500_then_success');
+      if (count === 1) {
+        reply.code(500);
+        return { error: { code: 'server_error', message: 'deterministic upstream failure' } };
+      }
+    }
+    return openAiResponseForScenario(scenario, {
+      ...(body.model ? { model: body.model } : {}),
+      messages,
+    });
+  });
+
   return server;
 }
 
@@ -46,7 +93,7 @@ function incrementAttempt(key: string): number {
   return next;
 }
 
-function responseForScenario(scenario: string, request: GenerateRequest) {
+function responseForScenario(scenario: string, request: GenerateRequest): MockGenerateResponse {
   const model = request.model ?? 'dar-local-model';
   if (hasToolResult(request.messages ?? [])) {
     return finalResponse(model, `Mock final after ${scenario} boundary.`);
@@ -90,7 +137,7 @@ function responseForScenario(scenario: string, request: GenerateRequest) {
   }
 }
 
-function toolCallResponse(model: string, id: string, name: string, args: Record<string, unknown>) {
+function toolCallResponse(model: string, id: string, name: string, args: Record<string, unknown>): MockGenerateResponse {
   return {
     id: `mock_${id}`,
     model,
@@ -103,7 +150,7 @@ function toolCallResponse(model: string, id: string, name: string, args: Record<
   };
 }
 
-function finalResponse(model: string, text: string) {
+function finalResponse(model: string, text: string): MockGenerateResponse {
   return {
     id: 'mock_final',
     model,
@@ -114,6 +161,52 @@ function finalResponse(model: string, text: string) {
     finish_reason: 'stop',
     usage: usage(),
   };
+}
+
+function openAiResponseForScenario(scenario: string, request: GenerateRequest) {
+  const response = responseForScenario(scenario, request);
+  const message = response.message;
+  const contentBlocks = message.content;
+  const toolCalls = contentBlocks.filter(isToolCallBlock);
+  const text = contentBlocks.filter(isTextBlock).map((block) => block.text).join('\n') || null;
+  return {
+    id: response.id,
+    object: 'chat.completion',
+    model: response.model,
+    choices: [{
+      index: 0,
+      finish_reason: response.finish_reason === 'tool_call' ? 'tool_calls' : response.finish_reason,
+      message: {
+        role: 'assistant',
+        content: toolCalls.length > 0 ? null : text,
+        ...(toolCalls.length > 0
+          ? {
+              tool_calls: toolCalls.map((block) => ({
+                id: block.id,
+                type: 'function',
+                function: {
+                  name: block.name,
+                  arguments: JSON.stringify(block.arguments),
+                },
+              })),
+            }
+          : {}),
+      },
+    }],
+    usage: {
+      prompt_tokens: response.usage.input_tokens,
+      completion_tokens: response.usage.output_tokens,
+      total_tokens: response.usage.total_tokens,
+    },
+  };
+}
+
+function isTextBlock(block: MockContentBlock): block is Extract<MockContentBlock, { type: 'text' }> {
+  return block.type === 'text';
+}
+
+function isToolCallBlock(block: MockContentBlock): block is Extract<MockContentBlock, { type: 'tool_call' }> {
+  return block.type === 'tool_call';
 }
 
 function usage() {

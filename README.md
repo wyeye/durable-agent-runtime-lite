@@ -1,4 +1,11 @@
-# Durable Agent Runtime Lite v1.5
+# Durable Agent Runtime Lite
+
+当前平台版本：0.8.0。技术栈基线仍按 `docs/11_technology_stack_matrix.md` 的 v1.5 矩阵执行。
+
+R0/AR-2A 状态：
+
+- AR-1 Platform Core 已冻结为 `0.8.0`，见 `docs/PLATFORM_CORE_BASELINE.md`。
+- AR-2A 当前为 `PARTIAL`：ModelPolicy、OpenAI-compatible client、ledger 和本地 mock 回归已接入；真实外部模型的完整 runtime live smoke 仍需要凭据环境。
 
 Durable Agent Runtime Lite 是一个四应用通用 Agent Runtime 骨架：
 
@@ -145,7 +152,19 @@ corepack pnpm smoke:pi-worker-crash-resume-e2e
 corepack pnpm smoke:pi-model-gateway-e2e
 ```
 
-这些 smoke 通过 `/v1/agent-tasks` 使用真实 Pi Agent Core。deterministic 模式只替换模型流，不替换 Pi 内循环；model-gateway smoke 使用 `devtools/mock-server /v1/generate` 返回结构化 tool call。
+这些 smoke 通过 `/v1/agent-tasks` 使用真实 Pi Agent Core。deterministic 模式只替换模型流，不替换 Pi 内循环；model-gateway smoke 使用 `devtools/mock-server` 的 OpenAI-compatible `/v1/chat/completions` 返回结构化 tool call。
+
+受保护 live Model Gateway probe：
+
+```bash
+LIVE_MODEL_GATEWAY_ENABLED=true \
+LIVE_MODEL_GATEWAY_BASE_URL=https://example-model-gateway \
+LIVE_MODEL_GATEWAY_API_KEY=... \
+LIVE_MODEL_GATEWAY_MODEL=... \
+corepack pnpm smoke:model-gateway-live-final-e2e
+```
+
+`smoke:model-gateway-live-readonly-e2e` 和 `smoke:model-gateway-live-l3-e2e` 会要求真实 OpenAI-compatible provider 返回结构化 tool call。未设置 `LIVE_MODEL_GATEWAY_ENABLED=true` 时这些命令输出 `skipped: true`，不会伪装成 live pass。
 
 `smoke:pi-worker-crash-resume-e2e` 会真实 `SIGKILL` compose 里的
 `runtime-worker`，在 worker 停止期间通过 runtime-api 写入 waiting-user /

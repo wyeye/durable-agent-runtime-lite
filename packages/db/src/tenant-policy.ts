@@ -417,7 +417,7 @@ export function resolveEffectivePolicy(
       max_risk_level: tool.risk_level,
       reason_code: 'TENANT_POLICY_TOOL_DENIED',
     }));
-  const allowedModels = planModels.filter((model) => modelAllowedByPolicy(model, policy)).map((model_id) => ({ model_id }));
+  const allowedModels = planModels.filter((model) => modelAllowedByPolicy(model, policy)).map((model) => ({ model_id: model.model_id }));
   const allowedHandoffs = planHandoffs
     .filter((handoff) => handoffAllowedByPolicy(handoff, policy))
     .map((flowRef) => ({ flow_id: flowRef, execution_plan_refs: [flowRef] }));
@@ -464,9 +464,22 @@ export function assertSnapshotAllowsModel(input: {
   executionPlanRef: string;
   executionPlanHash: string;
   modelPolicy: string;
+  modelPolicyId?: string;
+  modelPolicyVersion?: number;
+  modelPolicyHash?: string;
+  targetIds?: string[];
+  modelIds?: string[];
 }): void {
   assertSnapshotIdentity(input);
-  const allowed = input.snapshot.resolved_allowed_models.some((rule) => rule.model_id === input.modelPolicy);
+  const aliases = new Set([
+    input.modelPolicy,
+    ...(input.modelPolicyId ? [input.modelPolicyId] : []),
+    ...(input.modelPolicyId && input.modelPolicyVersion ? [`${input.modelPolicyId}@${input.modelPolicyVersion}`] : []),
+    ...(input.modelPolicyId && input.modelPolicyVersion && input.modelPolicyHash ? [`${input.modelPolicyId}@${input.modelPolicyVersion}#${input.modelPolicyHash}`] : []),
+    ...(input.targetIds ?? []),
+    ...(input.modelIds ?? []),
+  ]);
+  const allowed = input.snapshot.resolved_allowed_models.some((rule) => aliases.has(rule.model_id));
   if (!allowed) {
     throw new TenantRuntimePolicyError('AGENT_MODEL_DENIED_BY_TENANT_POLICY', 'Agent model is not allowed by tenant policy snapshot', 403);
   }
@@ -518,7 +531,7 @@ function resolveExecutionPlanOnlyPolicy(
   return {
     resolved_allowed_tools: tools,
     resolved_denied_tools: [],
-    resolved_allowed_models: planModelEntries(plan).map((model_id) => ({ model_id })),
+    resolved_allowed_models: planModelEntries(plan).map((model) => ({ model_id: model.model_id })),
     resolved_allowed_handoffs: planHandoffEntries(plan).map((flow_id) => ({ flow_id, execution_plan_refs: [flow_id] })),
     resolved_budget: planBudget(plan),
     max_concurrent_agent_runs: 1,
@@ -547,10 +560,36 @@ function planToolEntries(plan: FlowExecutionPlan | AgentExecutionPlan): Array<{ 
     : plan.allowed_tools.map((tool) => ({ tool_name: tool.tool_name, tool_version: tool.tool_version, risk_level: tool.risk_level }));
 }
 
-function planModelEntries(plan: FlowExecutionPlan | AgentExecutionPlan): string[] {
-  return 'agents' in plan
-    ? [...new Set(plan.agents.map((agent) => agent.model_policy))]
-    : [plan.model_policy];
+function planModelEntries(plan: FlowExecutionPlan | AgentExecutionPlan): Array<{ model_id: string; aliases: string[] }> {
+  const entries = 'agents' in plan
+    ? plan.agents.flatMap((agent) => modelIdentitiesForPlan(agent.model_policy, agent.model_policy_id, agent.model_policy_version, agent.model_policy_hash, agent.resolved_model_policy?.resolved_targets))
+    : modelIdentitiesForPlan(plan.model_policy, plan.model_policy_id, plan.model_policy_version, plan.model_policy_hash, plan.resolved_model_policy.resolved_targets);
+  const byPrimary = new Map<string, Set<string>>();
+  for (const entry of entries) {
+    const aliases = byPrimary.get(entry.model_id) ?? new Set<string>();
+    entry.aliases.forEach((alias) => aliases.add(alias));
+    byPrimary.set(entry.model_id, aliases);
+  }
+  return [...byPrimary.entries()].map(([model_id, aliases]) => ({ model_id, aliases: [...aliases].sort() }));
+}
+
+function modelIdentitiesForPlan(
+  displayPolicy: string,
+  policyId: string,
+  policyVersion: number,
+  policyHash: string,
+  targets: Array<{ target_id: string; model_id: string }> | undefined,
+): Array<{ model_id: string; aliases: string[] }> {
+  const policyVersionRef = `${policyId}@${policyVersion}`;
+  const policyHashRef = `${policyVersionRef}#${policyHash}`;
+  const resolvedTargets = targets ?? [];
+  if (resolvedTargets.length === 0) {
+    return [{ model_id: policyHashRef, aliases: [displayPolicy, policyVersionRef, policyHashRef] }];
+  }
+  return resolvedTargets.map((target) => ({
+    model_id: target.model_id,
+    aliases: [displayPolicy, policyId, policyVersionRef, policyHashRef, target.target_id, target.model_id],
+  }));
 }
 
 function planHandoffEntries(plan: FlowExecutionPlan | AgentExecutionPlan): string[] {
@@ -608,11 +647,12 @@ function operationsForTool(tool: { tool_name: string; tool_version: string }, po
   return [...new Set(rules.flatMap((rule) => rule.allowed_operations))].sort();
 }
 
-function modelAllowedByPolicy(modelId: string, policy: TenantRuntimePolicy): boolean {
-  if (policy.denied_models.some((rule) => rule.model_id === modelId)) {
+function modelAllowedByPolicy(model: { model_id: string; aliases: string[] }, policy: TenantRuntimePolicy): boolean {
+  const aliases = new Set([model.model_id, ...model.aliases]);
+  if (policy.denied_models.some((rule) => aliases.has(rule.model_id))) {
     return false;
   }
-  return policy.allowed_models.some((rule) => rule.model_id === modelId);
+  return policy.allowed_models.some((rule) => aliases.has(rule.model_id));
 }
 
 function handoffAllowedByPolicy(handoff: string, policy: TenantRuntimePolicy): boolean {

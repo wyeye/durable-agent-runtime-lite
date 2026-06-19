@@ -259,6 +259,10 @@ export interface AgentExecutionPlanTable {
   prompt_version: number;
   prompt_sha256: string;
   model_policy_json: Json;
+  model_policy_id: string | null;
+  model_policy_version: number | null;
+  model_policy_hash: string | null;
+  resolved_model_policy_json: Json | null;
   allowed_tools_json: Json;
   allowed_handoffs_json: Json;
   output_schema_json: Json | null;
@@ -284,6 +288,13 @@ export interface AgentRunTable {
   prompt_id: string;
   prompt_version: number;
   model: string;
+  model_policy_id: string | null;
+  model_policy_version: number | null;
+  model_policy_hash: string | null;
+  selected_model_id: string | null;
+  selected_provider: string | null;
+  fallback_count: number;
+  model_call_count: number;
   execution_mode: string;
   tenant_policy_snapshot_ref: string | null;
   tenant_policy_version: number | null;
@@ -304,6 +315,83 @@ export interface AgentRunTable {
   error_message: string | null;
   created_at: Timestamp;
   updated_at: Timestamp;
+}
+
+export interface ModelPolicyTable {
+  id: Generated<number>;
+  tenant_id: string;
+  model_policy_id: string;
+  version: number;
+  status: string;
+  protocol: string;
+  targets_json: Json;
+  retry_policy_json: Json;
+  fallback_policy_json: Json;
+  request_policy_json: Json;
+  revision: number;
+  created_by: string | null;
+  updated_by: string | null;
+  published_by: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  published_at: Timestamp | null;
+}
+
+export interface ModelCallLogTable {
+  model_call_id: string;
+  model_request_key: string;
+  tenant_id: string;
+  user_id: string | null;
+  task_run_id: string | null;
+  workflow_id: string | null;
+  workflow_run_id: string | null;
+  agent_run_id: string | null;
+  segment_index: number | null;
+  model_turn_index: number | null;
+  model_policy_id: string;
+  model_policy_version: number;
+  model_policy_hash: string;
+  target_id: string | null;
+  provider: string | null;
+  model_id: string | null;
+  protocol: string;
+  attempt_count: number;
+  fallback_index: number;
+  status: string;
+  finish_reason: string | null;
+  response_id: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  estimated_cost: number | null;
+  latency_ms: number | null;
+  error_class: string | null;
+  error_code: string | null;
+  request_hash: string;
+  response_hash: string | null;
+  safe_response_json: Json | null;
+  started_at: Timestamp | null;
+  completed_at: Timestamp | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface ModelCallAttemptTable {
+  attempt_id: string;
+  model_call_id: string;
+  attempt_index: number;
+  target_id: string;
+  provider: string | null;
+  model_id: string;
+  status: string;
+  http_status: number | null;
+  error_class: string | null;
+  error_code: string | null;
+  latency_ms: number | null;
+  response_id: string | null;
+  started_at: Timestamp | null;
+  completed_at: Timestamp | null;
+  created_at: Timestamp;
 }
 
 export interface AgentStepTable {
@@ -362,6 +450,9 @@ export interface Database {
   agent_run: AgentRunTable;
   agent_step: AgentStepTable;
   agent_context_snapshot: AgentContextSnapshotTable;
+  model_policy: ModelPolicyTable;
+  model_call_log: ModelCallLogTable;
+  model_call_attempt: ModelCallAttemptTable;
 }
 
 export interface CreateDbOptions {

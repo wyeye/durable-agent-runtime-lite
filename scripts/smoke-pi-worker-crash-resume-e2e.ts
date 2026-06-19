@@ -7,9 +7,11 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { AgentRunRecord, AgentStepRecord, HumanTask, StandardResponse, TaskRun, ToolCallLog } from '@dar/contracts';
 import {
   AgentExecutionPlanRepository,
+  ModelPolicyRepository,
   ToolManifestRepository,
   closeDb,
   createDb,
+  hashModelPolicy,
   sql,
   upsertAgentSpec,
   upsertPromptDefinition,
@@ -34,12 +36,19 @@ interface AgentRunRow {
   prompt_id: string;
   prompt_version: number;
   model: string;
+  model_policy_id: string | null;
+  model_policy_version: number | null;
+  model_policy_hash: string | null;
+  selected_model_id: string | null;
+  selected_provider: string | null;
   execution_mode: string;
   status: string;
   current_segment_index: number;
   model_turn_count: number;
   tool_call_count: number;
   handoff_count: number;
+  fallback_count: number;
+  model_call_count: number;
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
@@ -309,6 +318,10 @@ async function runL3Recovery(db: Db) {
 async function seedAgentPlan(db: Db, scenario: 'need_user' | 'l3_tool'): Promise<string> {
   const promptId = `pi_crash_prompt_${scenario}`;
   const agentId = `pi_crash_agent_${scenario}`;
+  const displayPolicy = `deterministic:${scenario}`;
+  const modelPolicyId = `pi_crash_model_${scenario}`;
+  const publishedModelPolicy = await seedModelPolicy(db, modelPolicyId, displayPolicy);
+  const modelPolicyHash = hashModelPolicy(publishedModelPolicy);
   await seedTools(db);
   await upsertPromptDefinition(db, {
     prompt_id: promptId,
@@ -322,7 +335,12 @@ async function seedAgentPlan(db: Db, scenario: 'need_user' | 'l3_tool'): Promise
     agent_id: agentId,
     version: 1,
     prompt_ref: `${promptId}@1`,
-    model_policy: `deterministic:${scenario}`,
+    model_policy: displayPolicy,
+    model_policy_ref: {
+      model_policy_id: publishedModelPolicy.model_policy_id,
+      model_policy_version: publishedModelPolicy.version,
+      model_policy_hash: modelPolicyHash,
+    },
     allowed_tools: ['knowledge.search@1.0.0', 'record.write.mock@1.0.0'],
     allowed_handoffs: [],
     max_steps: 6,
@@ -337,6 +355,61 @@ async function seedAgentPlan(db: Db, scenario: 'need_user' | 'l3_tool'): Promise
     operatorId: 'pi-crash-smoke',
   });
   return plan.execution_plan_ref;
+}
+
+async function seedModelPolicy(db: Db, modelPolicyId: string, displayPolicy: string) {
+  const repository = new ModelPolicyRepository(db);
+  const existing = await repository.getByIdAndVersion(modelPolicyId, 1, { tenantId });
+  if (existing?.status === 'published' || existing?.status === 'gray') {
+    return existing;
+  }
+  if (existing) {
+    throw new Error(`ModelPolicy ${modelPolicyId}@1 already exists with non-executable status ${existing.status}`);
+  }
+  await repository.createDraft({
+    model_policy_id: modelPolicyId,
+    version: 1,
+    status: 'draft',
+    protocol: 'dar_generate',
+    targets: [{
+      target_id: `${modelPolicyId}_primary`,
+      gateway_profile: 'local-deterministic',
+      model_id: displayPolicy,
+      priority: 0,
+      enabled: true,
+      capabilities: ['text', 'tools', 'usage'],
+    }],
+    retry_policy: {
+      max_attempts_per_target: 1,
+      retryable_status_codes: [429, 500, 502, 503, 504],
+      retry_on_timeout: true,
+      retry_on_network_error: true,
+      backoff_ms: 10,
+      max_backoff_ms: 50,
+    },
+    fallback_policy: {
+      enabled: false,
+      ordered_target_ids: [],
+      eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
+      stop_on_auth_error: true,
+      stop_on_validation_error: true,
+      stop_on_policy_denial: true,
+    },
+    request_policy: {
+      temperature: 0,
+      top_p: 1,
+      max_output_tokens: 1000,
+      tool_choice_mode: 'auto',
+      response_format: 'text',
+      allow_parallel_tool_calls: false,
+    },
+    revision: 1,
+  }, { tenantId, operatorId: 'pi-crash-smoke' });
+  return repository.publish(modelPolicyId, 1, {
+    tenantId,
+    operatorId: 'pi-crash-smoke',
+    releaseNote: `pi crash smoke ${displayPolicy}`,
+  });
 }
 
 async function seedTools(db: Db) {
@@ -437,12 +510,19 @@ function agentRunFromRow(row: AgentRunRow): AgentRunRecord {
     prompt_id: row.prompt_id,
     prompt_version: row.prompt_version,
     model: row.model,
+    model_policy_id: row.model_policy_id ?? undefined,
+    model_policy_version: row.model_policy_version ?? undefined,
+    model_policy_hash: row.model_policy_hash ?? undefined,
+    selected_model_id: row.selected_model_id ?? undefined,
+    selected_provider: row.selected_provider ?? undefined,
     execution_mode: row.execution_mode as AgentRunRecord['execution_mode'],
     status: row.status as AgentRunRecord['status'],
     current_segment_index: row.current_segment_index,
     model_turn_count: row.model_turn_count,
     tool_call_count: row.tool_call_count,
     handoff_count: row.handoff_count,
+    fallback_count: row.fallback_count,
+    model_call_count: row.model_call_count,
     input_tokens: row.input_tokens,
     output_tokens: row.output_tokens,
     total_tokens: row.total_tokens,

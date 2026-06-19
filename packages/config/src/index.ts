@@ -33,7 +33,7 @@ export const runtimeConfigSchema = z.object({
     z.enum(['development', 'test', 'production']).default('development'),
   ),
   APP_ENV: stringSchema('local'),
-  APP_VERSION: stringSchema('0.1.5'),
+  APP_VERSION: stringSchema('0.8.0'),
   HOST: stringSchema('0.0.0.0'),
   PORT: optionalPortSchema,
   DATABASE_URL: urlSchema(
@@ -45,8 +45,20 @@ export const runtimeConfigSchema = z.object({
   MODEL_GATEWAY_BASE_URL: urlSchema('http://localhost:4100'),
   MODEL_GATEWAY_API_KEY: stringSchema('dev-only-placeholder'),
   MODEL_GATEWAY_MODEL: stringSchema('dar-local-model'),
+  MODEL_GATEWAY_MODE: z.preprocess(
+    emptyToUndefined,
+    z.enum(['disabled', 'mock', 'openai_compatible']).default('disabled'),
+  ),
+  MODEL_GATEWAY_PROTOCOL: z.preprocess(
+    emptyToUndefined,
+    z.enum(['dar_generate', 'openai_chat_completions']).default('dar_generate'),
+  ),
   MODEL_GATEWAY_TIMEOUT_MS: positiveIntSchema(30_000),
   MODEL_GATEWAY_MAX_RETRIES: z.preprocess(emptyToUndefined, z.coerce.number().int().min(0).max(5).default(1)),
+  MODEL_GATEWAY_MAX_RESPONSE_BYTES: positiveIntSchema(1_000_000),
+  MODEL_GATEWAY_ALLOW_INSECURE_HTTP: z.preprocess(emptyToUndefined, z.coerce.boolean().default(true)),
+  MODEL_GATEWAY_IDEMPOTENCY_HEADER: stringSchema('Idempotency-Key'),
+  MODEL_GATEWAY_USER_AGENT: stringSchema('durable-agent-runtime-lite/runtime-worker'),
   PI_AGENT_MODE: z.preprocess(
     emptyToUndefined,
     z.enum(['disabled', 'deterministic', 'model_gateway']).default('disabled'),

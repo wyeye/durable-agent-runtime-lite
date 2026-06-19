@@ -404,7 +404,21 @@ export async function runPiSegmentActivity(request: PiSegmentRequest): Promise<P
       throw ApplicationFailure.nonRetryable(`Pi context snapshot not found: ${parsed.context_snapshot_ref.snapshot_id}`, 'NOT_FOUND');
     }
 
-    const piRuntime = createPiRuntime(executionPlan.model_policy);
+    const policySnapshot = agentRun.tenant_policy_snapshot_ref
+      ? await new TenantRuntimePolicySnapshotRepository(db).getByRef(agentRun.tenant_policy_snapshot_ref, {
+          tenantId: parsed.request_context.tenant_id,
+        })
+      : undefined;
+    const allowedModelIds = policySnapshot
+      ? new Set(policySnapshot.resolved_allowed_models.map((rule) => rule.model_id))
+      : undefined;
+    const piRuntime = createPiRuntime({
+      executionPlan,
+      agentRun,
+      segmentIndex: parsed.segment_index,
+      db,
+      ...(allowedModelIds ? { allowedModelIds } : {}),
+    });
     const heartbeatLoop = startHeartbeatLoop('runPiSegmentActivity', {
       agent_run_id: parsed.agent_run_id,
       segment_index: parsed.segment_index,
@@ -760,7 +774,13 @@ function isProductionRuntime(config: ReturnType<typeof loadConfig>): boolean {
   return config.NODE_ENV === 'production' || config.APP_ENV === 'production';
 }
 
-function createPiRuntime(modelPolicy: string): {
+function createPiRuntime(input: {
+  executionPlan: AgentExecutionPlan;
+  agentRun: AgentRunRecord;
+  segmentIndex: number;
+  allowedModelIds?: Set<string>;
+  db: ReturnType<typeof getProcessDb>;
+}): {
   model: ReturnType<typeof createModelGatewayModel>;
   streamFn: Parameters<typeof runPiAgentSegment>[0]['streamFn'];
   cleanup?: () => void;
@@ -773,7 +793,7 @@ function createPiRuntime(modelPolicy: string): {
     if (isProductionRuntime(config)) {
       throw new Error('PI_AGENT_MODE=deterministic is not allowed in production');
     }
-    const deterministic = createDeterministicPiStream(parseDeterministicScenario(modelPolicy));
+    const deterministic = createDeterministicPiStream(parseDeterministicScenario(input.executionPlan.model_policy));
     return {
       model: deterministic.model,
       streamFn: deterministic.streamFn,
@@ -781,14 +801,26 @@ function createPiRuntime(modelPolicy: string): {
     };
   }
   if (config.PI_AGENT_MODE === 'model_gateway') {
+    const target = input.executionPlan.resolved_model_policy.resolved_targets[0];
+    if (!target) {
+      throw new Error(`ModelPolicy has no executable targets: ${input.executionPlan.model_policy_id}@${input.executionPlan.model_policy_version}`);
+    }
     return {
-      model: createModelGatewayModel(config.MODEL_GATEWAY_MODEL),
+      model: createModelGatewayModel(target),
       streamFn: createModelGatewayPiStream({
+        db: input.db,
         baseUrl: config.MODEL_GATEWAY_BASE_URL,
         apiKey: config.MODEL_GATEWAY_API_KEY,
-        model: config.MODEL_GATEWAY_MODEL,
+        executionPlan: input.executionPlan,
+        agentRun: input.agentRun,
+        segmentIndex: input.segmentIndex,
         timeoutMs: config.MODEL_GATEWAY_TIMEOUT_MS,
         maxRetries: config.MODEL_GATEWAY_MAX_RETRIES,
+        maxResponseBytes: config.MODEL_GATEWAY_MAX_RESPONSE_BYTES,
+        allowInsecureHttp: config.MODEL_GATEWAY_ALLOW_INSECURE_HTTP,
+        idempotencyHeader: config.MODEL_GATEWAY_IDEMPOTENCY_HEADER,
+        userAgent: config.MODEL_GATEWAY_USER_AGENT,
+        ...(input.allowedModelIds ? { allowedModelIds: input.allowedModelIds } : {}),
       }),
     };
   }

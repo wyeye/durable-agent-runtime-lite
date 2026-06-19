@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentExecutionPlan } from '@dar/contracts';
+import type { AgentExecutionPlan, AgentRunRecord, ResolvedModelPolicy } from '@dar/contracts';
+import type { Database } from '@dar/db';
+import type { Kysely } from 'kysely';
 import { createDeterministicPiStream } from '../src/agent/deterministic-pi-stream.js';
 import { createModelGatewayModel, createModelGatewayPiStream } from '../src/agent/model-gateway-pi-stream.js';
 import { runPiAgentSegment } from '../src/agent/pi-agent-adapter.js';
@@ -142,29 +144,47 @@ describe('PiAgentAdapter', () => {
   });
 
   it('maps structured Model Gateway tool calls into Pi deferred tool proposals', async () => {
+    const observedRequests: Array<{ url: string; idempotencyKey: string | undefined; body: Record<string, unknown> }> = [];
     const server = await import('node:http').then(({ createServer }) =>
       createServer((request, response) => {
-        if (request.url !== '/v1/generate') {
+        if (request.url !== '/v1/chat/completions') {
           response.statusCode = 404;
           response.end();
           return;
         }
-        response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({
-          id: 'resp_1',
-          model: 'dar-local-model',
-          message: {
-            role: 'assistant',
-            content: [{
-              type: 'tool_call',
-              id: 'call_model_1',
-              name: 'knowledge.search',
-              arguments: { query: 'from model gateway' },
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => {
+          chunks.push(chunk);
+        });
+        request.on('end', () => {
+          const bodyText = Buffer.concat(chunks).toString('utf8');
+          observedRequests.push({
+            url: request.url ?? '',
+            idempotencyKey: typeof request.headers['idempotency-key'] === 'string' ? request.headers['idempotency-key'] : undefined,
+            body: JSON.parse(bodyText) as Record<string, unknown>,
+          });
+          response.setHeader('content-type', 'application/json');
+          response.end(JSON.stringify({
+            id: 'chatcmpl_1',
+            model: 'dar-local-model',
+            choices: [{
+              finish_reason: 'tool_calls',
+              message: {
+                role: 'assistant',
+                content: null,
+                tool_calls: [{
+                  id: 'call_model_1',
+                  type: 'function',
+                  function: {
+                    name: 'knowledge.search',
+                    arguments: JSON.stringify({ query: 'from model gateway' }),
+                  },
+                }],
+              },
             }],
-          },
-          finish_reason: 'tool_call',
-          usage: { input_tokens: 3, output_tokens: 4, total_tokens: 7 },
-        }));
+            usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+          }));
+        });
       }),
     );
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -172,20 +192,31 @@ describe('PiAgentAdapter', () => {
     if (!address || typeof address === 'string') {
       throw new Error('server did not bind to a TCP port');
     }
+    const executionPlan = plan('model_gateway:readonly_tool');
+    const target = firstModelTarget(executionPlan);
+    const ledger = createModelCallLedgerDb();
     try {
       const result = await runPiAgentSegment({
-        executionPlan: plan('model_gateway:readonly_tool'),
-        model: createModelGatewayModel('dar-local-model'),
+        executionPlan,
+        model: createModelGatewayModel(target),
         streamFn: createModelGatewayPiStream({
+          db: ledger.db,
           baseUrl: `http://127.0.0.1:${address.port}`,
           apiKey: 'test-key',
-          model: 'dar-local-model',
+          executionPlan,
+          agentRun: agentRunFor(executionPlan),
+          segmentIndex: 0,
           timeoutMs: 5_000,
           maxRetries: 0,
+          maxResponseBytes: 1_000_000,
+          allowInsecureHttp: true,
+          idempotencyHeader: 'Idempotency-Key',
+          userAgent: 'durable-agent-runtime-lite/runtime-worker-test',
+          allowedModelIds: new Set([target.model_id]),
         }),
         initialUserInput: 'readonly_tool',
         segmentIndex: 0,
-        budgetRemaining: plan('model_gateway:readonly_tool').budget,
+        budgetRemaining: executionPlan.budget,
         maxContextBytes: 262_144,
       });
 
@@ -199,6 +230,34 @@ describe('PiAgentAdapter', () => {
         arguments: { query: 'from model gateway' },
       });
       expect(result.segmentResult.usage.total_tokens).toBe(7);
+      expect(observedRequests[0]).toMatchObject({
+        url: '/v1/chat/completions',
+        idempotencyKey: expect.stringContaining('model:agent_run_1:segment:0:turn:0:'),
+      });
+      expect(observedRequests[0]?.body).toMatchObject({
+        model: 'dar-local-model',
+        tool_choice: 'auto',
+      });
+      expect(JSON.stringify(observedRequests[0]?.body)).toContain('knowledge.search');
+      expect(ledger.modelCalls[0]).toMatchObject({
+        tenant_id: 'tenant_1',
+        agent_run_id: 'agent_run_1',
+        model_policy_id: executionPlan.model_policy_id,
+        model_policy_version: executionPlan.model_policy_version,
+        model_policy_hash: executionPlan.model_policy_hash,
+        target_id: target.target_id,
+        model_id: target.model_id,
+        protocol: 'openai_chat_completions',
+        status: 'succeeded',
+        total_tokens: 7,
+      });
+      expect(ledger.attempts[0]).toMatchObject({
+        model_call_id: ledger.modelCalls[0]?.model_call_id,
+        target_id: target.target_id,
+        model_id: target.model_id,
+        status: 'succeeded',
+      });
+      expect(JSON.stringify(ledger.modelCalls[0]?.safe_response_json)).not.toContain('test-key');
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -206,6 +265,7 @@ describe('PiAgentAdapter', () => {
 });
 
 function plan(modelPolicy: string): AgentExecutionPlan {
+  const resolvedModelPolicy = resolvedModelPolicyFor(modelPolicy);
   return {
     execution_plan_id: 'agent_plan_1',
     execution_plan_ref: 'db://agent-execution-plan/agent_plan_1',
@@ -217,6 +277,10 @@ function plan(modelPolicy: string): AgentExecutionPlan {
     prompt_version: 1,
     prompt_sha256: 'c'.repeat(64),
     model_policy: modelPolicy,
+    model_policy_id: resolvedModelPolicy.model_policy_id,
+    model_policy_version: resolvedModelPolicy.model_policy_version,
+    model_policy_hash: resolvedModelPolicy.model_policy_hash,
+    resolved_model_policy: resolvedModelPolicy,
     allowed_tools: [{
       tool_name: 'knowledge.search',
       tool_version: '1.0.0',
@@ -249,6 +313,10 @@ function plan(modelPolicy: string): AgentExecutionPlan {
       prompt_sha256: 'c'.repeat(64),
       system_prompt: 'You are a deterministic test agent.',
       model_policy: modelPolicy,
+      model_policy_id: resolvedModelPolicy.model_policy_id,
+      model_policy_version: resolvedModelPolicy.model_policy_version,
+      model_policy_hash: resolvedModelPolicy.model_policy_hash,
+      resolved_model_policy: resolvedModelPolicy,
       allowed_tools: [{
         tool_name: 'knowledge.search',
         tool_version: '1.0.0',
@@ -275,5 +343,240 @@ function plan(modelPolicy: string): AgentExecutionPlan {
     },
     generated_at: '2026-01-01T00:00:00.000Z',
     execution_plan_hash: 'd'.repeat(64),
+  };
+}
+
+function resolvedModelPolicyFor(modelPolicy: string): ResolvedModelPolicy {
+  const isModelGateway = modelPolicy.startsWith('model_gateway:');
+  const capabilities: ResolvedModelPolicy['resolved_targets'][number]['capabilities'] = isModelGateway
+    ? ['text', 'tools', 'usage']
+    : ['text', 'tools'];
+  const modelId = isModelGateway ? 'dar-local-model' : modelPolicy;
+  const gatewayProfile = isModelGateway ? 'local-openai-compatible' : 'local-deterministic';
+  return {
+    model_policy_id: isModelGateway ? 'model-gateway-readonly-tool' : modelPolicy.replace(/[^a-z0-9_-]+/giu, '-'),
+    model_policy_version: 1,
+    model_policy_hash: 'f'.repeat(64),
+    protocol: isModelGateway ? 'openai_chat_completions' : 'dar_generate',
+    resolved_targets: [{
+      target_id: isModelGateway ? 'local-openai-compatible-primary' : 'local-deterministic-primary',
+      gateway_profile: gatewayProfile,
+      model_id: modelId,
+      priority: 0,
+      enabled: true,
+      capabilities,
+    }],
+    retry_policy: {
+      max_attempts_per_target: 1,
+      retryable_status_codes: [408, 429, 500, 502, 503, 504],
+      retry_on_timeout: true,
+      retry_on_network_error: true,
+      backoff_ms: 0,
+      max_backoff_ms: 0,
+    },
+    fallback_policy: {
+      enabled: false,
+      ordered_target_ids: [],
+      eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
+      stop_on_auth_error: true,
+      stop_on_validation_error: true,
+      stop_on_policy_denial: true,
+    },
+    request_policy: {
+      temperature: 0,
+      top_p: 1,
+      max_output_tokens: 1000,
+      tool_choice_mode: 'auto',
+      response_format: 'text',
+      allow_parallel_tool_calls: false,
+    },
+  };
+}
+
+function firstModelTarget(executionPlan: AgentExecutionPlan): ResolvedModelPolicy['resolved_targets'][number] {
+  const target = executionPlan.resolved_model_policy.resolved_targets[0];
+  if (!target) {
+    throw new Error('test execution plan must include a ModelPolicy target');
+  }
+  return target;
+}
+
+function agentRunFor(executionPlan: AgentExecutionPlan): AgentRunRecord {
+  const target = firstModelTarget(executionPlan);
+  return {
+    agent_run_id: 'agent_run_1',
+    tenant_id: executionPlan.tenant_id,
+    user_id: 'user_1',
+    task_run_id: 'task_1',
+    workflow_id: 'workflow_1',
+    execution_plan_ref: executionPlan.execution_plan_ref,
+    execution_plan_hash: executionPlan.execution_plan_hash,
+    agent_id: executionPlan.agent_id,
+    agent_version: executionPlan.agent_version,
+    prompt_id: executionPlan.prompt_id,
+    prompt_version: executionPlan.prompt_version,
+    model: executionPlan.model_policy,
+    model_policy_id: executionPlan.model_policy_id,
+    model_policy_version: executionPlan.model_policy_version,
+    model_policy_hash: executionPlan.model_policy_hash,
+    selected_model_id: target.model_id,
+    selected_provider: target.gateway_profile,
+    fallback_count: 0,
+    model_call_count: 0,
+    execution_mode: 'mediated_tool_call',
+    status: 'running',
+    current_segment_index: 0,
+    model_turn_count: 0,
+    tool_call_count: 0,
+    handoff_count: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    started_at: '2026-01-01T00:00:00.000Z',
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  };
+}
+
+interface ModelCallLedgerDb {
+  db: Kysely<Database>;
+  modelCalls: LedgerRow[];
+  attempts: LedgerRow[];
+}
+
+type LedgerTableName = 'model_call_log' | 'model_call_attempt';
+type LedgerRow = Record<string, unknown>;
+
+function createModelCallLedgerDb(): ModelCallLedgerDb {
+  const rows: Record<LedgerTableName, LedgerRow[]> = {
+    model_call_log: [],
+    model_call_attempt: [],
+  };
+  const db = {
+    selectFrom: (table: string) => new LedgerQuery(rows, table, 'select'),
+    insertInto: (table: string) => new LedgerQuery(rows, table, 'insert'),
+    updateTable: (table: string) => new LedgerQuery(rows, table, 'update'),
+  } as unknown as Kysely<Database>;
+  return {
+    db,
+    modelCalls: rows.model_call_log,
+    attempts: rows.model_call_attempt,
+  };
+}
+
+class LedgerQuery {
+  private pendingValue: LedgerRow = {};
+  private whereColumn: string | undefined;
+  private whereValue: unknown;
+
+  constructor(
+    private readonly rows: Record<LedgerTableName, LedgerRow[]>,
+    private readonly table: string,
+    private readonly op: 'select' | 'insert' | 'update',
+  ) {}
+
+  selectAll(): this {
+    return this;
+  }
+
+  where(column: string, _operator: string, value: unknown): this {
+    this.whereColumn = column;
+    this.whereValue = value;
+    return this;
+  }
+
+  orderBy(): this {
+    return this;
+  }
+
+  values(value: unknown): this {
+    this.pendingValue = value as LedgerRow;
+    return this;
+  }
+
+  set(value: unknown): this {
+    this.pendingValue = value as LedgerRow;
+    return this;
+  }
+
+  onConflict(_handler?: unknown): this {
+    return this;
+  }
+
+  column(): this {
+    return this;
+  }
+
+  columns(): this {
+    return this;
+  }
+
+  doNothing(): this {
+    return this;
+  }
+
+  returningAll(): this {
+    return this;
+  }
+
+  async executeTakeFirst(): Promise<LedgerRow | undefined> {
+    if (this.op === 'insert') {
+      const row = withLedgerDefaults(this.table, this.pendingValue);
+      this.tableRows().push(row);
+      return row;
+    }
+    if (this.op === 'update') {
+      const row = this.tableRows().find((candidate) => this.matchesWhere(candidate));
+      if (!row) {
+        return undefined;
+      }
+      Object.assign(row, this.pendingValue);
+      return row;
+    }
+    return this.tableRows().find((row) => this.matchesWhere(row));
+  }
+
+  async executeTakeFirstOrThrow(): Promise<LedgerRow> {
+    const row = await this.executeTakeFirst();
+    if (!row) {
+      throw new Error(`missing fake ledger row for ${this.table}`);
+    }
+    return row;
+  }
+
+  async execute(): Promise<LedgerRow[]> {
+    if (this.op === 'update') {
+      for (const row of this.tableRows().filter((candidate) => this.matchesWhere(candidate))) {
+        Object.assign(row, this.pendingValue);
+      }
+    }
+    return this.tableRows().filter((row) => this.matchesWhere(row));
+  }
+
+  private tableRows(): LedgerRow[] {
+    const rows = this.rows[this.table as LedgerTableName];
+    if (!rows) {
+      throw new Error(`unexpected fake ledger table: ${this.table}`);
+    }
+    return rows;
+  }
+
+  private matchesWhere(row: LedgerRow): boolean {
+    return this.whereColumn ? row[this.whereColumn] === this.whereValue : true;
+  }
+}
+
+function withLedgerDefaults(table: string, row: LedgerRow): LedgerRow {
+  const now = new Date('2026-01-01T00:00:00.000Z');
+  if (table === 'model_call_log') {
+    return {
+      created_at: now,
+      updated_at: now,
+      ...row,
+    };
+  }
+  return {
+    created_at: now,
+    ...row,
   };
 }

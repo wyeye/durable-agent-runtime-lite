@@ -3,6 +3,7 @@ import type {
   CapabilityRelease,
   FlowSpec,
   GrayResourceRequest,
+  ModelPolicy,
   PaginatedResponse,
   PromptDefinition,
   RegistryListRequest,
@@ -21,6 +22,7 @@ import type {
 import {
   agentSpecSchema,
   flowSpecSchema,
+  modelPolicySchema,
   promptDefinitionSchema,
   registryListRequestSchema,
   routeSpecSchema,
@@ -34,7 +36,9 @@ import {
   AgentSpecRepository,
   CapabilityReleaseRepository,
   FlowDefinitionRepository,
+  hashModelPolicy,
   hashTenantRuntimePolicy,
+  ModelPolicyRepository,
   PromptDefinitionRepository,
   RouteConfigRepository,
   TenantAgentAdmissionRepository,
@@ -54,7 +58,7 @@ import {
 import { RegistryValidationService } from '../../modules/registry/registry-validation-service.js';
 import { ControlPlaneHttpError } from '../utils/http.js';
 
-type RegistrySpec = FlowSpec | RouteSpec | ToolManifest | AgentSpec | PromptDefinition | TenantRuntimePolicy;
+type RegistrySpec = FlowSpec | RouteSpec | ToolManifest | AgentSpec | PromptDefinition | TenantRuntimePolicy | ModelPolicy;
 type RegistryRecord = RegistryResourceRecord<RegistrySpec>;
 
 export interface ActorOptions {
@@ -94,6 +98,7 @@ export class RegistryApiService implements RegistryApi {
   readonly agents: AgentSpecRepository;
   readonly prompts: PromptDefinitionRepository;
   readonly tenantPolicies: TenantRuntimePolicyRepository;
+  readonly modelPolicies: ModelPolicyRepository;
   readonly tenantPolicySnapshots: TenantRuntimePolicySnapshotRepository;
   readonly tenantAgentAdmissions: TenantAgentAdmissionRepository;
   readonly tenantPolicyValidation: TenantRuntimePolicyValidationService;
@@ -109,6 +114,7 @@ export class RegistryApiService implements RegistryApi {
     this.agents = new AgentSpecRepository(db);
     this.prompts = new PromptDefinitionRepository(db);
     this.tenantPolicies = new TenantRuntimePolicyRepository(db);
+    this.modelPolicies = new ModelPolicyRepository(db);
     this.tenantPolicySnapshots = new TenantRuntimePolicySnapshotRepository(db);
     this.tenantAgentAdmissions = new TenantAgentAdmissionRepository(db);
     this.tenantPolicyValidation = new TenantRuntimePolicyValidationService(db);
@@ -139,6 +145,15 @@ export class RegistryApiService implements RegistryApi {
         .filter((row) => matchesRegistryList(row, request));
       return paginate(filtered, request.page, request.page_size);
     }
+    if (resourceType === 'model_policy') {
+      const rows = await this.modelPolicies.list({
+        tenantId: actor.tenantId,
+        ...(request.status ? { status: request.status } : {}),
+        limit: 100,
+      });
+      const filtered = rows.map((row) => toModelPolicyRegistryRecord(row, actor.tenantId)).filter((row) => matchesRegistryList(row, request));
+      return paginate(filtered, request.page, request.page_size);
+    }
     const rows = await this.repository(resourceType).list({
       tenantId: actor.tenantId,
       ...(request.status ? { status: request.status } : {}),
@@ -155,6 +170,10 @@ export class RegistryApiService implements RegistryApi {
     if (resourceType === 'tenant_runtime_policy') {
       assertTenantPolicyResource(resourceId, actor.tenantId);
       return (await this.tenantPolicies.listVersions(actor.tenantId)).map(toTenantPolicyRegistryRecord);
+    }
+    if (resourceType === 'model_policy') {
+      return (await this.modelPolicies.listVersions(resourceId, { tenantId: actor.tenantId })).map((policy) =>
+        toModelPolicyRegistryRecord(policy, actor.tenantId));
     }
     return this.repository(resourceType).listVersions(resourceId, { tenantId: actor.tenantId }) as Promise<RegistryRecord[]>;
   }
@@ -177,6 +196,17 @@ export class RegistryApiService implements RegistryApi {
       }
       return toTenantPolicyRegistryRecord(policy);
     }
+    if (resourceType === 'model_policy') {
+      const policy = await this.modelPolicies.getByIdAndVersion(resourceId, version, { tenantId: actor.tenantId });
+      if (!policy) {
+        throw new ControlPlaneHttpError(404, 'REGISTRY_VERSION_NOT_FOUND', 'Registry resource version not found', {
+          resource_type: resourceType,
+          resource_id: resourceId,
+          version,
+        });
+      }
+      return toModelPolicyRegistryRecord(policy, actor.tenantId);
+    }
     const record = await this.repository(resourceType).getByIdAndVersion(resourceId, version, { tenantId: actor.tenantId });
     if (!record) {
       throw new ControlPlaneHttpError(404, 'REGISTRY_VERSION_NOT_FOUND', 'Registry resource version not found', {
@@ -197,6 +227,12 @@ export class RegistryApiService implements RegistryApi {
         tenantId: actor.tenantId,
         operatorId: actor.operatorId,
       }));
+    }
+    if (resourceType === 'model_policy') {
+      return toModelPolicyRegistryRecord(await this.modelPolicies.createDraft(modelPolicySchema.parse(parsed), {
+        tenantId: actor.tenantId,
+        operatorId: actor.operatorId,
+      }), actor.tenantId);
     }
     return this.repository(resourceType).createDraft(parsed as never, {
       tenantId: actor.tenantId,
@@ -221,6 +257,14 @@ export class RegistryApiService implements RegistryApi {
         operatorId: actor.operatorId,
       }));
     }
+    if (resourceType === 'model_policy') {
+      return toModelPolicyRegistryRecord(await this.modelPolicies.updateDraft(resourceId, version, {
+        expectedRevision: input.expected_revision,
+        policy: modelPolicySchema.parse(parsed),
+        tenantId: actor.tenantId,
+        operatorId: actor.operatorId,
+      }), actor.tenantId);
+    }
     return this.repository(resourceType).updateDraft(resourceId, version, {
       spec: parsed as never,
       expectedRevision: input.expected_revision,
@@ -244,6 +288,13 @@ export class RegistryApiService implements RegistryApi {
         ...(input.version ? { version: input.version } : {}),
       });
       return toTenantPolicyRegistryRecord(cloned);
+    }
+    if (resourceType === 'model_policy') {
+      return toModelPolicyRegistryRecord(await this.modelPolicies.cloneVersion(resourceId, version, {
+        tenantId: actor.tenantId,
+        operatorId: actor.operatorId,
+        ...(input.version ? { version: input.version } : {}),
+      }), actor.tenantId);
     }
     return this.repository(resourceType).cloneVersion(resourceId, version, {
       tenantId: actor.tenantId,
@@ -272,6 +323,19 @@ export class RegistryApiService implements RegistryApi {
       }
       return this.tenantPolicyValidation.validate(policy);
     }
+    if (resourceType === 'model_policy') {
+      const policy = await this.modelPolicies.getByIdAndVersion(resourceId, version, { tenantId: actor.tenantId });
+      if (!policy) {
+        return {
+          valid: false,
+          can_publish: false,
+          errors: [{ code: 'REGISTRY_VERSION_NOT_FOUND', message: 'Registry version not found', severity: 'error' }],
+          warnings: [],
+          dependency_graph: { nodes: [], edges: [] },
+        };
+      }
+      return validateModelPolicy(policy);
+    }
     return this.release.validate(resourceType, resourceId, version, actor.tenantId);
   }
 
@@ -294,6 +358,18 @@ export class RegistryApiService implements RegistryApi {
       });
       return this.latestTenantPolicyRelease(actor.tenantId);
     }
+    if (resourceType === 'model_policy') {
+      await this.modelPolicies.publish(resourceId, version, {
+        tenantId: actor.tenantId,
+        operatorId: actor.operatorId,
+        releaseNote: input.release_note,
+        metadataJson: {
+          ...input.metadata_json,
+          ...(actor.requestId ? { request_id: actor.requestId } : {}),
+        },
+      });
+      return this.latestModelPolicyRelease(actor.tenantId, resourceId);
+    }
     return this.release.publish(resourceType, resourceId, version, releaseOptions(actor, input));
   }
 
@@ -306,6 +382,19 @@ export class RegistryApiService implements RegistryApi {
   ): Promise<CapabilityRelease> {
     if (resourceType === 'tenant_runtime_policy') {
       throw new ControlPlaneHttpError(400, 'TENANT_RUNTIME_POLICY_GRAY_UNSUPPORTED', 'Tenant runtime policy does not support gray release');
+    }
+    if (resourceType === 'model_policy') {
+      await this.modelPolicies.setGray(resourceId, version, {
+        tenantId: actor.tenantId,
+        operatorId: actor.operatorId,
+        releaseNote: input.release_note,
+        metadataJson: {
+          ...input.metadata_json,
+          tenant_allowlist: input.tenant_allowlist,
+          user_allowlist: input.user_allowlist,
+        },
+      });
+      return this.latestModelPolicyRelease(actor.tenantId, resourceId);
     }
     return this.release.setGray(resourceType, resourceId, version, {
       ...releaseOptions(actor, input),
@@ -329,6 +418,14 @@ export class RegistryApiService implements RegistryApi {
       });
       return this.latestTenantPolicyRelease(actor.tenantId);
     }
+    if (resourceType === 'model_policy') {
+      await this.modelPolicies.deprecate(resourceId, version, {
+        tenantId: actor.tenantId,
+        operatorId: actor.operatorId,
+        releaseNote: input.release_note,
+      });
+      return this.latestModelPolicyRelease(actor.tenantId, resourceId);
+    }
     return this.release.deprecate(resourceType, resourceId, version, releaseOptions(actor, input));
   }
 
@@ -346,6 +443,14 @@ export class RegistryApiService implements RegistryApi {
         releaseNote: input.release_note,
       });
       return this.latestTenantPolicyRelease(actor.tenantId);
+    }
+    if (resourceType === 'model_policy') {
+      await this.modelPolicies.disable(resourceId, version, {
+        tenantId: actor.tenantId,
+        operatorId: actor.operatorId,
+        releaseNote: input.release_note,
+      });
+      return this.latestModelPolicyRelease(actor.tenantId, resourceId);
     }
     return this.release.disable(resourceType, resourceId, version, releaseOptions(actor, input));
   }
@@ -368,6 +473,19 @@ export class RegistryApiService implements RegistryApi {
         },
       });
       return this.latestTenantPolicyRelease(actor.tenantId);
+    }
+    if (resourceType === 'model_policy') {
+      await this.modelPolicies.rollback(resourceId, {
+        targetVersion: input.target_version,
+        tenantId: actor.tenantId,
+        operatorId: actor.operatorId,
+        releaseNote: input.release_note,
+        metadataJson: {
+          ...input.metadata_json,
+          ...(actor.requestId ? { request_id: actor.requestId } : {}),
+        },
+      });
+      return this.latestModelPolicyRelease(actor.tenantId, resourceId);
     }
     return this.release.rollback(resourceType, resourceId, input.target_version, releaseOptions(actor, input));
   }
@@ -400,6 +518,9 @@ export class RegistryApiService implements RegistryApi {
     if (resourceType === 'tenant_runtime_policy') {
       assertTenantPolicyResource(resourceId, actor.tenantId);
       return this.tenantPolicies.listReleaseHistory(actor.tenantId);
+    }
+    if (resourceType === 'model_policy') {
+      return this.modelPolicies.listReleaseHistory(resourceId, { tenantId: actor.tenantId });
     }
     return this.repository(resourceType).listReleaseHistory(resourceId, { tenantId: actor.tenantId });
   }
@@ -516,13 +637,24 @@ export class RegistryApiService implements RegistryApi {
     if (resourceType === 'agent') {
       return this.agents;
     }
-    return this.prompts;
+    if (resourceType === 'prompt') {
+      return this.prompts;
+    }
+    throw new ControlPlaneHttpError(400, 'UNSUPPORTED_REGISTRY_RESOURCE_TYPE', `Unsupported registry resource type: ${resourceType}`);
   }
 
   private async latestTenantPolicyRelease(tenantId: string): Promise<CapabilityRelease> {
     const [release] = await this.tenantPolicies.listReleaseHistory(tenantId);
     if (!release) {
       throw new ControlPlaneHttpError(500, 'TENANT_POLICY_RELEASE_NOT_FOUND', 'Tenant policy release record was not created');
+    }
+    return release;
+  }
+
+  private async latestModelPolicyRelease(tenantId: string, modelPolicyId: string): Promise<CapabilityRelease> {
+    const [release] = await this.modelPolicies.listReleaseHistory(modelPolicyId, { tenantId });
+    if (!release) {
+      throw new ControlPlaneHttpError(500, 'MODEL_POLICY_RELEASE_NOT_FOUND', 'ModelPolicy release record was not created');
     }
     return release;
   }
@@ -571,6 +703,9 @@ function parseSpec(resourceType: RegistryResourceType, spec: unknown): RegistryS
   if (resourceType === 'tenant_runtime_policy') {
     return tenantRuntimePolicySchema.parse(spec);
   }
+  if (resourceType === 'model_policy') {
+    return modelPolicySchema.parse(spec);
+  }
   return promptDefinitionSchema.parse(spec);
 }
 
@@ -599,6 +734,54 @@ function toTenantPolicyRegistryRecord(policy: TenantRuntimePolicy): RegistryReco
     ...(policy.published_at ? { published_at: policy.published_at } : {}),
     revision: policy.revision,
     gray_policy: { tenant_allowlist: [], user_allowlist: [] },
+  };
+}
+
+function toModelPolicyRegistryRecord(policy: ModelPolicy, tenantId: string): RegistryRecord {
+  return {
+    tenant_id: tenantId,
+    resource_type: 'model_policy',
+    resource_id: policy.model_policy_id,
+    version: policy.version,
+    status: policy.status as SpecStatus,
+    spec: policy,
+    sha256: hashModelPolicy(policy),
+    ...(policy.created_by ? { created_by: policy.created_by } : {}),
+    ...(policy.updated_by ? { updated_by: policy.updated_by } : {}),
+    ...(policy.published_by ? { published_by: policy.published_by } : {}),
+    created_at: policy.created_at ?? new Date(0).toISOString(),
+    updated_at: policy.updated_at ?? new Date(0).toISOString(),
+    ...(policy.published_at ? { published_at: policy.published_at } : {}),
+    revision: policy.revision,
+    gray_policy: { tenant_allowlist: [], user_allowlist: [] },
+  };
+}
+
+function validateModelPolicy(policy: ModelPolicy): RegistryValidationResult {
+  const errors: RegistryValidationResult['errors'] = [];
+  const warnings: RegistryValidationResult['warnings'] = [];
+  const targetIds = new Set<string>();
+  for (const [index, target] of policy.targets.entries()) {
+    if (targetIds.has(target.target_id)) {
+      errors.push({ code: 'MODEL_POLICY_DUPLICATE_TARGET_ID', message: `Duplicate target_id: ${target.target_id}`, path: `targets.${index}.target_id`, severity: 'error' });
+    }
+    targetIds.add(target.target_id);
+    if (!target.enabled) {
+      warnings.push({ code: 'MODEL_POLICY_DISABLED_TARGET', message: `Target is disabled: ${target.target_id}`, path: `targets.${index}.enabled`, severity: 'warning' });
+    }
+  }
+  if (!policy.targets.some((target) => target.enabled)) {
+    errors.push({ code: 'MODEL_POLICY_NO_ENABLED_TARGET', message: 'At least one target must be enabled', path: 'targets', severity: 'error' });
+  }
+  return {
+    valid: errors.length === 0,
+    can_publish: errors.length === 0,
+    errors,
+    warnings,
+    dependency_graph: {
+      nodes: [{ resource_type: 'model_policy', resource_id: policy.model_policy_id, version: policy.version, status: policy.status as SpecStatus }],
+      edges: [],
+    },
   };
 }
 

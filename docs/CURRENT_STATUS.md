@@ -1,73 +1,79 @@
 # Current Status
 
-Last updated for AR-1.2C-FINAL completion: Tenant Policy Production Closure, operational visibility, readiness hardening, admission reconcile, audit idempotency, and full regression gates.
+Last updated: 2026-06-19 for R0 + AR-2A Platform Core Freeze and Real Model Gateway Integration.
 
-CI-HOTFIX-1 local validation note: GitHub Actions pnpm bootstrap verification completed locally; remote CI/Integration still require verification after this hotfix is committed and pushed.
+## Platform Version
 
-## AR-1.2C Status
+Current platform version: 0.8.0.
 
-**COMPLETE**
+The root `package.json` version is the authority. `corepack pnpm version:check` verifies workspace package versions, `.env.example`, README, this file, and CHANGELOG alignment.
 
-The repository now includes the AR-1.2C implementation pieces, unit coverage, deep-chain smoke entry points, expanded integration workflow, and documentation. The full static, Docker, live compose, legacy smoke, Pi smoke, tenant policy smoke, new deep-chain smoke, crash-resume, Temporal fixture export, and replay sequence has been rerun successfully against the current diff.
+## Baseline
 
-## Completed Platform Capabilities
+- Observed local HEAD and `origin/main` during this pass: `b4ead47817c1c32f71045139cbdee434a8709afe`.
+- User-provided expected baseline: `ab7cec9`.
+- Platform Core Baseline file: `docs/PLATFORM_CORE_BASELINE.md`.
+- Migration head: `011_model_policy_and_calls.sql`.
 
-1. DB-backed FlowSpec / RouteSpec / ToolManifest source of truth.
-2. Runtime API DB route source without production fallback to memory sample data.
-3. Temporal workflow start and runtime-worker consumption.
-4. runtime-worker tool orchestration through Tool Gateway.
-5. L3 `preview -> human approve/reject -> commit` governance using Temporal Signals.
-6. Persistent `human_task`, `audit_event`, `tool_call_log`, and `idempotency_record`.
-7. Registry lifecycle states: `draft`, `validated`, `published`, `gray`, `deprecated`, `disabled`.
-8. Immutable `FlowExecutionPlan` and exact runtime `execution_plan_ref` usage.
-9. Real Pi Agent Core inner loop in runtime-worker.
-10. Temporal `piDurableAgentWorkflow` supervisor for Pi segment boundaries.
-11. Persistent `agent_execution_plan`, `agent_run`, `agent_step`, and `agent_context_snapshot`.
-12. Safe Pi context snapshot serialization without hidden reasoning or secret-like fields.
-13. Deferred Pi tools that propose tool calls without executing side effects.
-14. Agent L3 governance through Tool Gateway preview, Human Task Signal, commit, and Pi context resume.
-15. Controlled `handoff_to_workflow` child `ConfigDrivenWorkflow` execution for allowed handoff targets.
-16. Model Gateway contract with development mock server under `devtools/mock-server`.
-17. Runtime API header auth mode with production fail-closed identity requirements.
-18. Tool Gateway service-token identity checks for runtime-worker and control-plane callers.
-19. Real Docker `SIGKILL` Pi worker crash recovery smoke script and Temporal replay gate.
+## AR-1 Platform Core
 
-## Completed Tenant Policy Runtime
+**COMPLETE / FROZEN**
 
-1. TenantRuntimePolicy lifecycle and migration `008_tenant_runtime_policy.sql`.
-2. Immutable Tenant Policy Snapshot.
-3. Snapshot lineage and migration `009_tenant_policy_snapshot_lineage.sql`.
-4. Root, Flow Agent Child, Workflow Handoff Child, and nested handoff snapshot derivation types.
-5. Worker model, tool, handoff, and budget effective policy enforcement.
-6. ConfigDrivenWorkflow non-agent tool step policy enforcement.
-7. Tool Gateway invoke/preview/commit final policy validation.
-8. PostgreSQL advisory transaction lock for concurrent Tenant Agent Admission.
-9. Tenant policy seed path in `scripts/seed-examples.ts`.
-10. Tenant policy, snapshot, and concurrency smoke scripts.
-11. Admission reconcile CLI with dry-run default, `--tenant-id`, `--batch-size`, `--stale-after-ms`, fail-closed Temporal connection handling, safe JSON output, idempotent `agent.admission.reconciled` audit, and DB/Temporal cleanup.
-12. Runtime API and Tool Gateway real `/readyz` services.
-13. Production service-token placeholder/length/difference validation.
-14. Tool Gateway debug idempotency endpoint disabled by default and gated by `idempotency:debug`.
-15. Tool Gateway readonly invoke now records committed `tool_call_log` rows for operational proof.
+The AR-1 core remains the four-app runtime:
 
-## Operations Visibility
+- `apps/control-plane`
+- `apps/runtime-api`
+- `apps/runtime-worker`
+- `apps/tool-gateway`
 
-Control-plane has read-only APIs and UI pages for runtime policy snapshots and tenant admissions:
+The frozen baseline includes DB-backed registry, immutable execution plans, Temporal workflows, Pi Agent Core segmented runtime, Tool Gateway as the only tool boundary, L3 human approval, Tenant Policy Snapshot lineage, Tenant Agent Admission, crash recovery, and Temporal replay gates.
+
+## AR-2A Status
+
+**PARTIAL**
+
+Implemented and locally verified in this pass:
+
+- ModelPolicy contracts and Zod DTOs.
+- `model_policy`, `model_call_log`, and `model_call_attempt` migration.
+- ModelPolicy repository and model call ledger repositories.
+- AgentSpec exact `model_policy_ref` requirement for new execution plans.
+- AgentExecutionPlan lock of `model_policy_id`, version, hash, and `resolved_model_policy`.
+- Tenant model enforcement against ModelPolicy target/model aliases.
+- OpenAI-compatible Model Gateway client adapter.
+- Runtime-worker Pi stream integration through existing Pi Agent Core.
+- Stable local model request keys and safe model response replay.
+- Mock OpenAI-compatible `/v1/chat/completions` endpoint.
+- Control-plane ModelPolicy registry entry and JSON editor template.
+- Protected live Model Gateway probe commands that skip unless explicitly enabled.
+
+Not completed in this local pass:
+
+- Full runtime live final, readonly, and L3 smokes against real external credentials.
+- Full protected GitHub live-model runtime workflow with Docker stack, migrations, seed, runtime live smokes, artifacts, and teardown. A protected provider-level probe workflow exists at `.github/workflows/live-model.yml`.
+- Full local fallback/crash model-gateway smoke commands requested for AR-2A.
+- Full Docker image rebuild and long-running smoke suite after the final AR-2A partial edits.
+- Complete Model Usage dashboard and operations model-call query UI.
+
+Because live runtime smokes were not executed with real credentials, this repository must not be labeled `0.9.0-rc.1` yet.
+
+## Model Gateway Runtime
+
+Production requirements:
 
 ```text
-GET /api/v1/tenant-runtime-policy-snapshots
-GET /api/v1/tenant-runtime-policy-snapshots/:snapshotId
-GET /api/v1/tenant-agent-admissions
-GET /api/v1/tenant-agent-admissions/:admissionId
-/policy-snapshots
-/tenant-admissions
+PI_AGENT_MODE=model_gateway
+MODEL_GATEWAY_MODE=openai_compatible
+MODEL_GATEWAY_PROTOCOL=openai_chat_completions
+MODEL_GATEWAY_BASE_URL
+MODEL_GATEWAY_API_KEY
 ```
 
-Supported filters include snapshot root/parent/execution plan/source policy/derivation/created time and admission status/task/agent/workflow/acquired time. No create/update/delete routes are exposed for these resources.
+Development/test mock gateway is only available through `infra/docker-compose.pi-smoke.yml` and `devtools/mock-server`.
 
 ## Smoke Commands
 
-Existing smoke:
+Existing local/deterministic and mock-gateway smoke entry points:
 
 ```bash
 corepack pnpm smoke:temporal-db-e2e
@@ -77,110 +83,55 @@ corepack pnpm smoke:pi-readonly-e2e
 corepack pnpm smoke:pi-l3-e2e
 corepack pnpm smoke:pi-user-input-e2e
 corepack pnpm smoke:pi-handoff-e2e
+corepack pnpm smoke:pi-restart-resume-e2e
 corepack pnpm smoke:pi-model-gateway-e2e
+corepack pnpm smoke:model-gateway-retry-e2e
 corepack pnpm smoke:pi-worker-crash-resume-e2e
 corepack pnpm smoke:tenant-policy-e2e
 corepack pnpm smoke:tenant-policy-snapshot-e2e
 corepack pnpm smoke:tenant-concurrency-e2e
-```
-
-AR-1.2C smoke entry points:
-
-```bash
 corepack pnpm smoke:tenant-flow-agent-e2e
 corepack pnpm smoke:tenant-handoff-lineage-e2e
 corepack pnpm smoke:tenant-policy-crash-snapshot-e2e
 corepack pnpm smoke:tenant-admission-reconcile-e2e
 ```
 
-## Runtime Compatibility
-
-Production requires:
-
-```text
-CONTROL_PLANE_AUTH_MODE=header
-RUNTIME_API_AUTH_MODE=header
-RUNTIME_API_ROUTE_SOURCE=db
-RUNTIME_API_WORKFLOW_STARTER=temporal
-TOOL_GATEWAY_AUTH_MODE=service_token
-TOOL_GATEWAY_REGISTRY_SOURCE=db
-TENANT_RUNTIME_POLICY_MODE=required
-PI_AGENT_MODE=model_gateway
-```
-
-Development/test may use deterministic Pi and mock Model Gateway through `infra/docker-compose.pi-smoke.yml`; `devtools/mock-server` is not a production app or production container.
-
-## Audit State
-
-Implemented event families include:
-
-- `policy.publish`
-- `policy.rollback`
-- `policy.deprecated`
-- `policy.disabled`
-- `policy.snapshot.created`
-- `policy.snapshot.derived`
-- `policy.snapshot.hash_mismatch`
-- `policy.resolve.allowed`
-- `policy.resolve.denied`
-- `agent.admission.reconciled`
-- `agent.human_task.created`
-- existing human task decision events
-- `tool.invoke`
-- `tool.preview`
-- `tool.commit`
-- `tool.idempotency_replay`
-
-Migration `010_runtime_audit_and_ops.sql` adds `audit_event.event_key` plus indexes for retry-safe logical events and operations queries.
-
-## Verified Regression Gate
-
-The following gate passed for this completion. Commands are shown without the local `rtk` wrapper used in this workspace.
+Protected live probes:
 
 ```bash
+corepack pnpm smoke:model-gateway-live-final-e2e
+corepack pnpm smoke:model-gateway-live-readonly-e2e
+corepack pnpm smoke:model-gateway-live-l3-e2e
+```
+
+These live commands require `LIVE_MODEL_GATEWAY_ENABLED=true`; otherwise they print `skipped: true`.
+
+## Verification In This Pass
+
+Passed:
+
+```bash
+corepack pnpm install --frozen-lockfile
+corepack pnpm version:check
 corepack pnpm lint
 corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm build
+corepack pnpm test:temporal-replay
+corepack pnpm smoke:model-gateway-live
+corepack pnpm smoke:model-gateway-live-final-e2e
+corepack pnpm smoke:model-gateway-live-readonly-e2e
+corepack pnpm smoke:model-gateway-live-l3-e2e
 docker compose -f infra/docker-compose.yml config
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml config
-COMPOSE_PARALLEL_LIMIT=1 docker compose -f infra/docker-compose.yml build control-plane runtime-api runtime-worker tool-gateway
-docker compose -f infra/docker-compose.yml up -d postgres valkey temporal temporal-ui
-corepack pnpm db:migrate
-corepack pnpm seed:examples
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d mock-server tool-gateway runtime-worker runtime-api control-plane
-curl http://localhost:3000/readyz
-curl http://localhost:3200/readyz
-curl http://localhost:3100/readyz
-curl http://localhost:3300/readyz
-corepack pnpm smoke:temporal-db-e2e
-corepack pnpm smoke:control-plane-api-e2e
-corepack pnpm smoke:control-plane-ui-e2e
-corepack pnpm smoke:pi-readonly-e2e
-corepack pnpm smoke:pi-l3-e2e
-corepack pnpm smoke:pi-user-input-e2e
-corepack pnpm smoke:pi-handoff-e2e
-PI_AGENT_MODE=model_gateway docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d runtime-worker
-corepack pnpm smoke:pi-model-gateway-e2e
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d runtime-worker
-corepack pnpm smoke:pi-worker-crash-resume-e2e
-corepack pnpm smoke:tenant-policy-e2e
-corepack pnpm smoke:tenant-policy-snapshot-e2e
-corepack pnpm smoke:tenant-concurrency-e2e
-corepack pnpm smoke:tenant-flow-agent-e2e
-corepack pnpm smoke:tenant-handoff-lineage-e2e
-corepack pnpm smoke:tenant-policy-crash-snapshot-e2e
-corepack pnpm smoke:tenant-admission-reconcile-e2e
-TEMPORAL_REPLAY_SMOKE_RESULT_FILE=artifacts/pi-worker-crash-resume/result.json corepack pnpm temporal:export-replay-fixtures
-corepack pnpm test:temporal-replay
 git diff --check
 ```
 
-Runtime API `/readyz` verified `config`, `database`, `route_registry`, `temporal`, `tenant_policy`, and `auth`. Tool Gateway `/readyz` verified `config`, `database`, `tool_registry`, `policy_snapshot_store`, and `service_auth`. Control-plane and runtime-worker returned ready states; runtime-worker was restored to deterministic smoke mode after the model-gateway smoke.
+`smoke:model-gateway-live` skipped because `LIVE_MODEL_GATEWAY_ENABLED` was not `true`.
 
-## Out Of Scope / Remaining
+## Next AR-2B Work
 
-1. Full aspirational `agent.run.*`, `agent.segment.*`, `agent.tool.*`, `agent.handoff.*`, `agent.continue_as_new`, and `agent.worker.recovered` audit taxonomy is not completely implemented.
-2. No production OpenTelemetry completeness work was attempted.
-3. No live production model-gateway smoke with real credentials was attempted.
-4. No real business system adapters, fifth production app, or fifth production container were added.
+- Run full Docker build and integrated smoke suite after credentials are available.
+- Add protected `.github/workflows/live-model.yml`.
+- Promote AR-2A only after live final, readonly, and L3 runtime smokes pass without deterministic Pi or mock-server.
+- Add evaluation and release gate metrics in AR-2B.

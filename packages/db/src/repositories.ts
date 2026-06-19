@@ -13,8 +13,16 @@ import type {
   HumanTask,
   HumanTaskCreateRequest,
   IdempotencyRecord,
+  ModelCallAttempt,
+  ModelCallAttemptStatus,
+  ModelCallRecord,
+  ModelCallStatus,
+  ModelPolicy,
+  ModelPolicyStatus,
+  ModelUsage,
   PiContextSnapshotRef,
   PromptDefinition,
+  ResolvedModelPolicy,
   ResolvedAgentPlan,
   RouteSpec,
   TaskRun,
@@ -43,6 +51,13 @@ import {
   humanTaskRespondRequestSchema,
   humanTaskSchema,
   idempotencyRecordSchema,
+  modelCallAttemptSchema,
+  modelCallRecordSchema,
+  modelFallbackPolicySchema,
+  modelPolicySchema,
+  modelRequestPolicySchema,
+  modelRetryPolicySchema,
+  resolvedModelPolicySchema,
   piContextSnapshotRefSchema,
   promptDefinitionSchema,
   resolvedAgentPlanSchema,
@@ -60,6 +75,7 @@ import {
   type AgentSpec,
   type FlowExecutionPlanAgent,
   type FlowExecutionPlanTool,
+  type ModelTarget,
   type RouteResult,
   type WorkflowStartResponse,
 } from '@dar/contracts';
@@ -77,6 +93,9 @@ import type {
   FlowRouteConfigTable,
   HumanTaskTable,
   IdempotencyRecordTable,
+  ModelCallAttemptTable,
+  ModelCallLogTable,
+  ModelPolicyTable,
   PromptDefinitionTable,
   TaskRunTable,
   TenantAgentAdmissionTable,
@@ -85,8 +104,10 @@ import type {
   ToolCallLogTable,
   ToolManifestTable,
 } from './index.js';
+import { withTransaction } from './index.js';
 import {
   CapabilityReleaseRepository,
+  RegistryRepositoryError,
   type RegistryCloneOptions,
   type RegistryListOptions,
   type RegistryResourceRecord,
@@ -225,6 +246,88 @@ export interface ListToolCallLogsOptions extends RepositoryTenantOptions {
   offset?: number;
 }
 
+export interface ModelPolicyListOptions extends RepositoryTenantOptions {
+  status?: ModelPolicyStatus;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ModelPolicyWriteOptions extends RepositoryTenantOptions {
+  operatorId: string;
+  version?: number;
+}
+
+export interface ModelPolicyUpdateDraftInput extends ModelPolicyWriteOptions {
+  expectedRevision: number;
+  policy: Partial<Omit<ModelPolicy, 'model_policy_id' | 'version' | 'revision' | 'created_at' | 'updated_at' | 'published_at'>>;
+}
+
+export interface ModelPolicyReleaseOptions extends ModelPolicyWriteOptions {
+  expectedRevision?: number;
+  releaseNote?: string;
+  metadataJson?: Record<string, unknown>;
+}
+
+export interface ModelPolicyRollbackOptions extends ModelPolicyReleaseOptions {
+  targetVersion: number;
+}
+
+export interface ModelCallCreateOrGetInput {
+  model_call_id?: string;
+  model_request_key: string;
+  tenant_id: string;
+  user_id?: string;
+  task_run_id?: string;
+  workflow_id?: string;
+  workflow_run_id?: string;
+  agent_run_id?: string;
+  segment_index?: number;
+  model_turn_index?: number;
+  model_policy_id: string;
+  model_policy_version: number;
+  model_policy_hash: string;
+  protocol: ModelCallRecord['protocol'];
+  request_hash: string;
+  fallback_index?: number;
+}
+
+export type ModelCallCreateOrGetResult =
+  | { decision: 'created'; record: ModelCallRecord }
+  | { decision: 'existing'; record: ModelCallRecord }
+  | { decision: 'replay'; record: ModelCallRecord }
+  | { decision: 'conflict'; record: ModelCallRecord };
+
+export interface ModelCallListOptions extends RepositoryTenantOptions {
+  taskRunId?: string;
+  agentRunId?: string;
+  modelPolicyId?: string;
+  modelId?: string;
+  provider?: string;
+  status?: ModelCallStatus;
+  startTime?: string;
+  endTime?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ModelCallAttemptStartInput {
+  attempt_id?: string;
+  model_call_id: string;
+  attempt_index: number;
+  target_id: string;
+  provider?: string;
+  model_id: string;
+}
+
+export interface ModelCallAttemptCompleteInput {
+  status: ModelCallAttemptStatus;
+  http_status?: number;
+  error_class?: string;
+  error_code?: string;
+  latency_ms?: number;
+  response_id?: string;
+}
+
 export interface BuildAgentExecutionPlanInput extends RepositoryTenantOptions {
   agentId: string;
   agentVersion: number;
@@ -255,6 +358,10 @@ export interface UpdateAgentRunInput {
   modelTurnCount?: number;
   toolCallCount?: number;
   handoffCount?: number;
+  fallbackCount?: number;
+  modelCallCount?: number;
+  selectedModelId?: string;
+  selectedProvider?: string;
   usage?: Partial<AgentUsage>;
   completed?: boolean;
   errorCode?: string;
@@ -696,6 +803,10 @@ export async function buildFlowExecutionPlan(
         prompt_version: promptRecord.spec.version,
         prompt_sha256: promptRecord.sha256,
         model_policy: agentRecord.spec.model_policy,
+        model_policy_id: agentExecutionPlan.model_policy_id,
+        model_policy_version: agentExecutionPlan.model_policy_version,
+        model_policy_hash: agentExecutionPlan.model_policy_hash,
+        resolved_model_policy: agentExecutionPlan.resolved_model_policy,
         allowed_tools: allowedTools,
         agent_execution_plan_ref: agentExecutionPlan.execution_plan_ref,
         allowed_handoffs: agentRecord.spec.allowed_handoffs,
@@ -858,6 +969,7 @@ export async function buildAgentExecutionPlan(
     max_total_tokens: agentRecord.spec.max_tokens,
   });
   const outputSchema = parseAgentOutputSchema(agentRecord.spec.output_schema);
+  const resolvedModelPolicy = await resolveAgentModelPolicy(db, agentRecord.spec, { tenantId });
   const generatedAt = input.generatedAt ?? new Date().toISOString();
   const executionPlanId = `agent_plan_${randomUUID()}`;
   const executionPlanRef = buildAgentExecutionPlanRef(executionPlanId);
@@ -870,6 +982,10 @@ export async function buildAgentExecutionPlan(
     prompt_sha256: promptRecord.sha256,
     system_prompt: promptRecord.spec.content,
     model_policy: agentRecord.spec.model_policy,
+    model_policy_id: resolvedModelPolicy.model_policy_id,
+    model_policy_version: resolvedModelPolicy.model_policy_version,
+    model_policy_hash: resolvedModelPolicy.model_policy_hash,
+    resolved_model_policy: resolvedModelPolicy,
     allowed_tools: allowedTools,
     allowed_handoffs: agentRecord.spec.allowed_handoffs,
     ...(outputSchema ? { output_schema: outputSchema } : {}),
@@ -886,6 +1002,10 @@ export async function buildAgentExecutionPlan(
     prompt_version: promptRecord.spec.version,
     prompt_sha256: promptRecord.sha256,
     model_policy: agentRecord.spec.model_policy,
+    model_policy_id: resolvedModelPolicy.model_policy_id,
+    model_policy_version: resolvedModelPolicy.model_policy_version,
+    model_policy_hash: resolvedModelPolicy.model_policy_hash,
+    resolved_model_policy: resolvedModelPolicy,
     allowed_tools: allowedTools,
     allowed_handoffs: agentRecord.spec.allowed_handoffs,
     ...(outputSchema ? { output_schema: outputSchema } : {}),
@@ -914,6 +1034,10 @@ function agentExecutionPlanContent(plan: AgentExecutionPlan): Record<string, unk
     prompt_version: plan.prompt_version,
     prompt_sha256: plan.prompt_sha256,
     model_policy: plan.model_policy,
+    ...(plan.model_policy_id ? { model_policy_id: plan.model_policy_id } : {}),
+    ...(plan.model_policy_version ? { model_policy_version: plan.model_policy_version } : {}),
+    ...(plan.model_policy_hash ? { model_policy_hash: plan.model_policy_hash } : {}),
+    ...(plan.resolved_model_policy ? { resolved_model_policy: plan.resolved_model_policy } : {}),
     allowed_tools: plan.allowed_tools,
     allowed_handoffs: plan.allowed_handoffs,
     ...(plan.output_schema ? { output_schema: plan.output_schema } : {}),
@@ -943,6 +1067,10 @@ export class AgentExecutionPlanRepository {
       prompt_version: plan.prompt_version,
       prompt_sha256: plan.prompt_sha256,
       model_policy_json: toDbJson({ value: plan.model_policy }),
+      model_policy_id: plan.model_policy_id ?? null,
+      model_policy_version: plan.model_policy_version ?? null,
+      model_policy_hash: plan.model_policy_hash ?? null,
+      resolved_model_policy_json: plan.resolved_model_policy ? toDbJson(plan.resolved_model_policy) : null,
       allowed_tools_json: toDbJson(plan.allowed_tools),
       allowed_handoffs_json: toDbJson(plan.allowed_handoffs),
       output_schema_json: plan.output_schema ? toDbJson(plan.output_schema) : null,
@@ -1329,6 +1457,316 @@ export class ToolManifestRepository {
   }
 }
 
+export class ModelPolicyRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async list(options: ModelPolicyListOptions = {}): Promise<ModelPolicy[]> {
+    let query = this.db.selectFrom('model_policy').selectAll().where('tenant_id', '=', tenant(options));
+    if (options.status) {
+      query = query.where('status', '=', options.status);
+    }
+    const rows = await query
+      .orderBy('model_policy_id', 'asc')
+      .orderBy('version', 'desc')
+      .limit(limit(options.limit))
+      .offset(offset(options.offset))
+      .execute();
+    return rows.map(mapModelPolicy);
+  }
+
+  async getByIdAndVersion(modelPolicyId: string, version: number, options: RepositoryTenantOptions = {}): Promise<ModelPolicy | undefined> {
+    const row = await this.db
+      .selectFrom('model_policy')
+      .selectAll()
+      .where('tenant_id', '=', tenant(options))
+      .where('model_policy_id', '=', modelPolicyId)
+      .where('version', '=', version)
+      .executeTakeFirst();
+    return row ? mapModelPolicy(row) : undefined;
+  }
+
+  async getLatestPublished(modelPolicyId: string, options: RepositoryTenantOptions = {}): Promise<ModelPolicy | undefined> {
+    const row = await this.db
+      .selectFrom('model_policy')
+      .selectAll()
+      .where('tenant_id', '=', tenant(options))
+      .where('model_policy_id', '=', modelPolicyId)
+      .where('status', '=', 'published')
+      .orderBy('version', 'desc')
+      .executeTakeFirst();
+    return row ? mapModelPolicy(row) : undefined;
+  }
+
+  async listVersions(modelPolicyId: string, options: ModelPolicyListOptions = {}): Promise<ModelPolicy[]> {
+    const rows = await this.db
+      .selectFrom('model_policy')
+      .selectAll()
+      .where('tenant_id', '=', tenant(options))
+      .where('model_policy_id', '=', modelPolicyId)
+      .orderBy('version', 'desc')
+      .limit(limit(options.limit))
+      .offset(offset(options.offset))
+      .execute();
+    return rows.map(mapModelPolicy);
+  }
+
+  async createDraft(policy: ModelPolicy, options: ModelPolicyWriteOptions): Promise<ModelPolicy> {
+    const parsed = modelPolicySchema.parse({
+      ...policy,
+      status: 'draft',
+      revision: 1,
+      created_by: options.operatorId,
+      updated_by: options.operatorId,
+    });
+    const row: Insertable<ModelPolicyTable> = {
+      tenant_id: tenant(options),
+      model_policy_id: parsed.model_policy_id,
+      version: parsed.version,
+      status: parsed.status,
+      protocol: parsed.protocol,
+      targets_json: toDbJson(parsed.targets),
+      retry_policy_json: toDbJson(parsed.retry_policy),
+      fallback_policy_json: toDbJson(parsed.fallback_policy),
+      request_policy_json: toDbJson(parsed.request_policy),
+      revision: 1,
+      created_by: options.operatorId,
+      updated_by: options.operatorId,
+      published_by: null,
+      updated_at: new Date(),
+      published_at: null,
+    };
+    const saved = await this.db.insertInto('model_policy').values(row).returningAll().executeTakeFirstOrThrow();
+    return mapModelPolicy(saved);
+  }
+
+  async updateDraft(modelPolicyId: string, version: number, input: ModelPolicyUpdateDraftInput): Promise<ModelPolicy> {
+    const existing = await this.getByIdAndVersion(modelPolicyId, version, input);
+    if (!existing) {
+      throw new RegistryRepositoryError('REGISTRY_VERSION_NOT_FOUND', 'ModelPolicy version not found', { model_policy_id: modelPolicyId, version });
+    }
+    if (existing.status !== 'draft' && existing.status !== 'validated') {
+      throw new RegistryRepositoryError('REGISTRY_VERSION_IMMUTABLE', 'Only draft or validated ModelPolicy versions can be updated', {
+        model_policy_id: modelPolicyId,
+        version,
+        status: existing.status,
+      });
+    }
+    if (existing.revision !== input.expectedRevision) {
+      throw new RegistryRepositoryError('REGISTRY_OPTIMISTIC_LOCK_CONFLICT', 'ModelPolicy revision conflict', {
+        model_policy_id: modelPolicyId,
+        version,
+        expected_revision: input.expectedRevision,
+        actual_revision: existing.revision,
+      });
+    }
+    const updated = modelPolicySchema.parse({
+      ...existing,
+      ...input.policy,
+      model_policy_id: modelPolicyId,
+      version,
+      status: 'draft',
+      revision: existing.revision + 1,
+      updated_by: input.operatorId,
+      updated_at: new Date().toISOString(),
+    });
+    const row = await this.db
+      .updateTable('model_policy')
+      .set({
+        status: updated.status,
+        protocol: updated.protocol,
+        targets_json: toDbJson(updated.targets),
+        retry_policy_json: toDbJson(updated.retry_policy),
+        fallback_policy_json: toDbJson(updated.fallback_policy),
+        request_policy_json: toDbJson(updated.request_policy),
+        revision: updated.revision,
+        updated_by: input.operatorId,
+        updated_at: new Date(),
+      })
+      .where('tenant_id', '=', tenant(input))
+      .where('model_policy_id', '=', modelPolicyId)
+      .where('version', '=', version)
+      .where('revision', '=', input.expectedRevision)
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new RegistryRepositoryError('REGISTRY_OPTIMISTIC_LOCK_CONFLICT', 'ModelPolicy revision conflict', { model_policy_id: modelPolicyId, version });
+    }
+    return mapModelPolicy(row);
+  }
+
+  async cloneVersion(modelPolicyId: string, version: number, options: ModelPolicyWriteOptions): Promise<ModelPolicy> {
+    const source = await this.getByIdAndVersion(modelPolicyId, version, options);
+    if (!source) {
+      throw new RegistryRepositoryError('REGISTRY_VERSION_NOT_FOUND', 'ModelPolicy version not found', { model_policy_id: modelPolicyId, version });
+    }
+    const nextVersion = options.version ?? Math.max(0, ...(await this.listVersions(modelPolicyId, options)).map((entry) => entry.version)) + 1;
+    return this.createDraft({
+      ...source,
+      version: nextVersion,
+      status: 'draft',
+      revision: 1,
+      created_by: options.operatorId,
+      updated_by: options.operatorId,
+      published_by: undefined,
+      created_at: undefined,
+      updated_at: undefined,
+      published_at: undefined,
+    }, options);
+  }
+
+  async markValidated(modelPolicyId: string, version: number, options: ModelPolicyWriteOptions): Promise<ModelPolicy> {
+    return this.updateStatus(modelPolicyId, version, 'validated', options);
+  }
+
+  async publish(modelPolicyId: string, version: number, options: ModelPolicyReleaseOptions): Promise<ModelPolicy> {
+    return withTransaction(this.db, async (trx) => {
+      const repository = new ModelPolicyRepository(trx);
+      const existing = await repository.getByIdAndVersion(modelPolicyId, version, options);
+      if (!existing) {
+        throw new RegistryRepositoryError('REGISTRY_VERSION_NOT_FOUND', 'ModelPolicy version not found', { model_policy_id: modelPolicyId, version });
+      }
+      if (options.expectedRevision !== undefined && existing.revision !== options.expectedRevision) {
+        throw new RegistryRepositoryError('REGISTRY_OPTIMISTIC_LOCK_CONFLICT', 'ModelPolicy revision conflict', {
+          model_policy_id: modelPolicyId,
+          version,
+          expected_revision: options.expectedRevision,
+          actual_revision: existing.revision,
+        });
+      }
+      await trx
+        .updateTable('model_policy')
+        .set({ status: 'deprecated', updated_by: options.operatorId, updated_at: new Date(), revision: sql<number>`revision + 1` })
+        .where('tenant_id', '=', tenant(options))
+        .where('model_policy_id', '=', modelPolicyId)
+        .where('status', '=', 'published')
+        .where('version', '!=', version)
+        .execute();
+      const row = await trx
+        .updateTable('model_policy')
+        .set({
+          status: 'published',
+          published_by: options.operatorId,
+          published_at: new Date(),
+          updated_by: options.operatorId,
+          updated_at: new Date(),
+          revision: sql<number>`revision + 1`,
+        })
+        .where('tenant_id', '=', tenant(options))
+        .where('model_policy_id', '=', modelPolicyId)
+        .where('version', '=', version)
+        .where('status', 'in', ['draft', 'validated'])
+        .returningAll()
+        .executeTakeFirst();
+      if (!row) {
+        throw new RegistryRepositoryError('INVALID_SPEC_STATUS_TRANSITION', 'ModelPolicy cannot be published from current status', { model_policy_id: modelPolicyId, version });
+      }
+      const policy = mapModelPolicy(row);
+      await appendModelPolicyRelease(trx, policy, 'publish', options);
+      await appendModelPolicyAudit(trx, policy, tenant(options), 'model_policy.publish', 'succeeded', options.operatorId, options.releaseNote);
+      return policy;
+    });
+  }
+
+  async setGray(modelPolicyId: string, version: number, options: ModelPolicyReleaseOptions): Promise<ModelPolicy> {
+    const policy = await this.updateStatus(modelPolicyId, version, 'gray', options);
+    await appendModelPolicyRelease(this.db, policy, 'gray', options);
+    await appendModelPolicyAudit(this.db, policy, tenant(options), 'model_policy.gray', 'succeeded', options.operatorId, options.releaseNote);
+    return policy;
+  }
+
+  async deprecate(modelPolicyId: string, version: number, options: ModelPolicyReleaseOptions): Promise<ModelPolicy> {
+    const policy = await this.updateStatus(modelPolicyId, version, 'deprecated', options);
+    await appendModelPolicyRelease(this.db, policy, 'deprecate', options);
+    await appendModelPolicyAudit(this.db, policy, tenant(options), 'model_policy.deprecated', 'succeeded', options.operatorId, options.releaseNote);
+    return policy;
+  }
+
+  async disable(modelPolicyId: string, version: number, options: ModelPolicyReleaseOptions): Promise<ModelPolicy> {
+    const policy = await this.updateStatus(modelPolicyId, version, 'disabled', options);
+    await appendModelPolicyRelease(this.db, policy, 'disable', options);
+    await appendModelPolicyAudit(this.db, policy, tenant(options), 'model_policy.disabled', 'succeeded', options.operatorId, options.releaseNote);
+    return policy;
+  }
+
+  async rollback(modelPolicyId: string, options: ModelPolicyRollbackOptions): Promise<ModelPolicy> {
+    return withTransaction(this.db, async (trx) => {
+      const repository = new ModelPolicyRepository(trx);
+      const target = await repository.getByIdAndVersion(modelPolicyId, options.targetVersion, options);
+      if (!target) {
+        throw new RegistryRepositoryError('REGISTRY_VERSION_NOT_FOUND', 'ModelPolicy rollback target not found', {
+          model_policy_id: modelPolicyId,
+          target_version: options.targetVersion,
+        });
+      }
+      const previous = await repository.getLatestPublished(modelPolicyId, options);
+      await trx
+        .updateTable('model_policy')
+        .set({ status: 'deprecated', updated_by: options.operatorId, updated_at: new Date(), revision: sql<number>`revision + 1` })
+        .where('tenant_id', '=', tenant(options))
+        .where('model_policy_id', '=', modelPolicyId)
+        .where('status', '=', 'published')
+        .where('version', '!=', options.targetVersion)
+        .execute();
+      const row = await trx
+        .updateTable('model_policy')
+        .set({
+          status: 'published',
+          published_by: options.operatorId,
+          published_at: new Date(),
+          updated_by: options.operatorId,
+          updated_at: new Date(),
+          revision: sql<number>`revision + 1`,
+        })
+        .where('tenant_id', '=', tenant(options))
+        .where('model_policy_id', '=', modelPolicyId)
+        .where('version', '=', options.targetVersion)
+        .where('status', 'in', ['published', 'gray', 'deprecated', 'disabled', 'validated'])
+        .returningAll()
+        .executeTakeFirst();
+      if (!row) {
+        throw new RegistryRepositoryError('REGISTRY_ROLLBACK_TARGET_NOT_PUBLISHED', 'ModelPolicy rollback target cannot be activated', {
+          model_policy_id: modelPolicyId,
+          target_version: options.targetVersion,
+        });
+      }
+      const policy = mapModelPolicy(row);
+      await appendModelPolicyRelease(trx, policy, 'rollback', options, previous?.version);
+      await appendModelPolicyAudit(trx, policy, tenant(options), 'model_policy.rollback', 'succeeded', options.operatorId, options.releaseNote);
+      return policy;
+    });
+  }
+
+  async listReleaseHistory(modelPolicyId: string, options: RepositoryTenantOptions = {}): Promise<CapabilityRelease[]> {
+    return new CapabilityReleaseRepository(this.db).list({
+      tenantId: tenant(options),
+      resourceType: 'model_policy',
+      resourceId: modelPolicyId,
+      limit: 100,
+    });
+  }
+
+  private async updateStatus(modelPolicyId: string, version: number, status: ModelPolicyStatus, options: ModelPolicyWriteOptions): Promise<ModelPolicy> {
+    const row = await this.db
+      .updateTable('model_policy')
+      .set({
+        status,
+        updated_by: options.operatorId,
+        updated_at: new Date(),
+        revision: sql<number>`revision + 1`,
+        ...(status === 'published' || status === 'gray' ? { published_by: options.operatorId, published_at: new Date() } : {}),
+      })
+      .where('tenant_id', '=', tenant(options))
+      .where('model_policy_id', '=', modelPolicyId)
+      .where('version', '=', version)
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new RegistryRepositoryError('REGISTRY_VERSION_NOT_FOUND', 'ModelPolicy version not found', { model_policy_id: modelPolicyId, version });
+    }
+    return mapModelPolicy(row);
+  }
+}
+
 export class TaskRunRepository {
   constructor(private readonly db: Kysely<Database>) {}
 
@@ -1456,6 +1894,13 @@ export class AgentRunRepository {
       prompt_id: plan.prompt_id,
       prompt_version: plan.prompt_version,
       model: plan.model_policy,
+      model_policy_id: plan.model_policy_id,
+      model_policy_version: plan.model_policy_version,
+      model_policy_hash: plan.model_policy_hash,
+      selected_model_id: plan.resolved_model_policy.resolved_targets[0]?.model_id ?? null,
+      selected_provider: plan.resolved_model_policy.resolved_targets[0]?.gateway_profile ?? null,
+      fallback_count: 0,
+      model_call_count: 0,
       execution_mode: input.executionMode ?? 'mediated_tool_call',
       tenant_policy_snapshot_ref: input.tenantPolicySnapshotRef ?? null,
       tenant_policy_version: input.tenantPolicyVersion ?? null,
@@ -1541,6 +1986,18 @@ export class AgentRunRepository {
     }
     if (input.handoffCount !== undefined) {
       rowUpdate.handoff_count = input.handoffCount;
+    }
+    if (input.fallbackCount !== undefined) {
+      rowUpdate.fallback_count = input.fallbackCount;
+    }
+    if (input.modelCallCount !== undefined) {
+      rowUpdate.model_call_count = input.modelCallCount;
+    }
+    if (input.selectedModelId !== undefined) {
+      rowUpdate.selected_model_id = input.selectedModelId;
+    }
+    if (input.selectedProvider !== undefined) {
+      rowUpdate.selected_provider = input.selectedProvider;
     }
     if (input.usage) {
       if (input.usage.input_tokens !== undefined) {
@@ -2225,6 +2682,330 @@ export class ToolCallLogRepository {
       .offset(offset(options.offset))
       .execute();
     return rows.map(mapToolCallLog);
+  }
+}
+
+export class ModelCallLogRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async createOrGet(input: ModelCallCreateOrGetInput): Promise<ModelCallCreateOrGetResult> {
+    const existing = await this.getByRequestKey(input.model_request_key);
+    if (existing) {
+      if (existing.request_hash !== input.request_hash) {
+        return { decision: 'conflict', record: existing };
+      }
+      if (existing.status === 'succeeded' || existing.status === 'replayed') {
+        return { decision: 'replay', record: existing };
+      }
+      return { decision: 'existing', record: existing };
+    }
+
+    const parsed = modelCallRecordSchema.parse({
+      model_call_id: input.model_call_id ?? `model_call_${randomUUID()}`,
+      model_request_key: input.model_request_key,
+      tenant_id: input.tenant_id,
+      user_id: input.user_id,
+      task_run_id: input.task_run_id,
+      workflow_id: input.workflow_id,
+      workflow_run_id: input.workflow_run_id,
+      agent_run_id: input.agent_run_id,
+      segment_index: input.segment_index,
+      model_turn_index: input.model_turn_index,
+      model_policy_id: input.model_policy_id,
+      model_policy_version: input.model_policy_version,
+      model_policy_hash: input.model_policy_hash,
+      protocol: input.protocol,
+      fallback_index: input.fallback_index ?? 0,
+      status: 'queued',
+      request_hash: input.request_hash,
+    });
+    const row: Insertable<ModelCallLogTable> = {
+      model_call_id: parsed.model_call_id,
+      model_request_key: parsed.model_request_key,
+      tenant_id: parsed.tenant_id,
+      user_id: parsed.user_id ?? null,
+      task_run_id: parsed.task_run_id ?? null,
+      workflow_id: parsed.workflow_id ?? null,
+      workflow_run_id: parsed.workflow_run_id ?? null,
+      agent_run_id: parsed.agent_run_id ?? null,
+      segment_index: parsed.segment_index ?? null,
+      model_turn_index: parsed.model_turn_index ?? null,
+      model_policy_id: parsed.model_policy_id,
+      model_policy_version: parsed.model_policy_version,
+      model_policy_hash: parsed.model_policy_hash,
+      target_id: null,
+      provider: null,
+      model_id: null,
+      protocol: parsed.protocol,
+      attempt_count: 0,
+      fallback_index: parsed.fallback_index,
+      status: parsed.status,
+      finish_reason: null,
+      response_id: null,
+      input_tokens: null,
+      output_tokens: null,
+      total_tokens: null,
+      estimated_cost: null,
+      latency_ms: null,
+      error_class: null,
+      error_code: null,
+      request_hash: parsed.request_hash,
+      response_hash: null,
+      safe_response_json: null,
+      started_at: null,
+      completed_at: null,
+      updated_at: new Date(),
+    };
+    const saved = await this.db
+      .insertInto('model_call_log')
+      .values(row)
+      .onConflict((oc) => oc.column('model_request_key').doNothing())
+      .returningAll()
+      .executeTakeFirst();
+    if (saved) {
+      return { decision: 'created', record: mapModelCallRecord(saved) };
+    }
+    const raced = await this.getByRequestKey(input.model_request_key);
+    if (!raced) {
+      throw new Error(`ModelCall insert conflict but existing record was not found: ${input.model_request_key}`);
+    }
+    if (raced.request_hash !== input.request_hash) {
+      return { decision: 'conflict', record: raced };
+    }
+    return raced.status === 'succeeded' || raced.status === 'replayed'
+      ? { decision: 'replay', record: raced }
+      : { decision: 'existing', record: raced };
+  }
+
+  async markRunning(modelCallId: string, input: { targetId: string; provider?: string; modelId: string; fallbackIndex?: number }): Promise<ModelCallRecord> {
+    const row = await this.db
+      .updateTable('model_call_log')
+      .set({
+        status: 'running',
+        target_id: input.targetId,
+        provider: input.provider ?? null,
+        model_id: input.modelId,
+        fallback_index: input.fallbackIndex ?? 0,
+        started_at: new Date(),
+        updated_at: new Date(),
+      })
+      .where('model_call_id', '=', modelCallId)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return mapModelCallRecord(row);
+  }
+
+  async markSucceeded(modelCallId: string, input: {
+    targetId: string;
+    provider?: string;
+    modelId: string;
+    attemptCount: number;
+    fallbackIndex: number;
+    finishReason?: string;
+    responseId?: string;
+    usage?: ModelUsage;
+    latencyMs?: number;
+    responseHash: string;
+    safeResponseJson: Record<string, unknown>;
+  }): Promise<ModelCallRecord> {
+    const row = await this.db
+      .updateTable('model_call_log')
+      .set({
+        status: 'succeeded',
+        target_id: input.targetId,
+        provider: input.provider ?? null,
+        model_id: input.modelId,
+        attempt_count: input.attemptCount,
+        fallback_index: input.fallbackIndex,
+        finish_reason: input.finishReason ?? null,
+        response_id: input.responseId ?? null,
+        input_tokens: input.usage?.input_tokens ?? null,
+        output_tokens: input.usage?.output_tokens ?? null,
+        total_tokens: input.usage?.total_tokens ?? null,
+        estimated_cost: input.usage?.estimated_total_cost ?? null,
+        latency_ms: input.latencyMs ?? null,
+        response_hash: input.responseHash,
+        safe_response_json: toDbJson(input.safeResponseJson),
+        completed_at: new Date(),
+        updated_at: new Date(),
+      })
+      .where('model_call_id', '=', modelCallId)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return mapModelCallRecord(row);
+  }
+
+  async markFailed(modelCallId: string, input: {
+    status?: Extract<ModelCallStatus, 'failed' | 'timed_out' | 'cancelled'>;
+    attemptCount?: number;
+    fallbackIndex?: number;
+    errorClass: string;
+    errorCode: string;
+    latencyMs?: number;
+  }): Promise<ModelCallRecord> {
+    const row = await this.db
+      .updateTable('model_call_log')
+      .set({
+        status: input.status ?? 'failed',
+        attempt_count: input.attemptCount ?? 0,
+        fallback_index: input.fallbackIndex ?? 0,
+        error_class: input.errorClass,
+        error_code: input.errorCode,
+        latency_ms: input.latencyMs ?? null,
+        completed_at: new Date(),
+        updated_at: new Date(),
+      })
+      .where('model_call_id', '=', modelCallId)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return mapModelCallRecord(row);
+  }
+
+  async markCancelled(modelCallId: string): Promise<ModelCallRecord> {
+    return this.markFailed(modelCallId, { status: 'cancelled', errorClass: 'cancelled', errorCode: 'MODEL_CALL_CANCELLED' });
+  }
+
+  async replaySucceededResult(modelRequestKey: string, requestHash: string): Promise<ModelCallRecord | undefined> {
+    const record = await this.getByRequestKey(modelRequestKey);
+    if (!record || (record.status !== 'succeeded' && record.status !== 'replayed') || record.request_hash !== requestHash) {
+      return undefined;
+    }
+    await this.db
+      .updateTable('model_call_log')
+      .set({ status: 'replayed', updated_at: new Date() })
+      .where('model_call_id', '=', record.model_call_id)
+      .execute();
+    return record;
+  }
+
+  async getByRequestKey(modelRequestKey: string): Promise<ModelCallRecord | undefined> {
+    const row = await this.db
+      .selectFrom('model_call_log')
+      .selectAll()
+      .where('model_request_key', '=', modelRequestKey)
+      .executeTakeFirst();
+    return row ? mapModelCallRecord(row) : undefined;
+  }
+
+  async get(modelCallId: string): Promise<ModelCallRecord | undefined> {
+    const row = await this.db
+      .selectFrom('model_call_log')
+      .selectAll()
+      .where('model_call_id', '=', modelCallId)
+      .executeTakeFirst();
+    return row ? mapModelCallRecord(row) : undefined;
+  }
+
+  async list(options: ModelCallListOptions = {}): Promise<ModelCallRecord[]> {
+    let query = this.db.selectFrom('model_call_log').selectAll();
+    if (options.tenantId) {
+      query = query.where('tenant_id', '=', options.tenantId);
+    }
+    if (options.taskRunId) {
+      query = query.where('task_run_id', '=', options.taskRunId);
+    }
+    if (options.agentRunId) {
+      query = query.where('agent_run_id', '=', options.agentRunId);
+    }
+    if (options.modelPolicyId) {
+      query = query.where('model_policy_id', '=', options.modelPolicyId);
+    }
+    if (options.modelId) {
+      query = query.where('model_id', '=', options.modelId);
+    }
+    if (options.provider) {
+      query = query.where('provider', '=', options.provider);
+    }
+    if (options.status) {
+      query = query.where('status', '=', options.status);
+    }
+    if (options.startTime) {
+      query = query.where('created_at', '>=', new Date(options.startTime));
+    }
+    if (options.endTime) {
+      query = query.where('created_at', '<=', new Date(options.endTime));
+    }
+    const rows = await query
+      .orderBy('created_at', 'desc')
+      .limit(limit(options.limit))
+      .offset(offset(options.offset))
+      .execute();
+    return rows.map(mapModelCallRecord);
+  }
+}
+
+export class ModelCallAttemptRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async startAttempt(input: ModelCallAttemptStartInput): Promise<ModelCallAttempt> {
+    const parsed = modelCallAttemptSchema.parse({
+      attempt_id: input.attempt_id ?? `model_attempt_${randomUUID()}`,
+      model_call_id: input.model_call_id,
+      attempt_index: input.attempt_index,
+      target_id: input.target_id,
+      provider: input.provider,
+      model_id: input.model_id,
+      status: 'started',
+      started_at: new Date().toISOString(),
+    });
+    const row: Insertable<ModelCallAttemptTable> = {
+      attempt_id: parsed.attempt_id,
+      model_call_id: parsed.model_call_id,
+      attempt_index: parsed.attempt_index,
+      target_id: parsed.target_id,
+      provider: parsed.provider ?? null,
+      model_id: parsed.model_id,
+      status: parsed.status,
+      http_status: null,
+      error_class: null,
+      error_code: null,
+      latency_ms: null,
+      response_id: null,
+      started_at: parsed.started_at ?? new Date(),
+      completed_at: null,
+    };
+    const saved = await this.db
+      .insertInto('model_call_attempt')
+      .values(row)
+      .onConflict((oc) => oc.columns(['model_call_id', 'attempt_index']).doNothing())
+      .returningAll()
+      .executeTakeFirst();
+    if (saved) {
+      return mapModelCallAttempt(saved);
+    }
+    const existing = (await this.listByModelCall(input.model_call_id)).find((attempt) => attempt.attempt_index === input.attempt_index);
+    if (!existing) {
+      throw new Error(`ModelCallAttempt insert conflict but existing attempt was not found: ${input.model_call_id}#${input.attempt_index}`);
+    }
+    return existing;
+  }
+
+  async completeAttempt(attemptId: string, input: ModelCallAttemptCompleteInput): Promise<ModelCallAttempt> {
+    const row = await this.db
+      .updateTable('model_call_attempt')
+      .set({
+        status: input.status,
+        http_status: input.http_status ?? null,
+        error_class: input.error_class ?? null,
+        error_code: input.error_code ?? null,
+        latency_ms: input.latency_ms ?? null,
+        response_id: input.response_id ?? null,
+        completed_at: new Date(),
+      })
+      .where('attempt_id', '=', attemptId)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return mapModelCallAttempt(row);
+  }
+
+  async listByModelCall(modelCallId: string): Promise<ModelCallAttempt[]> {
+    const rows = await this.db
+      .selectFrom('model_call_attempt')
+      .selectAll()
+      .where('model_call_id', '=', modelCallId)
+      .orderBy('attempt_index', 'asc')
+      .execute();
+    return rows.map(mapModelCallAttempt);
   }
 }
 
@@ -3243,6 +4024,58 @@ function parseToolVersionRefs(values: string[], label: string): ToolVersionRef[]
   });
 }
 
+async function resolveAgentModelPolicy(
+  db: Kysely<Database>,
+  agentSpec: AgentSpec,
+  options: RepositoryTenantOptions,
+): Promise<ResolvedModelPolicy> {
+  const ref = agentSpec.model_policy_ref;
+  if (!ref) {
+    throw new Error(`AgentSpec must declare model_policy_ref exact lock: ${agentSpec.agent_id}@${agentSpec.version}`);
+  }
+  const record = await new ModelPolicyRepository(db).getByIdAndVersion(ref.model_policy_id, ref.model_policy_version, options);
+  if (!record) {
+    throw new Error(`ModelPolicy exact version not found: ${ref.model_policy_id}@${ref.model_policy_version}`);
+  }
+  if (!isDependencyPublishable(record.status)) {
+    throw new Error(`ModelPolicy is not executable for plan generation: ${ref.model_policy_id}@${ref.model_policy_version}`);
+  }
+  const modelPolicyHash = hashModelPolicy(record);
+  if (ref.model_policy_hash && ref.model_policy_hash !== modelPolicyHash) {
+    throw new Error(`ModelPolicy hash mismatch: ${ref.model_policy_id}@${ref.model_policy_version}`);
+  }
+  const resolvedTargets = record.targets.filter((target) => target.enabled).sort(compareModelTargets);
+  if (resolvedTargets.length === 0) {
+    throw new Error(`ModelPolicy has no enabled targets: ${ref.model_policy_id}@${ref.model_policy_version}`);
+  }
+  return resolvedModelPolicySchema.parse({
+    model_policy_id: record.model_policy_id,
+    model_policy_version: record.version,
+    model_policy_hash: modelPolicyHash,
+    protocol: record.protocol,
+    resolved_targets: resolvedTargets,
+    retry_policy: record.retry_policy,
+    fallback_policy: record.fallback_policy,
+    request_policy: record.request_policy,
+  });
+}
+
+function compareModelTargets(left: Pick<ModelTarget, 'priority' | 'target_id'>, right: Pick<ModelTarget, 'priority' | 'target_id'>): number {
+  return left.priority === right.priority ? left.target_id.localeCompare(right.target_id) : left.priority - right.priority;
+}
+
+export function hashModelPolicy(policy: ModelPolicy): string {
+  return hashJson({
+    model_policy_id: policy.model_policy_id,
+    version: policy.version,
+    protocol: policy.protocol,
+    targets: policy.targets,
+    retry_policy: policy.retry_policy,
+    fallback_policy: policy.fallback_policy,
+    request_policy: policy.request_policy,
+  });
+}
+
 async function resolveToolPlanEntry(
   db: Kysely<Database>,
   input: ToolPlanEntryInput,
@@ -3444,6 +4277,10 @@ function mapAgentExecutionPlan(row: Selectable<AgentExecutionPlanTable>): AgentE
     prompt_id: row.prompt_id,
     prompt_version: row.prompt_version,
     prompt_sha256: row.prompt_sha256,
+    ...(row.model_policy_id ? { model_policy_id: row.model_policy_id } : {}),
+    ...(row.model_policy_version ? { model_policy_version: row.model_policy_version } : {}),
+    ...(row.model_policy_hash ? { model_policy_hash: row.model_policy_hash } : {}),
+    ...(row.resolved_model_policy_json ? { resolved_model_policy: resolvedModelPolicySchema.parse(fromDbJson(row.resolved_model_policy_json)) } : {}),
     execution_plan_hash: row.execution_plan_hash,
     generated_at: toIso(row.generated_at),
   });
@@ -3458,6 +4295,10 @@ function mapAgentExecutionPlan(row: Selectable<AgentExecutionPlanTable>): AgentE
     prompt_version: plan.prompt_version,
     prompt_sha256: plan.prompt_sha256,
     model_policy: plan.model_policy,
+    ...(plan.model_policy_id ? { model_policy_id: plan.model_policy_id } : {}),
+    ...(plan.model_policy_version ? { model_policy_version: plan.model_policy_version } : {}),
+    ...(plan.model_policy_hash ? { model_policy_hash: plan.model_policy_hash } : {}),
+    ...(plan.resolved_model_policy ? { resolved_model_policy: plan.resolved_model_policy } : {}),
     allowed_tools: plan.allowed_tools,
     allowed_handoffs: plan.allowed_handoffs,
     ...(plan.output_schema ? { output_schema: plan.output_schema } : {}),
@@ -3469,6 +4310,26 @@ function mapAgentExecutionPlan(row: Selectable<AgentExecutionPlanTable>): AgentE
     throw new Error(`AgentExecutionPlan hash mismatch: ${plan.execution_plan_ref}`);
   }
   return plan;
+}
+
+function mapModelPolicy(row: Selectable<ModelPolicyTable>): ModelPolicy {
+  return modelPolicySchema.parse({
+    model_policy_id: row.model_policy_id,
+    version: row.version,
+    status: row.status,
+    protocol: row.protocol,
+    targets: jsonArray(row.targets_json),
+    retry_policy: modelRetryPolicySchema.parse(jsonRecord(row.retry_policy_json) ?? {}),
+    fallback_policy: modelFallbackPolicySchema.parse(jsonRecord(row.fallback_policy_json) ?? {}),
+    request_policy: modelRequestPolicySchema.parse(jsonRecord(row.request_policy_json) ?? {}),
+    revision: row.revision,
+    ...(row.created_by ? { created_by: row.created_by } : {}),
+    ...(row.updated_by ? { updated_by: row.updated_by } : {}),
+    ...(row.published_by ? { published_by: row.published_by } : {}),
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+    ...(row.published_at ? { published_at: toIso(row.published_at) } : {}),
+  });
 }
 
 function mapAgentRun(row: Selectable<AgentRunTable>): AgentRunRecord {
@@ -3487,6 +4348,13 @@ function mapAgentRun(row: Selectable<AgentRunTable>): AgentRunRecord {
     prompt_id: row.prompt_id,
     prompt_version: row.prompt_version,
     model: row.model,
+    ...(row.model_policy_id ? { model_policy_id: row.model_policy_id } : {}),
+    ...(row.model_policy_version ? { model_policy_version: row.model_policy_version } : {}),
+    ...(row.model_policy_hash ? { model_policy_hash: row.model_policy_hash } : {}),
+    ...(row.selected_model_id ? { selected_model_id: row.selected_model_id } : {}),
+    ...(row.selected_provider ? { selected_provider: row.selected_provider } : {}),
+    fallback_count: row.fallback_count,
+    model_call_count: row.model_call_count,
     execution_mode: row.execution_mode,
     ...(row.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: row.tenant_policy_snapshot_ref } : {}),
     ...(row.tenant_policy_version ? { tenant_policy_version: row.tenant_policy_version } : {}),
@@ -3507,6 +4375,67 @@ function mapAgentRun(row: Selectable<AgentRunTable>): AgentRunRecord {
     ...(row.error_message ? { error_message: row.error_message } : {}),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
+  });
+}
+
+function mapModelCallRecord(row: Selectable<ModelCallLogTable>): ModelCallRecord {
+  return modelCallRecordSchema.parse({
+    model_call_id: row.model_call_id,
+    model_request_key: row.model_request_key,
+    tenant_id: row.tenant_id,
+    ...(row.user_id ? { user_id: row.user_id } : {}),
+    ...(row.task_run_id ? { task_run_id: row.task_run_id } : {}),
+    ...(row.workflow_id ? { workflow_id: row.workflow_id } : {}),
+    ...(row.workflow_run_id ? { workflow_run_id: row.workflow_run_id } : {}),
+    ...(row.agent_run_id ? { agent_run_id: row.agent_run_id } : {}),
+    ...(row.segment_index !== null ? { segment_index: row.segment_index } : {}),
+    ...(row.model_turn_index !== null ? { model_turn_index: row.model_turn_index } : {}),
+    model_policy_id: row.model_policy_id,
+    model_policy_version: row.model_policy_version,
+    model_policy_hash: row.model_policy_hash,
+    ...(row.target_id ? { target_id: row.target_id } : {}),
+    ...(row.provider ? { provider: row.provider } : {}),
+    ...(row.model_id ? { model_id: row.model_id } : {}),
+    protocol: row.protocol,
+    attempt_count: row.attempt_count,
+    fallback_index: row.fallback_index,
+    status: row.status,
+    ...(row.finish_reason ? { finish_reason: row.finish_reason } : {}),
+    ...(row.response_id ? { response_id: row.response_id } : {}),
+    ...(row.input_tokens !== null ? { input_tokens: row.input_tokens } : {}),
+    ...(row.output_tokens !== null ? { output_tokens: row.output_tokens } : {}),
+    ...(row.total_tokens !== null ? { total_tokens: row.total_tokens } : {}),
+    ...(row.estimated_cost !== null ? { estimated_cost: Number(row.estimated_cost) } : {}),
+    ...(row.latency_ms !== null ? { latency_ms: row.latency_ms } : {}),
+    ...(row.error_class ? { error_class: row.error_class } : {}),
+    ...(row.error_code ? { error_code: row.error_code } : {}),
+    request_hash: row.request_hash,
+    ...(row.response_hash ? { response_hash: row.response_hash } : {}),
+    ...(row.safe_response_json !== null ? { safe_response_json: jsonRecord(row.safe_response_json) ?? {} } : {}),
+    ...(row.started_at ? { started_at: toIso(row.started_at) } : {}),
+    ...(row.completed_at ? { completed_at: toIso(row.completed_at) } : {}),
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  });
+}
+
+function mapModelCallAttempt(row: Selectable<ModelCallAttemptTable>): ModelCallAttempt {
+  return modelCallAttemptSchema.parse({
+    attempt_id: row.attempt_id,
+    model_call_id: row.model_call_id,
+    attempt_index: row.attempt_index,
+    target_id: row.target_id,
+    ...(row.provider ? { provider: row.provider } : {}),
+    model_id: row.model_id,
+    status: row.status,
+    ...(row.http_status !== null ? { http_status: row.http_status } : {}),
+    ...(row.error_class ? { error_class: row.error_class } : {}),
+    ...(row.error_code ? { error_code: row.error_code } : {}),
+    ...(row.latency_ms !== null ? { latency_ms: row.latency_ms } : {}),
+    ...(row.response_id ? { response_id: row.response_id } : {}),
+    ...(row.started_at ? { started_at: toIso(row.started_at) } : {}),
+    ...(row.completed_at ? { completed_at: toIso(row.completed_at) } : {}),
+    created_at: toIso(row.created_at),
   });
 }
 
@@ -3830,6 +4759,61 @@ async function appendTenantPolicyAudit(
       version: policy.version,
       status: policy.status,
       policy_hash: hashTenantRuntimePolicy(policy),
+    },
+  });
+}
+
+async function appendModelPolicyRelease(
+  db: Kysely<Database>,
+  policy: ModelPolicy,
+  action: 'publish' | 'gray' | 'rollback' | 'deprecate' | 'disable',
+  options: ModelPolicyReleaseOptions,
+  previousVersion?: number,
+): Promise<void> {
+  await new CapabilityReleaseRepository(db).append({
+    tenant_id: tenant(options),
+    resource_type: 'model_policy',
+    resource_id: policy.model_policy_id,
+    resource_version: policy.version,
+    action,
+    ...(previousVersion ? { previous_version: previousVersion } : {}),
+    target_status: action === 'deprecate' ? 'deprecated' : action === 'disable' ? 'disabled' : action === 'gray' ? 'gray' : 'published',
+    operator_id: options.operatorId,
+    release_note: options.releaseNote,
+    metadata_json: {
+      ...(options.metadataJson ?? {}),
+      model_policy_hash: hashModelPolicy(policy),
+      protocol: policy.protocol,
+      target_count: policy.targets.length,
+    },
+  });
+}
+
+async function appendModelPolicyAudit(
+  db: Kysely<Database>,
+  policy: ModelPolicy,
+  tenantId: string,
+  action: string,
+  result: AuditEvent['result'],
+  actorId: string,
+  reason?: string,
+): Promise<void> {
+  await new AuditEventRepository(db).append({
+    event_key: `${action}:${policy.model_policy_id}:${policy.version}`,
+    tenant_id: tenantId,
+    actor_id: actorId,
+    action,
+    target_type: 'model_policy',
+    target_id: `${policy.model_policy_id}@${policy.version}`,
+    result,
+    reason,
+    payload: {
+      model_policy_id: policy.model_policy_id,
+      version: policy.version,
+      status: policy.status,
+      protocol: policy.protocol,
+      model_policy_hash: hashModelPolicy(policy),
+      target_count: policy.targets.length,
     },
   });
 }

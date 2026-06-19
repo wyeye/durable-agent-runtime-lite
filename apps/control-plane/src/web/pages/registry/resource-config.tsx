@@ -115,12 +115,69 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
       agent_id: 'agent_id_here',
       version: 1,
       prompt_ref: 'prompt_id@1',
-      model_policy: 'mock',
+      model_policy: 'model_policy_id@1',
+      model_policy_ref: {
+        model_policy_id: 'model_policy_id',
+        model_policy_version: 1,
+      },
       allowed_tools: [],
       max_steps: 6,
       max_tokens: 12000,
     }),
     renderSummary: renderAgentSummary,
+  },
+  model_policy: {
+    type: 'model_policy',
+    plural: 'model-policies',
+    idLabel: 'model_policy_id',
+    title: 'Model Policy Registry',
+    description: '管理模型网关协议、目标模型、重试、fallback 和请求参数策略。',
+    getIdFromSpec: (spec) => readStringField(spec, 'model_policy_id'),
+    makeDraftTemplate: () => ({
+      model_policy_id: 'model_policy_id_here',
+      version: 1,
+      status: 'draft',
+      protocol: 'openai_chat_completions',
+      targets: [
+        {
+          target_id: 'primary',
+          gateway_profile: 'openai-compatible',
+          model_id: 'gpt-4.1-mini',
+          priority: 0,
+          enabled: true,
+          capabilities: ['text', 'tools', 'usage'],
+        },
+      ],
+      retry_policy: {
+        max_attempts_per_target: 2,
+        retryable_status_codes: [429, 500, 502, 503, 504],
+        retry_on_timeout: true,
+        retry_on_network_error: true,
+        backoff_ms: 100,
+        max_backoff_ms: 1000,
+      },
+      fallback_policy: {
+        enabled: false,
+        ordered_target_ids: [],
+        eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
+        stop_on_auth_error: true,
+        stop_on_validation_error: true,
+        stop_on_policy_denial: true,
+      },
+      request_policy: {
+        temperature: 0.2,
+        top_p: 1,
+        max_output_tokens: 1000,
+        tool_choice_mode: 'auto',
+        response_format: 'text',
+        allow_parallel_tool_calls: false,
+      },
+    }),
+    renderSummary: renderModelPolicySummary,
+    renderListExtra: (record) => {
+      const spec = asRecord(record.spec);
+      return <Tag>{readString(spec.protocol) ?? 'model'}</Tag>;
+    },
   },
   prompt: {
     type: 'prompt',
@@ -263,8 +320,35 @@ function renderAgentSummary(record: RegistryRecord) {
       <Descriptions.Item label="max_steps">{readNumber(spec.max_steps) ?? '-'}</Descriptions.Item>
       <Descriptions.Item label="max_tokens">{readNumber(spec.max_tokens) ?? '-'}</Descriptions.Item>
       <Descriptions.Item label="model_policy">{readString(spec.model_policy) ?? '-'}</Descriptions.Item>
+      <Descriptions.Item label="model_policy_ref">{JSON.stringify(spec.model_policy_ref ?? {})}</Descriptions.Item>
       <Descriptions.Item label="output_schema" span={2}>{readString(spec.output_schema) ?? '-'}</Descriptions.Item>
     </Descriptions>
+  );
+}
+
+function renderModelPolicySummary(record: RegistryRecord) {
+  const spec = asRecord(record.spec);
+  const targets = Array.isArray(spec.targets) ? spec.targets.filter(isRecord) : [];
+  const columns: ColumnsType<Record<string, unknown>> = [
+    { title: 'target_id', dataIndex: 'target_id', key: 'target_id', render: (value: unknown) => readString(value) ?? '-' },
+    { title: 'profile', dataIndex: 'gateway_profile', key: 'gateway_profile', render: (value: unknown) => readString(value) ?? '-' },
+    { title: 'model_id', dataIndex: 'model_id', key: 'model_id', render: (value: unknown) => readString(value) ?? '-' },
+    { title: 'priority', dataIndex: 'priority', key: 'priority', render: (value: unknown) => readNumber(value) ?? '-' },
+    { title: 'enabled', dataIndex: 'enabled', key: 'enabled', render: (value: unknown) => String(Boolean(value)) },
+  ];
+  const requestPolicy = asRecord(spec.request_policy);
+  return (
+    <>
+      <Descriptions bordered size="small" column={2}>
+        <Descriptions.Item label="model_policy_id">{readString(spec.model_policy_id) ?? record.resource_id}</Descriptions.Item>
+        <Descriptions.Item label="version">{readNumber(spec.version) ?? record.version}</Descriptions.Item>
+        <Descriptions.Item label="protocol">{readString(spec.protocol) ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="targets">{targets.length}</Descriptions.Item>
+        <Descriptions.Item label="max_output_tokens">{readNumber(requestPolicy.max_output_tokens) ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="tool_choice_mode">{readString(requestPolicy.tool_choice_mode) ?? '-'}</Descriptions.Item>
+      </Descriptions>
+      <Table size="small" rowKey={(row) => readString(row.target_id) ?? JSON.stringify(row)} columns={columns} dataSource={targets} pagination={false} style={{ marginTop: 12 }} />
+    </>
   );
 }
 

@@ -81,8 +81,20 @@ function piReadiness(config: RuntimeConfig): { ready: boolean; status: string; e
   if (production && config.PI_AGENT_MODE !== 'model_gateway') {
     return { ready: false, status: 'not_ready', error: 'PI_AGENT_MODE=model_gateway is required in production' };
   }
-  if (config.PI_AGENT_MODE === 'model_gateway' && (!config.MODEL_GATEWAY_BASE_URL || !config.MODEL_GATEWAY_API_KEY || !config.MODEL_GATEWAY_MODEL)) {
+  if (config.PI_AGENT_MODE === 'model_gateway' && (!config.MODEL_GATEWAY_BASE_URL || !config.MODEL_GATEWAY_API_KEY)) {
     return { ready: false, status: 'not_ready', error: 'Model Gateway configuration is incomplete' };
+  }
+  if (production && config.PI_AGENT_MODE === 'model_gateway' && /^dev-only-|placeholder/iu.test(config.MODEL_GATEWAY_API_KEY)) {
+    return { ready: false, status: 'not_ready', error: 'Production Model Gateway API key must be provided by secret management' };
+  }
+  if (production && config.PI_AGENT_MODE === 'model_gateway' && !config.MODEL_GATEWAY_ALLOW_INSECURE_HTTP && !config.MODEL_GATEWAY_BASE_URL.startsWith('https://')) {
+    return { ready: false, status: 'not_ready', error: 'Production Model Gateway URL must use HTTPS unless insecure HTTP is explicitly allowed' };
+  }
+  if (production && config.PI_AGENT_MODE === 'model_gateway' && config.MODEL_GATEWAY_MODE !== 'openai_compatible') {
+    return { ready: false, status: 'not_ready', error: 'MODEL_GATEWAY_MODE=openai_compatible is required in production' };
+  }
+  if (production && config.PI_AGENT_MODE === 'model_gateway' && config.MODEL_GATEWAY_PROTOCOL !== 'openai_chat_completions') {
+    return { ready: false, status: 'not_ready', error: 'MODEL_GATEWAY_PROTOCOL=openai_chat_completions is required in production' };
   }
   return { ready: true, status: config.PI_AGENT_MODE };
 }

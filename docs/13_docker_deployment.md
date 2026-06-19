@@ -123,6 +123,8 @@ The override sets:
 ```text
 PI_AGENT_MODE=deterministic by default
 APP_ENV=development
+MODEL_GATEWAY_MODE=mock
+MODEL_GATEWAY_PROTOCOL=openai_chat_completions
 MODEL_GATEWAY_BASE_URL=http://mock-server:4100
 PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW=2
 ```
@@ -140,7 +142,8 @@ corepack pnpm smoke:pi-model-gateway-e2e
 ```
 
 The model-gateway smoke uses `PI_SMOKE_MODE=model_gateway` and
-`devtools/mock-server /v1/generate` to return structured tool-call blocks. The
+`devtools/mock-server /v1/chat/completions` to return OpenAI-compatible
+structured tool-call blocks. The
 worker must be restarted with `PI_AGENT_MODE=model_gateway` before running it:
 
 ```bash

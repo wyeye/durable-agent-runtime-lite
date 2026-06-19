@@ -1,3 +1,22 @@
+import { createHash } from 'node:crypto';
+import {
+  modelGatewayResponseSchema,
+  modelGatewayRequestSchema,
+  type AgentExecutionPlan,
+  type AgentRunRecord,
+  type ModelGatewayResponse,
+  type ModelTarget,
+} from '@dar/contracts';
+import {
+  ModelCallAttemptRepository,
+  ModelCallLogRepository,
+  type Database,
+  type ModelCallCreateOrGetResult,
+} from '@dar/db';
+import {
+  ModelGatewayClient,
+  type ModelGatewayAttemptCompleteEvent,
+} from '@dar/model-client';
 import {
   type AssistantMessage,
   type Context,
@@ -7,22 +26,30 @@ import {
   fauxAssistantMessage,
 } from '@earendil-works/pi-ai';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
-import { ModelGatewayClient, type ModelGenerateResponse } from '@dar/model-client';
+import type { Kysely } from 'kysely';
 
 export interface ModelGatewayPiStreamOptions {
+  db: Kysely<Database>;
   baseUrl: string;
-  apiKey: string;
-  model: string;
+  apiKey?: string;
+  executionPlan: AgentExecutionPlan;
+  agentRun: AgentRunRecord;
+  segmentIndex: number;
   timeoutMs: number;
   maxRetries: number;
+  maxResponseBytes: number;
+  allowInsecureHttp: boolean;
+  idempotencyHeader: string;
+  userAgent: string;
+  allowedModelIds?: Set<string>;
 }
 
-export function createModelGatewayModel(modelId: string): Model<string> {
+export function createModelGatewayModel(target: Pick<ModelTarget, 'model_id' | 'gateway_profile'>): Model<string> {
   return {
-    id: modelId,
-    name: modelId,
+    id: target.model_id,
+    name: target.model_id,
     api: 'dar-model-gateway',
-    provider: 'dar-model-gateway',
+    provider: target.gateway_profile,
     baseUrl: '',
     reasoning: false,
     input: ['text'],
@@ -33,31 +60,43 @@ export function createModelGatewayModel(modelId: string): Model<string> {
 }
 
 export function createModelGatewayPiStream(options: ModelGatewayPiStreamOptions): StreamFn {
+  const targets = resolveAllowedTargets(options);
   const client = new ModelGatewayClient({
     baseUrl: options.baseUrl,
-    apiKey: options.apiKey,
+    ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+    protocol: options.executionPlan.resolved_model_policy.protocol,
     timeoutMs: options.timeoutMs,
     maxRetries: options.maxRetries,
+    maxResponseBytes: options.maxResponseBytes,
+    allowInsecureHttp: options.allowInsecureHttp,
+    idempotencyHeader: options.idempotencyHeader,
+    userAgent: options.userAgent,
   });
+  let turnIndex = 0;
 
   return async (_model, context, streamOptions) => {
     const stream = createAssistantMessageEventStream();
-    void client.generate({
-      model: options.model,
-      messages: contextToGatewayMessages(context),
-      max_tokens: streamOptions?.maxTokens,
-      signal: streamOptions?.signal,
-    }).then((response) => {
-      const message = assistantMessageFromGatewayResponse(response, options.model);
-      pushFinal(stream, withGatewayModel(message, options.model));
+    const modelTurnIndex = turnIndex;
+    turnIndex += 1;
+    void callModelWithLedger({
+      ...options,
+      client,
+      targets,
+      context,
+      ...(streamOptions?.maxTokens !== undefined ? { maxTokens: streamOptions.maxTokens } : {}),
+      ...(streamOptions?.signal ? { signal: streamOptions.signal } : {}),
+      modelTurnIndex,
+    }).then(({ response, target }) => {
+      const message = assistantMessageFromGatewayResponse(response, target);
+      pushFinal(stream, withGatewayModel(message, target));
     }).catch((error: unknown) => {
       const message = withGatewayModel(fauxAssistantMessage([], {
         stopReason: streamOptions?.signal?.aborted ? 'aborted' : 'error',
         errorMessage: error instanceof Error ? error.message : 'Model Gateway request failed',
-      }), options.model);
+      }), firstTarget(targets));
       stream.push({ type: 'start', partial: message });
       stream.push({
-        type: message.stopReason === 'aborted' ? 'error' : 'error',
+        type: 'error',
         reason: message.stopReason === 'aborted' ? 'aborted' : 'error',
         error: message,
       });
@@ -65,6 +104,209 @@ export function createModelGatewayPiStream(options: ModelGatewayPiStreamOptions)
     });
     return stream;
   };
+}
+
+async function callModelWithLedger(input: ModelGatewayPiStreamOptions & {
+  client: ModelGatewayClient;
+  targets: ModelTarget[];
+  context: Context;
+  maxTokens?: number;
+  signal?: AbortSignal;
+  modelTurnIndex: number;
+}): Promise<{ response: ModelGatewayResponse; target: ModelTarget }> {
+  const logRepository = new ModelCallLogRepository(input.db);
+  const attemptRepository = new ModelCallAttemptRepository(input.db);
+  const requestBase = {
+    messages: contextToGatewayMessages(input.context),
+    tools: input.executionPlan.allowed_tools.map((tool) => ({
+      name: tool.tool_name,
+      description: tool.description,
+      input_schema: tool.input_schema,
+    })),
+    tool_choice: input.executionPlan.resolved_model_policy.request_policy.tool_choice_mode,
+    response_format: input.executionPlan.resolved_model_policy.request_policy.response_format,
+    temperature: input.executionPlan.resolved_model_policy.request_policy.temperature,
+    top_p: input.executionPlan.resolved_model_policy.request_policy.top_p,
+    max_output_tokens: input.maxTokens ?? input.executionPlan.resolved_model_policy.request_policy.max_output_tokens,
+    parallel_tool_calls: input.executionPlan.resolved_model_policy.request_policy.allow_parallel_tool_calls,
+    request_id: `${input.agentRun.agent_run_id}:${input.segmentIndex}:${input.modelTurnIndex}`,
+    task_run_id: input.agentRun.task_run_id,
+    agent_run_id: input.agentRun.agent_run_id,
+  };
+
+  let lastError: unknown;
+  for (const [fallbackIndex, target] of input.targets.entries()) {
+    const request = modelGatewayRequestSchema.parse({
+      ...requestBase,
+      model_request_key: buildModelRequestKey(input.agentRun.agent_run_id, input.segmentIndex, input.modelTurnIndex, input.executionPlan.model_policy_hash, target.target_id),
+      model: target.model_id,
+    });
+    const requestHash = hashJson(request);
+    const createResult = await logRepository.createOrGet({
+      model_request_key: request.model_request_key,
+      tenant_id: input.agentRun.tenant_id,
+      user_id: input.agentRun.user_id,
+      task_run_id: input.agentRun.task_run_id,
+      workflow_id: input.agentRun.workflow_id,
+      ...(input.agentRun.workflow_run_id ? { workflow_run_id: input.agentRun.workflow_run_id } : {}),
+      agent_run_id: input.agentRun.agent_run_id,
+      segment_index: input.segmentIndex,
+      model_turn_index: input.modelTurnIndex,
+      model_policy_id: input.executionPlan.model_policy_id,
+      model_policy_version: input.executionPlan.model_policy_version,
+      model_policy_hash: input.executionPlan.model_policy_hash,
+      protocol: input.executionPlan.resolved_model_policy.protocol,
+      request_hash: requestHash,
+      fallback_index: fallbackIndex,
+    });
+    if (createResult.decision === 'conflict') {
+      throw new Error(`MODEL_CALL_IDEMPOTENCY_CONFLICT: ${request.model_request_key}`);
+    }
+    if (createResult.decision === 'replay') {
+      return { response: responseFromRecordedCall(createResult), target };
+    }
+
+    const attempts = new Map<number, string>();
+    try {
+      await logRepository.markRunning(createResult.record.model_call_id, {
+        targetId: target.target_id,
+        provider: target.gateway_profile,
+        modelId: target.model_id,
+        fallbackIndex,
+      });
+      const response = await input.client.call(request, {
+        protocol: input.executionPlan.resolved_model_policy.protocol,
+        target,
+        ...(input.signal ? { signal: input.signal } : {}),
+        onAttemptStart: async (event) => {
+          const attempt = await attemptRepository.startAttempt({
+            model_call_id: createResult.record.model_call_id,
+            attempt_index: event.attemptIndex,
+            target_id: event.targetId,
+            provider: event.provider,
+            model_id: event.modelId,
+          });
+          attempts.set(event.attemptIndex, attempt.attempt_id);
+        },
+        onAttemptComplete: async (event) => {
+          await completeAttempt(attemptRepository, attempts, event);
+        },
+      });
+      await logRepository.markSucceeded(createResult.record.model_call_id, {
+        targetId: target.target_id,
+        provider: target.gateway_profile,
+        modelId: response.model ?? target.model_id,
+        attemptCount: attempts.size,
+        fallbackIndex,
+        finishReason: response.finish_reason,
+        ...(response.response_id ? { responseId: response.response_id } : {}),
+        usage: normalizeUsage(response),
+        responseHash: hashJson(response),
+        safeResponseJson: safeResponse(response),
+      });
+      return { response, target };
+    } catch (error) {
+      lastError = error;
+      await logRepository.markFailed(createResult.record.model_call_id, {
+        status: input.signal?.aborted ? 'cancelled' : errorClass(error) === 'timeout' ? 'timed_out' : 'failed',
+        attemptCount: attempts.size,
+        fallbackIndex,
+        errorClass: errorClass(error),
+        errorCode: errorCode(error),
+      });
+      if (!input.executionPlan.resolved_model_policy.fallback_policy.enabled || !errorEligibleForFallback(error, input.executionPlan.resolved_model_policy.fallback_policy.eligible_error_classes)) {
+        throw error;
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Model Gateway call failed');
+}
+
+function resolveAllowedTargets(options: ModelGatewayPiStreamOptions): ModelTarget[] {
+  const targets = [...options.executionPlan.resolved_model_policy.resolved_targets].sort((left, right) =>
+    left.priority === right.priority ? left.target_id.localeCompare(right.target_id) : left.priority - right.priority);
+  const filtered = options.allowedModelIds && options.allowedModelIds.size > 0
+    ? targets.filter((target) => options.allowedModelIds?.has(target.model_id) || options.allowedModelIds?.has(target.target_id))
+    : targets;
+  if (filtered.length === 0) {
+    throw new Error('AGENT_MODEL_DENIED_BY_TENANT_POLICY: no ModelPolicy target is allowed by tenant policy');
+  }
+  return filtered;
+}
+
+function firstTarget(targets: ModelTarget[]): ModelTarget {
+  const target = targets[0];
+  if (!target) {
+    throw new Error('AGENT_MODEL_DENIED_BY_TENANT_POLICY: no ModelPolicy target is available');
+  }
+  return target;
+}
+
+async function completeAttempt(
+  repository: ModelCallAttemptRepository,
+  attempts: Map<number, string>,
+  event: ModelGatewayAttemptCompleteEvent,
+): Promise<void> {
+  const attemptId = attempts.get(event.attemptIndex);
+  if (!attemptId) {
+    return;
+  }
+  await repository.completeAttempt(attemptId, {
+    status: event.status,
+    ...(event.httpStatus !== undefined ? { http_status: event.httpStatus } : {}),
+    ...(event.errorClass ? { error_class: event.errorClass } : {}),
+    ...(event.errorCode ? { error_code: event.errorCode } : {}),
+    latency_ms: event.latencyMs,
+    ...(event.responseId ? { response_id: event.responseId } : {}),
+  });
+}
+
+function responseFromRecordedCall(createResult: Extract<ModelCallCreateOrGetResult, { decision: 'replay' }>): ModelGatewayResponse {
+  const safe = createResult.record.safe_response_json;
+  return modelGatewayRequestSafeResponseSchema.parse(safe);
+}
+
+const modelGatewayRequestSafeResponseSchema = modelGatewayResponseSchema;
+
+function safeResponse(response: ModelGatewayResponse): Record<string, unknown> {
+  return {
+    response_id: response.response_id,
+    model: response.model,
+    provider: response.provider,
+    finish_reason: response.finish_reason,
+    usage: normalizeUsage(response),
+    message: {
+      role: 'assistant',
+      content: response.message.content.map((block) => block.type === 'text'
+        ? { type: 'text', text: block.text.slice(0, 4000) }
+        : { type: 'tool_call', id: block.id, name: block.name, arguments: block.arguments }),
+    },
+  };
+}
+
+function normalizeUsage(response: ModelGatewayResponse): { input_tokens: number; output_tokens: number; total_tokens: number; estimated_total_cost?: number } {
+  const inputTokens = response.usage?.input_tokens ?? 0;
+  const outputTokens = response.usage?.output_tokens ?? 0;
+  const totalTokens = response.usage?.total_tokens ?? inputTokens + outputTokens;
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens,
+    ...(response.usage?.estimated_total_cost !== undefined ? { estimated_total_cost: response.usage.estimated_total_cost } : {}),
+  };
+}
+
+function buildModelRequestKey(agentRunId: string, segmentIndex: number, modelTurnIndex: number, modelPolicyHash: string, targetId: string): string {
+  return [
+    'model',
+    sanitizeKey(agentRunId),
+    'segment',
+    String(segmentIndex),
+    'turn',
+    String(modelTurnIndex),
+    modelPolicyHash.slice(0, 16),
+    sanitizeKey(targetId),
+  ].join(':');
 }
 
 function pushFinal(stream: ReturnType<typeof createAssistantMessageEventStream>, message: AssistantMessage): void {
@@ -86,16 +328,16 @@ function pushFinal(stream: ReturnType<typeof createAssistantMessageEventStream>,
   stream.end(message);
 }
 
-function withGatewayModel(message: AssistantMessage, modelId: string): AssistantMessage {
+function withGatewayModel(message: AssistantMessage, target: Pick<ModelTarget, 'model_id' | 'gateway_profile'>): AssistantMessage {
   return {
     ...message,
     api: 'dar-model-gateway',
-    provider: 'dar-model-gateway',
-    model: modelId,
+    provider: target.gateway_profile,
+    model: target.model_id,
   };
 }
 
-function assistantMessageFromGatewayResponse(response: ModelGenerateResponse, modelId: string): AssistantMessage {
+function assistantMessageFromGatewayResponse(response: ModelGatewayResponse, target: Pick<ModelTarget, 'model_id' | 'gateway_profile'>): AssistantMessage {
   const content = response.message.content.map((block) => {
     if (block.type === 'text') {
       return { type: 'text' as const, text: block.text };
@@ -107,16 +349,17 @@ function assistantMessageFromGatewayResponse(response: ModelGenerateResponse, mo
       arguments: block.arguments,
     };
   });
+  const usage = normalizeUsage(response);
   return {
     ...fauxAssistantMessage(content, {
       stopReason: stopReasonFromFinishReason(response.finish_reason),
     }),
-    model: response.model ?? modelId,
-    usage: usageFromGateway(response.usage),
+    model: response.model ?? target.model_id,
+    usage: usageFromGateway(usage),
   };
 }
 
-function stopReasonFromFinishReason(finishReason: ModelGenerateResponse['finish_reason']): AssistantMessage['stopReason'] {
+function stopReasonFromFinishReason(finishReason: ModelGatewayResponse['finish_reason']): AssistantMessage['stopReason'] {
   switch (finishReason) {
     case 'tool_call':
       return 'toolUse';
@@ -136,7 +379,7 @@ function doneReason(stopReason: AssistantMessage['stopReason']): 'stop' | 'lengt
   return 'stop';
 }
 
-function usageFromGateway(usage: ModelGenerateResponse['usage']): Usage {
+function usageFromGateway(usage: { input_tokens: number; output_tokens: number; total_tokens: number; estimated_total_cost?: number }): Usage {
   return {
     input: usage.input_tokens,
     output: usage.output_tokens,
@@ -148,7 +391,7 @@ function usageFromGateway(usage: ModelGenerateResponse['usage']): Usage {
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
-      total: 0,
+      total: usage.estimated_total_cost ?? 0,
     },
   };
 }
@@ -186,4 +429,42 @@ function contentToText(content: unknown): string {
     }
     return [];
   }).join('\n');
+}
+
+function hashJson(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(sortJson(value))).digest('hex');
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortJson);
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, sortJson(entry)]),
+    );
+  }
+  return value;
+}
+
+function errorClass(error: unknown): string {
+  return typeof error === 'object' && error !== null && 'errorClass' in error && typeof error.errorClass === 'string'
+    ? error.errorClass
+    : 'unknown';
+}
+
+function errorCode(error: unknown): string {
+  return typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+    ? error.code
+    : error instanceof Error ? error.name : 'MODEL_GATEWAY_FAILED';
+}
+
+function errorEligibleForFallback(error: unknown, eligibleClasses: string[]): boolean {
+  return eligibleClasses.includes(errorClass(error));
+}
+
+function sanitizeKey(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_.-]/gu, '-');
 }

@@ -315,7 +315,7 @@ export async function piDurableAgentWorkflow(
     ...(input.parent_workflow_id ? { parent_workflow_id: input.parent_workflow_id } : {}),
     execution_mode: input.execution_mode ?? 'mediated_tool_call',
   });
-  if (policy && !modelAllowedByPolicy(policy, executionPlan.model_policy)) {
+  if (policy && !modelAllowedByPolicy(policy, executionPlan)) {
     return await failAgentRun(
       agentRun.agent_run_id,
       'AGENT_MODEL_DENIED_BY_TENANT_POLICY',
@@ -1032,8 +1032,15 @@ function resolvePlannedAgentTool(plan: AgentExecutionPlan, proposal: ProposedToo
     : undefined;
 }
 
-function modelAllowedByPolicy(policy: EffectiveTenantPolicy, modelPolicy: string): boolean {
-  return policy.allowed_models.some((rule) => rule.model_id === modelPolicy);
+function modelAllowedByPolicy(policy: EffectiveTenantPolicy, executionPlan: AgentExecutionPlan): boolean {
+  const aliases = new Set([
+    executionPlan.model_policy,
+    executionPlan.model_policy_id,
+    `${executionPlan.model_policy_id}@${executionPlan.model_policy_version}`,
+    `${executionPlan.model_policy_id}@${executionPlan.model_policy_version}#${executionPlan.model_policy_hash}`,
+    ...executionPlan.resolved_model_policy.resolved_targets.flatMap((target) => [target.target_id, target.model_id]),
+  ]);
+  return policy.allowed_models.some((rule) => aliases.has(rule.model_id));
 }
 
 function handoffAllowedByPolicy(policy: EffectiveTenantPolicy, targetExecutionPlanRef: string): boolean {

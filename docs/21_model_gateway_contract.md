@@ -1,7 +1,8 @@
 # Model Gateway Contract
 
-`packages/model-client` defines the local Model Gateway contract used by
-`PI_AGENT_MODE=model_gateway`.
+`packages/model-client` defines the Model Gateway contract used by
+`PI_AGENT_MODE=model_gateway`. It supports the legacy `dar_generate` test
+contract and the production-oriented OpenAI-compatible Chat Completions adapter.
 
 ## Request
 
@@ -92,6 +93,7 @@ The adapter never logs API keys or full prompts.
 GET /healthz
 GET /readyz
 POST /v1/generate
+POST /v1/chat/completions
 ```
 
 Supported deterministic scenarios:
@@ -111,15 +113,19 @@ The mock gateway chooses a scenario from message content. When it later sees a
 tool-role message, it returns a final answer. It is available only through the
 dev/test Docker override and is not a production service.
 
+The OpenAI-compatible endpoint returns `choices[].message.tool_calls` with JSON
+string arguments, matching the provider shape consumed by the adapter.
+
 ## Production Mode
 
 Production readiness requires:
 
 ```text
 PI_AGENT_MODE=model_gateway
+MODEL_GATEWAY_MODE=openai_compatible
+MODEL_GATEWAY_PROTOCOL=openai_chat_completions
 MODEL_GATEWAY_BASE_URL
 MODEL_GATEWAY_API_KEY
-MODEL_GATEWAY_MODEL
 ```
 
 `PI_AGENT_MODE=deterministic` is rejected in production. Missing or invalid
