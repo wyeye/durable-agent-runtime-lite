@@ -2,6 +2,8 @@
 
 Last updated for AR-1.2C-FINAL completion: Tenant Policy Production Closure, operational visibility, readiness hardening, admission reconcile, audit idempotency, and full regression gates.
 
+CI-HOTFIX-1 local validation note: GitHub Actions pnpm bootstrap verification completed locally; remote CI/Integration still require verification after this hotfix is committed and pushed.
+
 ## AR-1.2C Status
 
 **COMPLETE**
