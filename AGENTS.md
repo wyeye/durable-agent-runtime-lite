@@ -75,6 +75,7 @@ Responsibilities:
 - Human task console.
 - Audit query UI.
 - Runtime dashboard and evaluation views.
+- Read-only Tenant Policy Snapshot and Tenant Agent Admission operations views.
 
 Default stack:
 
@@ -90,6 +91,7 @@ Rules:
 - Do not call tools directly from the frontend.
 - Do not duplicate schemas in the frontend; import or generate from shared contracts.
 - Flow editing may start with JSON editor or textarea; do not implement a complex visual workflow designer unless explicitly requested.
+- Tenant Policy Snapshot and Tenant Agent Admission are runtime operations resources, not editable Registry resources; control-plane may read them but must not create, update or delete them.
 
 ---
 

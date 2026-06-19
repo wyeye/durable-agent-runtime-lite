@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import { Client, Connection, WorkflowNotFoundError } from '@temporalio/client';
 import {
   AuditEventRepository,
@@ -12,14 +13,14 @@ const databaseUrl = process.env.DATABASE_URL ?? 'postgres://dar:dar_local_passwo
 const temporalAddress = process.env.TEMPORAL_ADDRESS ?? 'localhost:7233';
 const temporalNamespace = process.env.TEMPORAL_NAMESPACE ?? 'default';
 
-interface CliOptions {
+export interface CliOptions {
   dryRun: boolean;
   tenantId?: string;
   batchSize: number;
   staleAfterMs: number;
 }
 
-interface ReconcileItem {
+export interface ReconcileItem {
   admission_id: string;
   tenant_id: string;
   task_run_id: string;
@@ -31,17 +32,34 @@ interface ReconcileItem {
   task_status?: string;
 }
 
+export interface ReconcileTaskLookup {
+  get(taskRunId: string): Promise<{ status: string } | undefined>;
+}
+
+export interface ReconcileWorkflowStatus {
+  status: 'open' | 'closed' | 'unknown';
+  name: string;
+  reason: string;
+}
+
+export interface ReconcileWorkflowLookup {
+  describe(workflowId: string, runId?: string): Promise<ReconcileWorkflowStatus>;
+}
+
 const terminalWorkflowStatuses = new Set(['COMPLETED', 'FAILED', 'CANCELLED', 'TERMINATED', 'TIMED_OUT']);
 const terminalTaskStatuses = new Set(['completed', 'failed']);
 
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
   const db = createDb({ databaseUrl });
+  let temporalConnection: Connection | undefined;
   try {
     const admissionRepository = new TenantAgentAdmissionRepository(db);
     const taskRepository = new TaskRunRepository(db);
     const auditRepository = new AuditEventRepository(db);
     const temporal = await connectTemporal();
+    const workflowLookup = new TemporalWorkflowStatusLookup(temporal.client);
+    temporalConnection = temporal.connection;
     const staleBefore = new Date(Date.now() - options.staleAfterMs).toISOString();
     const candidates = await admissionRepository.reconcileCandidates({
       ...(options.tenantId ? { tenantId: options.tenantId } : {}),
@@ -51,10 +69,15 @@ async function main(): Promise<void> {
 
     const items: ReconcileItem[] = [];
     for (const admission of candidates) {
-      const decision = await decide(admission, taskRepository, temporal);
+      const decision = await decideAdmissionReconcile(admission, taskRepository, workflowLookup);
       if (decision.action === 'would_reconcile' && !options.dryRun) {
-        await admissionRepository.markReconciled(admission.admission_id, decision.reason);
+        const reconciled = await admissionRepository.markReconciled(admission.admission_id, decision.reason);
+        if (!reconciled || reconciled.status !== 'reconciled') {
+          items.push({ ...decision, action: 'skipped', reason: 'already_reconciled_or_released' });
+          continue;
+        }
         await auditRepository.append({
+          event_key: `agent.admission.reconciled:${admission.tenant_id}:${admission.admission_id}`,
           tenant_id: admission.tenant_id,
           actor_id: 'system:admission-reconcile',
           action: 'agent.admission.reconciled',
@@ -67,7 +90,7 @@ async function main(): Promise<void> {
             task_run_id: admission.task_run_id,
             workflow_id: admission.workflow_id,
             workflow_run_id: admission.workflow_run_id,
-            admission_id: admission.admission_id,
+            tenant_admission_id: admission.admission_id,
             workflow_status: decision.workflow_status,
             task_status: decision.task_status,
           },
@@ -89,14 +112,15 @@ async function main(): Promise<void> {
       items,
     }, null, 2));
   } finally {
+    await temporalConnection?.close();
     await closeDb(db);
   }
 }
 
-async function decide(
+export async function decideAdmissionReconcile(
   admission: TenantAgentAdmission,
-  taskRepository: TaskRunRepository,
-  temporal: Client | undefined,
+  taskRepository: ReconcileTaskLookup,
+  workflowLookup: ReconcileWorkflowLookup,
 ): Promise<ReconcileItem> {
   const base = {
     admission_id: admission.admission_id,
@@ -107,8 +131,8 @@ async function decide(
   };
   const task = await taskRepository.get(admission.task_run_id);
   const taskStatus = task?.status;
-  const workflowStatus = admission.workflow_id && temporal
-    ? await describeWorkflowStatus(temporal, admission.workflow_id, admission.workflow_run_id)
+  const workflowStatus = admission.workflow_id
+    ? await workflowLookup.describe(admission.workflow_id, admission.workflow_run_id)
     : undefined;
 
   if (workflowStatus && workflowStatus.status === 'open') {
@@ -118,6 +142,9 @@ async function decide(
     return { ...base, action: 'would_reconcile', reason: `workflow_${workflowStatus.name.toLowerCase()}`, workflow_status: workflowStatus.name, ...(taskStatus ? { task_status: taskStatus } : {}) };
   }
   if (workflowStatus && workflowStatus.status === 'unknown') {
+    if (workflowStatus.name === 'NOT_FOUND' && terminalTaskStatuses.has(taskStatus ?? '')) {
+      return { ...base, action: 'would_reconcile', reason: 'workflow_not_found_terminal_task', workflow_status: workflowStatus.name, ...(taskStatus ? { task_status: taskStatus } : {}) };
+    }
     return { ...base, action: 'skipped', reason: workflowStatus.reason, workflow_status: workflowStatus.name, ...(taskStatus ? { task_status: taskStatus } : {}) };
   }
   if (terminalTaskStatuses.has(taskStatus ?? '')) {
@@ -126,20 +153,24 @@ async function decide(
   return { ...base, action: 'skipped', reason: task ? 'task_not_terminal' : 'task_not_found', ...(taskStatus ? { task_status: taskStatus } : {}) };
 }
 
-async function connectTemporal(): Promise<Client | undefined> {
-  try {
-    const connection = await Connection.connect({ address: temporalAddress });
-    return new Client({ connection, namespace: temporalNamespace });
-  } catch {
-    return undefined;
+async function connectTemporal(): Promise<{ client: Client; connection: Connection }> {
+  const connection = await Connection.connect({ address: temporalAddress });
+  return { client: new Client({ connection, namespace: temporalNamespace }), connection };
+}
+
+export class TemporalWorkflowStatusLookup implements ReconcileWorkflowLookup {
+  constructor(private readonly client: Client) {}
+
+  describe(workflowId: string, runId?: string): Promise<ReconcileWorkflowStatus> {
+    return describeWorkflowStatus(this.client, workflowId, runId);
   }
 }
 
-async function describeWorkflowStatus(
+export async function describeWorkflowStatus(
   client: Client,
   workflowId: string,
   runId?: string,
-): Promise<{ status: 'open' | 'closed' | 'unknown'; name: string; reason: string }> {
+): Promise<ReconcileWorkflowStatus> {
   try {
     const description = await client.workflow.getHandle(workflowId, runId).describe();
     const name = description.status.name;
@@ -158,9 +189,9 @@ async function describeWorkflowStatus(
   }
 }
 
-function parseOptions(args: string[]): CliOptions {
+export function parseOptions(args: string[]): CliOptions {
   const dryRun = !args.includes('--apply');
-  const tenantId = readFlag(args, '--tenant');
+  const tenantId = readFlag(args, '--tenant-id') ?? readFlag(args, '--tenant');
   return {
     dryRun,
     ...(tenantId ? { tenantId } : {}),
@@ -183,10 +214,15 @@ function readPositiveInt(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-main().catch((error: unknown) => {
-  console.error(JSON.stringify({
-    ok: false,
-    error: error instanceof Error ? error.message : 'admission reconcile failed',
-  }, null, 2));
-  process.exitCode = 1;
-});
+const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
+
+if (isMain) {
+  main().catch((error: unknown) => {
+    console.error(JSON.stringify({
+      ok: false,
+      error: 'admission reconcile failed',
+      code: error instanceof Error && error.name === 'TransportError' ? 'TEMPORAL_UNAVAILABLE' : 'RECONCILE_FAILED',
+    }, null, 2));
+    process.exitCode = 1;
+  });
+}

@@ -92,7 +92,7 @@ export async function configDrivenWorkflow(input: ConfigDrivenWorkflowArgs): Pro
     ...(input.tenant_admission_id ? { tenant_admission_id: input.tenant_admission_id } : {}),
   };
 
-  await updateTaskRunStatusActivity({ ...context, status: 'running' });
+  await updateOwnedTaskRunStatus(input, { ...context, status: 'running' });
 
   try {
     if (!input.execution_plan_ref) {
@@ -151,7 +151,7 @@ export async function configDrivenWorkflow(input: ConfigDrivenWorkflowArgs): Pro
       },
     });
 
-    await updateTaskRunStatusActivity({
+    await updateOwnedTaskRunStatus(input, {
       ...context,
       status: result.status,
       ...(result.error_code ? { error_code: result.error_code } : {}),
@@ -159,7 +159,7 @@ export async function configDrivenWorkflow(input: ConfigDrivenWorkflowArgs): Pro
     });
     return result;
   } catch (error) {
-    await updateTaskRunStatusActivity({
+    await updateOwnedTaskRunStatus(input, {
       ...context,
       status: 'failed',
       error_code: 'WORKFLOW_FAILED',
@@ -229,6 +229,7 @@ async function runAgentChildWorkflow(
       task_run_id: context.task_run_id,
       parent_workflow_id: context.workflow_id,
       agent_execution_plan_ref: plannedAgent.agent_execution_plan_ref,
+      task_status_owner: false,
       execution_mode: 'mediated_tool_call',
       initial_user_input: JSON.stringify(input),
       ...(childPolicy ? { tenant_policy_snapshot_ref: childPolicy.snapshot_ref } : context.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: context.tenant_policy_snapshot_ref } : {}),
@@ -278,6 +279,16 @@ function agentResultFromDurableResult(result: PiDurableAgentWorkflowResult): Age
     usage: result.usage,
     error: result.error ?? { code: 'AGENT_RUN_FAILED', message: `Agent run ended with ${result.status}` },
   };
+}
+
+async function updateOwnedTaskRunStatus(
+  input: ConfigDrivenWorkflowArgs,
+  status: Parameters<typeof updateTaskRunStatusActivity>[0],
+): Promise<void> {
+  if (input.task_status_owner === false) {
+    return;
+  }
+  await updateTaskRunStatusActivity(status);
 }
 
 function sanitizeWorkflowId(value: string): string {

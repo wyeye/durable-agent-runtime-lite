@@ -14,6 +14,8 @@ const items = [
   { key: '/agent-runs', label: <Link to="/agent-runs">AgentRuns</Link> },
   { key: '/audit-events', label: <Link to="/audit-events">Audit</Link> },
   { key: '/tool-calls', label: <Link to="/tool-calls">ToolCalls</Link> },
+  { key: '/policy-snapshots', label: <Link to="/policy-snapshots">Policy Snapshots</Link> },
+  { key: '/tenant-admissions', label: <Link to="/tenant-admissions">Tenant Admissions</Link> },
 ];
 
 export function SideNav() {

@@ -36,6 +36,10 @@
     "smoke:tenant-policy-e2e": "TENANT_POLICY_SMOKE_SCENARIO=policy tsx scripts/smoke-tenant-policy-e2e.ts",
     "smoke:tenant-policy-snapshot-e2e": "TENANT_POLICY_SMOKE_SCENARIO=snapshot tsx scripts/smoke-tenant-policy-e2e.ts",
     "smoke:tenant-concurrency-e2e": "TENANT_POLICY_SMOKE_SCENARIO=concurrency tsx scripts/smoke-tenant-policy-e2e.ts",
+    "smoke:tenant-flow-agent-e2e": "TENANT_DEEP_SMOKE_SCENARIO=flow_agent tsx scripts/smoke-tenant-deep-chain-e2e.ts",
+    "smoke:tenant-handoff-lineage-e2e": "TENANT_DEEP_SMOKE_SCENARIO=handoff_lineage SMOKE_TENANT_ID=default tsx scripts/smoke-tenant-deep-chain-e2e.ts",
+    "smoke:tenant-policy-crash-snapshot-e2e": "TENANT_DEEP_SMOKE_SCENARIO=policy_crash_snapshot tsx scripts/smoke-tenant-deep-chain-e2e.ts",
+    "smoke:tenant-admission-reconcile-e2e": "TENANT_DEEP_SMOKE_SCENARIO=admission_reconcile tsx scripts/smoke-tenant-deep-chain-e2e.ts",
     "temporal:export-replay-fixtures": "tsx scripts/export-temporal-replay-fixtures.ts"
   },
   "devDependencies": {

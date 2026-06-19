@@ -44,6 +44,7 @@ export async function genericAgentWorkflow(input: GenericAgentWorkflowInput): Pr
         task_run_id: input.task_run_id,
         parent_workflow_id: context.workflow_id,
         agent_execution_plan_ref: input.agent_execution_plan_ref,
+        task_status_owner: false,
         execution_mode: 'mediated_tool_call',
         initial_user_input: typeof input.input === 'string' ? input.input : JSON.stringify(input.input ?? {}),
         ...(input.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: input.tenant_policy_snapshot_ref } : {}),

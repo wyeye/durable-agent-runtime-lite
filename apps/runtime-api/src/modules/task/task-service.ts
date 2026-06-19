@@ -600,6 +600,8 @@ export interface RuntimeApiTaskServiceHandle {
   taskService: TaskService;
   humanTaskService: HumanTaskService;
   agentRunService: AgentRunService;
+  db?: Kysely<Database>;
+  routeSource?: RouteSpecSource;
   close(): Promise<void>;
 }
 
@@ -610,9 +612,10 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
 
   if (config.RUNTIME_API_ROUTE_SOURCE === 'db') {
     const db: Kysely<Database> = createDb({ databaseUrl: config.DATABASE_URL });
+    const routeSource = new DbRouteSpecSource(db);
     return {
       taskService: new TaskService({
-        routeSource: new DbRouteSpecSource(db),
+        routeSource,
         taskStore: new DbTaskRunStore(new TaskRunRepository(db)),
         workflowStarter: createWorkflowStarter(config),
         executionPlanResolver: new DbExecutionPlanResolver(db),
@@ -635,17 +638,22 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
         new DbAgentRunStore(new AgentRunRepository(db)),
         new DbAgentStepStore(new AgentStepRepository(db)),
       ),
+      db,
+      routeSource,
       close: async () => closeDb(db),
     };
   }
 
+  const routeSource = new MemoryRouteSpecSource();
   return {
     taskService: new TaskService({
+      routeSource,
       workflowStarter: createWorkflowStarter(config),
       allowMockRouteFallback: true,
     }),
     humanTaskService: new HumanTaskService(),
     agentRunService: new AgentRunService(),
+    routeSource,
     close: async () => undefined,
   };
 }

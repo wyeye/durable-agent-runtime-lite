@@ -11,7 +11,11 @@ import type {
   RollbackResourceRequest,
   RouteSpec,
   SpecStatus,
+  TenantAgentAdmission,
+  TenantAgentAdmissionQuery,
+  TenantPolicySnapshotQuery,
   TenantRuntimePolicy,
+  TenantRuntimePolicySnapshot,
   ToolManifest,
 } from '@dar/contracts';
 import {
@@ -20,6 +24,8 @@ import {
   promptDefinitionSchema,
   registryListRequestSchema,
   routeSpecSchema,
+  tenantAgentAdmissionQuerySchema,
+  tenantPolicySnapshotQuerySchema,
   tenantRuntimePolicySchema,
   toolManifestSchema,
   type PublishResourceRequest,
@@ -31,6 +37,8 @@ import {
   hashTenantRuntimePolicy,
   PromptDefinitionRepository,
   RouteConfigRepository,
+  TenantAgentAdmissionRepository,
+  TenantRuntimePolicySnapshotRepository,
   TenantRuntimePolicyRepository,
   TenantRuntimePolicyReleaseService,
   TenantRuntimePolicyValidationService,
@@ -73,6 +81,10 @@ export interface RegistryApi {
   listReleases(input: { tenantId: string; resourceType?: RegistryResourceType; resourceId?: string; action?: CapabilityRelease['action']; operatorId?: string; startTime?: string; endTime?: string; page: number; pageSize: number }): Promise<PaginatedResponse<CapabilityRelease>>;
   getRelease(releaseId: string): Promise<CapabilityRelease>;
   registryCounts(tenantId: string): Promise<{ flows_published: number; routes_published: number; tools_published: number; agents_published: number; prompts_published: number }>;
+  listTenantPolicySnapshots(input: unknown, actor: Pick<ActorOptions, 'tenantId'>): Promise<PaginatedResponse<TenantRuntimePolicySnapshot>>;
+  getTenantPolicySnapshot(snapshotId: string, actor: Pick<ActorOptions, 'tenantId'>): Promise<TenantRuntimePolicySnapshot>;
+  listTenantAgentAdmissions(input: unknown, actor: Pick<ActorOptions, 'tenantId'>): Promise<PaginatedResponse<TenantAgentAdmission>>;
+  getTenantAgentAdmission(admissionId: string, actor: Pick<ActorOptions, 'tenantId'>): Promise<TenantAgentAdmission>;
 }
 
 export class RegistryApiService implements RegistryApi {
@@ -82,6 +94,8 @@ export class RegistryApiService implements RegistryApi {
   readonly agents: AgentSpecRepository;
   readonly prompts: PromptDefinitionRepository;
   readonly tenantPolicies: TenantRuntimePolicyRepository;
+  readonly tenantPolicySnapshots: TenantRuntimePolicySnapshotRepository;
+  readonly tenantAgentAdmissions: TenantAgentAdmissionRepository;
   readonly tenantPolicyValidation: TenantRuntimePolicyValidationService;
   readonly tenantPolicyRelease: TenantRuntimePolicyReleaseService;
   readonly releases: CapabilityReleaseRepository;
@@ -95,6 +109,8 @@ export class RegistryApiService implements RegistryApi {
     this.agents = new AgentSpecRepository(db);
     this.prompts = new PromptDefinitionRepository(db);
     this.tenantPolicies = new TenantRuntimePolicyRepository(db);
+    this.tenantPolicySnapshots = new TenantRuntimePolicySnapshotRepository(db);
+    this.tenantAgentAdmissions = new TenantAgentAdmissionRepository(db);
     this.tenantPolicyValidation = new TenantRuntimePolicyValidationService(db);
     this.tenantPolicyRelease = new TenantRuntimePolicyReleaseService(db);
     this.releases = new CapabilityReleaseRepository(db);
@@ -448,6 +464,45 @@ export class RegistryApiService implements RegistryApi {
     };
   }
 
+  async listTenantPolicySnapshots(input: unknown, actor: Pick<ActorOptions, 'tenantId'>): Promise<PaginatedResponse<TenantRuntimePolicySnapshot>> {
+    const query = tenantPolicySnapshotQuerySchema.parse(input);
+    const snapshots = await this.tenantPolicySnapshots.listByTenant(actor.tenantId, snapshotListOptions(query));
+    return {
+      items: snapshots,
+      page: query.page,
+      page_size: query.page_size,
+    };
+  }
+
+  async getTenantPolicySnapshot(snapshotId: string, actor: Pick<ActorOptions, 'tenantId'>): Promise<TenantRuntimePolicySnapshot> {
+    const snapshot = await this.tenantPolicySnapshots.getByRef(snapshotId, { tenantId: actor.tenantId })
+      ?? await this.tenantPolicySnapshots.getByHash(snapshotId, { tenantId: actor.tenantId })
+      ?? (await this.tenantPolicySnapshots.listByTenant(actor.tenantId, { limit: 100 }))
+        .find((candidate) => candidate.snapshot_id === snapshotId);
+    if (!snapshot) {
+      throw new ControlPlaneHttpError(404, 'TENANT_POLICY_SNAPSHOT_NOT_FOUND', 'Tenant policy snapshot not found');
+    }
+    return snapshot;
+  }
+
+  async listTenantAgentAdmissions(input: unknown, actor: Pick<ActorOptions, 'tenantId'>): Promise<PaginatedResponse<TenantAgentAdmission>> {
+    const query = tenantAgentAdmissionQuerySchema.parse(input);
+    const admissions = await this.tenantAgentAdmissions.listByTenant(actor.tenantId, admissionListOptions(query));
+    return {
+      items: admissions,
+      page: query.page,
+      page_size: query.page_size,
+    };
+  }
+
+  async getTenantAgentAdmission(admissionId: string, actor: Pick<ActorOptions, 'tenantId'>): Promise<TenantAgentAdmission> {
+    const admission = await this.tenantAgentAdmissions.get(admissionId);
+    if (!admission || admission.tenant_id !== actor.tenantId) {
+      throw new ControlPlaneHttpError(404, 'TENANT_AGENT_ADMISSION_NOT_FOUND', 'Tenant agent admission not found');
+    }
+    return admission;
+  }
+
   private repository(resourceType: RegistryResourceType) {
     if (resourceType === 'flow') {
       return this.flows;
@@ -471,6 +526,33 @@ export class RegistryApiService implements RegistryApi {
     }
     return release;
   }
+}
+
+function snapshotListOptions(query: TenantPolicySnapshotQuery) {
+  return {
+    ...(query.execution_plan_ref ? { executionPlanRef: query.execution_plan_ref } : {}),
+    ...(query.source_policy_version ? { sourcePolicyVersion: query.source_policy_version } : {}),
+    ...(query.derivation_type ? { derivationType: query.derivation_type } : {}),
+    ...(query.root_snapshot_ref ? { rootSnapshotRef: query.root_snapshot_ref } : {}),
+    ...(query.parent_snapshot_ref ? { parentSnapshotRef: query.parent_snapshot_ref } : {}),
+    ...(query.created_from ? { createdFrom: query.created_from } : {}),
+    ...(query.created_to ? { createdTo: query.created_to } : {}),
+    limit: query.page_size,
+    offset: (query.page - 1) * query.page_size,
+  };
+}
+
+function admissionListOptions(query: TenantAgentAdmissionQuery) {
+  return {
+    ...(query.status ? { status: query.status } : {}),
+    ...(query.task_run_id ? { taskRunId: query.task_run_id } : {}),
+    ...(query.agent_run_id ? { agentRunId: query.agent_run_id } : {}),
+    ...(query.workflow_id ? { workflowId: query.workflow_id } : {}),
+    ...(query.acquired_from ? { acquiredFrom: query.acquired_from } : {}),
+    ...(query.acquired_to ? { acquiredTo: query.acquired_to } : {}),
+    limit: query.page_size,
+    offset: (query.page - 1) * query.page_size,
+  };
 }
 
 function parseSpec(resourceType: RegistryResourceType, spec: unknown): RegistrySpec {

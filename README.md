@@ -163,6 +163,20 @@ TEMPORAL_REPLAY_SMOKE_RESULT_FILE=artifacts/pi-worker-crash-resume/result.json \
 corepack pnpm test:temporal-replay
 ```
 
+Tenant Policy production-closure smoke:
+
+```bash
+corepack pnpm smoke:tenant-policy-e2e
+corepack pnpm smoke:tenant-policy-snapshot-e2e
+corepack pnpm smoke:tenant-concurrency-e2e
+corepack pnpm smoke:tenant-flow-agent-e2e
+corepack pnpm smoke:tenant-handoff-lineage-e2e
+corepack pnpm smoke:tenant-policy-crash-snapshot-e2e
+corepack pnpm smoke:tenant-admission-reconcile-e2e
+```
+
+这些 smoke 使用真实 PostgreSQL、Temporal、runtime-worker、runtime-api 和 Tool Gateway。失败时脚本只输出安全摘要；成功时输出 `ok: true` 和稳定标识。
+
 ## MVP smoke path
 
 默认 memory smoke path：
@@ -249,9 +263,20 @@ React 运营页面：
 /task-runs
 /audit-events
 /tool-calls
+/policy-snapshots
+/tenant-admissions
 ```
 
 页面只请求同源 `/api/v1/...`。Registry 页面支持 JSON draft 编辑、validate、publish、gray、rollback、deprecate、disable、release history 和版本对比；Operations 页面通过 control-plane BFF 查询 runtime-api/tool-gateway。
+
+Snapshot 和 Admission 是只读运行时运营资源，不是可编辑 Registry Resource：
+
+```text
+GET /api/v1/tenant-runtime-policy-snapshots
+GET /api/v1/tenant-runtime-policy-snapshots/:snapshotId
+GET /api/v1/tenant-agent-admissions
+GET /api/v1/tenant-agent-admissions/:admissionId
+```
 
 身份来自 `x-user-id`、`x-tenant-id`、`x-roles` 和可选 `x-request-id`。生产环境必须使用 `CONTROL_PLANE_AUTH_MODE=header`，不会默认启用管理员身份。
 
@@ -323,8 +348,28 @@ pnpm smoke:pi-l3-e2e
 pnpm smoke:pi-user-input-e2e
 pnpm smoke:pi-handoff-e2e
 pnpm smoke:pi-restart-resume-e2e
+pnpm smoke:pi-worker-crash-resume-e2e
 pnpm smoke:pi-model-gateway-e2e
+pnpm smoke:tenant-policy-e2e
+pnpm smoke:tenant-policy-snapshot-e2e
+pnpm smoke:tenant-concurrency-e2e
+pnpm smoke:tenant-flow-agent-e2e
+pnpm smoke:tenant-handoff-lineage-e2e
+pnpm smoke:tenant-policy-crash-snapshot-e2e
+pnpm smoke:tenant-admission-reconcile-e2e
 ```
+
+Runtime readiness:
+
+- `runtime-api /readyz` probes config, DB, Route Registry, Temporal, Tenant Policy repository, and production auth mode.
+- `tool-gateway /readyz` probes config, DB, Tool Registry, Tenant Policy Snapshot store, and service-token configuration.
+- `/healthz` remains process liveness only.
+
+Tool Gateway debug endpoint:
+
+- `GET /v1/idempotency-records/:key` is disabled by default with `TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED=false`.
+- When enabled it requires `idempotency:debug`, not `tool_call:read`.
+- Returned records are masked.
 
 ## DB-backed Source of Truth
 
@@ -338,6 +383,9 @@ pnpm smoke:pi-model-gateway-e2e
 - `IdempotencyRecordRepository`：`get/insert/replayOrConflict`，tool-gateway DB 模式做 replay/conflict。
 - `HumanTaskRepository`：`create/get/list/approve/reject/cancel/expire`，记录 `decided_by`、`decided_at`、`decision_reason`。
 - `ToolCallLogRepository`：记录 L3 preview/approval/reject/commit 状态和 preview/result JSON。
+- `TenantRuntimePolicyRepository`：租户运行时策略生命周期。
+- `TenantRuntimePolicySnapshotRepository`：不可变 root/child snapshot 和 lineage 查询。
+- `TenantAgentAdmissionRepository`：租户 agent 并发 admission、release、reconcile。
 
 FlowSpec snapshot ref 格式：
 
@@ -362,3 +410,9 @@ db://flow/{flow_id}/versions/{version}
 9. `docs/19_pi_segmented_agent_runtime.md`
 10. `docs/20_pi_runtime_hardening.md`
 11. `docs/21_model_gateway_contract.md`
+12. `docs/24_tenant_runtime_policy.md`
+13. `docs/30_tenant_admission_control.md`
+14. `docs/31_policy_snapshot_lineage.md`
+15. `docs/32_policy_enforcement.md`
+16. `docs/33_runtime_audit_taxonomy.md`
+17. `docs/34_runtime_readiness.md`

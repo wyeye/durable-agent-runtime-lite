@@ -9,6 +9,7 @@ import { TenantRuntimePolicyError } from '@dar/db';
 import { HumanTaskService } from './modules/human-task/human-task-service.js';
 import { createRuntimeApiTaskService, TaskService } from './modules/task/task-service.js';
 import { AgentRunService } from './modules/task/agent-run-service.js';
+import { RuntimeApiReadinessService, type ReadinessResult } from './modules/readiness/runtime-api-readiness-service.js';
 import {
   readAuth,
   requireDecisionAuth,
@@ -119,9 +120,13 @@ export interface RuntimeApiReadiness {
   workflowStarter: 'mock' | 'temporal';
 }
 
+export interface RuntimeApiReadinessChecker {
+  check(): Promise<ReadinessResult>;
+}
+
 export function buildServer(
   taskService = new TaskService(),
-  readiness: RuntimeApiReadiness = { routeSource: 'memory', workflowStarter: 'mock' },
+  readiness: RuntimeApiReadiness | RuntimeApiReadinessChecker = { routeSource: 'memory', workflowStarter: 'mock' },
   humanTaskService = new HumanTaskService(),
   agentRunService = new AgentRunService(),
   config = loadConfig(),
@@ -134,16 +139,27 @@ export function buildServer(
     app: appName,
   }));
 
-  server.get('/readyz', async () => ({
-    status: 'ready',
-    app: appName,
-    checks: {
-      config: 'ok',
-      router: 'ok',
-      route_source: readiness.routeSource,
-      workflow_starter: readiness.workflowStarter,
-    },
-  }));
+  server.get('/readyz', async (_request, reply) => {
+    if ('check' in readiness) {
+      const result = await readiness.check();
+      reply.code(result.ready ? 200 : 503);
+      return {
+        status: result.ready ? 'ready' : 'not_ready',
+        app: appName,
+        ...result,
+      };
+    }
+    return {
+      status: 'ready',
+      app: appName,
+      checks: {
+        config: 'ok',
+        router: 'ok',
+        route_source: readiness.routeSource,
+        workflow_starter: readiness.workflowStarter,
+      },
+    };
+  });
 
   server.post('/v1/router/preview', async (request, reply) => {
     const traceId = getTraceId(request.body);
@@ -351,11 +367,13 @@ export function buildServer(
 
 export async function start(): Promise<void> {
   const config = loadConfig();
-  const { taskService, humanTaskService, agentRunService, close } = createRuntimeApiTaskService(config);
-  const server = buildServer(taskService, {
-    routeSource: config.RUNTIME_API_ROUTE_SOURCE,
-    workflowStarter: config.RUNTIME_API_WORKFLOW_STARTER,
-  }, humanTaskService, agentRunService, config);
+  const { taskService, humanTaskService, agentRunService, close, db, routeSource } = createRuntimeApiTaskService(config);
+  const readiness = new RuntimeApiReadinessService({
+    config,
+    ...(db ? { db } : {}),
+    ...(routeSource ? { routeSource } : {}),
+  });
+  const server = buildServer(taskService, readiness, humanTaskService, agentRunService, config);
   const port = getAppPort(appName, config);
 
   server.addHook('onClose', async () => {

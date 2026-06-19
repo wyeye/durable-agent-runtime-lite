@@ -306,6 +306,8 @@ export const tenantPolicySnapshotQuerySchema = paginationRequestSchema.extend({
   derivation_type: tenantPolicySnapshotDerivationTypeSchema.optional(),
   root_snapshot_ref: z.string().min(1).optional(),
   parent_snapshot_ref: z.string().min(1).optional(),
+  created_from: z.string().datetime().optional(),
+  created_to: z.string().datetime().optional(),
 });
 
 export const tenantAgentAdmissionQuerySchema = paginationRequestSchema.extend({
@@ -313,6 +315,9 @@ export const tenantAgentAdmissionQuerySchema = paginationRequestSchema.extend({
   status: tenantAdmissionStatusSchema.optional(),
   task_run_id: z.string().min(1).optional(),
   agent_run_id: z.string().min(1).optional(),
+  workflow_id: z.string().min(1).optional(),
+  acquired_from: z.string().datetime().optional(),
+  acquired_to: z.string().datetime().optional(),
 });
 
 export const paginatedResponseSchema = <TItem extends z.ZodType>(itemSchema: TItem) =>
@@ -898,6 +903,7 @@ export const humanTaskGetResponseSchema = z.object({
 
 export const auditEventSchema = z.object({
   event_id: z.string().min(1),
+  event_key: z.string().min(1).optional(),
   tenant_id: z.string().min(1),
   actor_id: z.string().optional(),
   action: z.string().min(1),

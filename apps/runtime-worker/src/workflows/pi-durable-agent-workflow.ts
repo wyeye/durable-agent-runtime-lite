@@ -294,6 +294,7 @@ export async function piDurableAgentWorkflow(
     execution_plan_ref: executionPlan.execution_plan_ref,
     execution_plan_hash: executionPlan.execution_plan_hash,
   };
+  const taskStatusOwner = input.task_status_owner !== false;
   const policy = context.tenant_policy_snapshot_ref && context.tenant_policy_hash && patched('pi-effective-tenant-policy-v1')
     ? await loadTenantPolicySnapshotActivity({
         ...executionContext,
@@ -322,6 +323,7 @@ export async function piDurableAgentWorkflow(
       undefined,
       usageFromLedger(normalizeLedger(input.budget_ledger)),
       executionContext,
+      taskStatusOwner,
     );
   }
 
@@ -344,7 +346,7 @@ export async function piDurableAgentWorkflow(
     ledger = { ...ledger, elapsed_duration_ms: elapsedMs(startedAtMs) };
     const exhaustedBeforeSegment = budgetExceededForLedger(activeBudget, ledger);
     if (exhaustedBeforeSegment) {
-      return await budgetExceeded(agentRun.agent_run_id, exhaustedBeforeSegment.code, exhaustedBeforeSegment.message, contextSnapshotRef, ledger, executionContext);
+      return await budgetExceeded(agentRun.agent_run_id, exhaustedBeforeSegment.code, exhaustedBeforeSegment.message, contextSnapshotRef, ledger, executionContext, taskStatusOwner);
     }
     const remainingBeforeSegment = remainingBudget(activeBudget, ledger);
 
@@ -381,7 +383,7 @@ export async function piDurableAgentWorkflow(
 
     const postSegmentBudget = budgetExceededForLedger(activeBudget, ledger);
     if (postSegmentBudget && segment.status !== 'completed') {
-        return await budgetExceeded(agentRun.agent_run_id, postSegmentBudget.code, postSegmentBudget.message, contextSnapshotRef, ledger, executionContext);
+        return await budgetExceeded(agentRun.agent_run_id, postSegmentBudget.code, postSegmentBudget.message, contextSnapshotRef, ledger, executionContext, taskStatusOwner);
     }
 
     if (segment.status === 'completed') {
@@ -391,7 +393,7 @@ export async function piDurableAgentWorkflow(
         completed: true,
         usage: usageFromLedger(ledger),
       });
-      await updateTaskRunStatusActivity({ ...executionContext, status: 'completed' });
+      await updateOwnedTaskRunStatus(taskStatusOwner, { ...executionContext, status: 'completed' });
       await updateAgentStepActivity({
         stable_step_key: stableStepKey(agentRun.agent_run_id, segmentIndex),
         segment_status: 'completed',
@@ -502,10 +504,10 @@ export async function piDurableAgentWorkflow(
       const beforeHandoffLedger = ledger;
       ledger = { ...ledger, handoff_count: ledger.handoff_count + 1 };
       if (beforeHandoffLedger.handoff_count >= activeBudget.max_handoffs) {
-        return await budgetExceeded(agentRun.agent_run_id, 'AGENT_HANDOFF_BUDGET_EXCEEDED', 'Handoff budget exceeded', contextSnapshotRef, ledger, executionContext);
+        return await budgetExceeded(agentRun.agent_run_id, 'AGENT_HANDOFF_BUDGET_EXCEEDED', 'Handoff budget exceeded', contextSnapshotRef, ledger, executionContext, taskStatusOwner);
       }
       if (!executionPlan.allowed_handoffs.includes(segment.target_execution_plan_ref)) {
-        return await failAgentRun(agentRun.agent_run_id, 'HANDOFF_DENIED', `Unauthorized handoff target: ${segment.target_execution_plan_ref}`, contextSnapshotRef, usageFromLedger(ledger), executionContext);
+        return await failAgentRun(agentRun.agent_run_id, 'HANDOFF_DENIED', `Unauthorized handoff target: ${segment.target_execution_plan_ref}`, contextSnapshotRef, usageFromLedger(ledger), executionContext, taskStatusOwner);
       }
       if (policy && !handoffAllowedByPolicy(policy, segment.target_execution_plan_ref)) {
         return await failAgentRun(
@@ -515,6 +517,7 @@ export async function piDurableAgentWorkflow(
           contextSnapshotRef,
           usageFromLedger(ledger),
           executionContext,
+          taskStatusOwner,
         );
       }
 
@@ -545,6 +548,7 @@ export async function piDurableAgentWorkflow(
           contextSnapshotRef,
           usageFromLedger(ledger),
           executionContext,
+          taskStatusOwner,
         );
       }
       const handoffResult = handoffToolResult(segment, handoff);
@@ -583,11 +587,11 @@ export async function piDurableAgentWorkflow(
     }
 
     if (segment.status === 'stopped_by_budget') {
-      return await budgetExceeded(agentRun.agent_run_id, segment.error_code, segment.error_message, contextSnapshotRef, ledger, executionContext);
+      return await budgetExceeded(agentRun.agent_run_id, segment.error_code, segment.error_message, contextSnapshotRef, ledger, executionContext, taskStatusOwner);
     }
 
     if (segment.status === 'failed' || segment.status === 'cancelled') {
-      return await failAgentRun(agentRun.agent_run_id, segment.error_code, segment.error_message, contextSnapshotRef, usageFromLedger(ledger), executionContext);
+      return await failAgentRun(agentRun.agent_run_id, segment.error_code, segment.error_message, contextSnapshotRef, usageFromLedger(ledger), executionContext, taskStatusOwner);
     }
   }
 
@@ -598,6 +602,7 @@ export async function piDurableAgentWorkflow(
     contextSnapshotRef,
     ledger,
     executionContext,
+    taskStatusOwner,
   );
 }
 
@@ -769,6 +774,7 @@ async function executeWorkflowHandoff(input: {
         flow_version: targetPlan.flow_version,
         execution_plan_ref: targetPlan.execution_plan_ref,
         flow_sha256: targetPlan.flow_sha256,
+        task_status_owner: false,
         request_id: input.context.request_id,
         ...(childPolicy ? { tenant_policy_snapshot_ref: childPolicy.snapshot_ref } : {}),
         ...(childPolicy ? { tenant_policy_hash: childPolicy.snapshot_hash } : {}),
@@ -873,6 +879,7 @@ async function maybeContinueAsNew(
     segment_index: segmentIndex,
     started_at_ms: startedAtMs,
     continue_as_new_segment_threshold: maxSegmentsBeforeContinueAsNew,
+    ...(originalInput.task_status_owner !== undefined ? { task_status_owner: originalInput.task_status_owner } : {}),
     ...(handoffChain ? { handoff_chain: handoffChain } : {}),
     ...(originalInput.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: originalInput.tenant_policy_snapshot_ref } : {}),
     ...(originalInput.tenant_policy_hash ? { tenant_policy_hash: originalInput.tenant_policy_hash } : {}),
@@ -882,6 +889,16 @@ async function maybeContinueAsNew(
   });
 }
 
+async function updateOwnedTaskRunStatus(
+  taskStatusOwner: boolean,
+  status: Parameters<typeof updateTaskRunStatusActivity>[0],
+): Promise<void> {
+  if (!taskStatusOwner) {
+    return;
+  }
+  await updateTaskRunStatusActivity(status);
+}
+
 async function budgetExceeded(
   agentRunId: string,
   code: string,
@@ -889,6 +906,7 @@ async function budgetExceeded(
   contextSnapshotRef: PiContextSnapshotRef | undefined,
   ledger: AgentBudgetLedger,
   context: ActivityContext,
+  taskStatusOwner: boolean,
 ): Promise<PiDurableAgentWorkflowResult> {
   await updateAgentRunActivity({
     agent_run_id: agentRunId,
@@ -898,7 +916,7 @@ async function budgetExceeded(
     error_message: message,
     usage: usageFromLedger(ledger),
   });
-  await updateTaskRunStatusActivity({ ...context, status: 'failed', error_code: code, error_message: message });
+  await updateOwnedTaskRunStatus(taskStatusOwner, { ...context, status: 'failed', error_code: code, error_message: message });
   return {
     status: 'budget_exceeded',
     agent_run_id: agentRunId,
@@ -915,6 +933,7 @@ async function failAgentRun(
   contextSnapshotRef: PiContextSnapshotRef | undefined,
   usage: PiDurableAgentWorkflowResult['usage'],
   context: ActivityContext,
+  taskStatusOwner: boolean,
 ): Promise<PiDurableAgentWorkflowResult> {
   await updateAgentRunActivity({
     agent_run_id: agentRunId,
@@ -924,7 +943,7 @@ async function failAgentRun(
     error_message: message,
     usage,
   });
-  await updateTaskRunStatusActivity({ ...context, status: 'failed', error_code: code, error_message: message });
+  await updateOwnedTaskRunStatus(taskStatusOwner, { ...context, status: 'failed', error_code: code, error_message: message });
   return {
     status: 'failed',
     agent_run_id: agentRunId,

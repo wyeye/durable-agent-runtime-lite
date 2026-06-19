@@ -24,6 +24,7 @@ export interface ConfigDrivenWorkflowInput {
   tenant_policy_snapshot_ref?: string;
   tenant_policy_hash?: string;
   tenant_admission_id?: string;
+  task_status_owner?: boolean;
   request_id: string;
   trace_id?: string;
   input_ref?: string;
@@ -70,6 +71,7 @@ export interface PiDurableAgentWorkflowInput {
   tenant_policy_snapshot_ref?: string;
   tenant_policy_hash?: string;
   tenant_admission_id?: string;
+  task_status_owner?: boolean;
   request_id: string;
   trace_id?: string;
 }

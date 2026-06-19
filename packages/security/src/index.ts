@@ -21,6 +21,7 @@ export const servicePermissionSchema = z.enum([
   'tool:commit',
   'audit:read',
   'tool_call:read',
+  'idempotency:debug',
 ]);
 export type ServicePermission = z.infer<typeof servicePermissionSchema>;
 
@@ -76,10 +77,15 @@ export interface StaticServiceTokenVerifierOptions {
   authMode: 'service_token' | 'disabled';
   nodeEnv?: string;
   tokens: Partial<Record<ServiceId, string | undefined>>;
+  minimumTokenLength?: number;
 }
 
 export class StaticServiceTokenVerifier {
   constructor(private readonly options: StaticServiceTokenVerifierOptions) {}
+
+  validateConfiguration(): void {
+    assertServiceTokenConfiguration(this.options);
+  }
 
   verify(
     headers: Record<string, string | string[] | undefined>,
@@ -96,6 +102,9 @@ export class StaticServiceTokenVerifier {
         tenant_id: headerValue(headers, 'x-tenant-id'),
         user_id: headerValue(headers, 'x-user-id'),
       });
+    }
+    if (production) {
+      this.validateConfiguration();
     }
 
     const serviceIdValue = headerValue(headers, 'x-service-id');
@@ -201,7 +210,7 @@ export function servicePermissionsForService(serviceId: ServiceId): ServicePermi
     case 'runtime-worker':
       return ['tool_manifest:read', 'tool:invoke', 'tool:preview', 'tool:commit'];
     case 'control-plane':
-      return ['tool_manifest:read', 'audit:read', 'tool_call:read'];
+      return ['tool_manifest:read', 'audit:read', 'tool_call:read', 'idempotency:debug'];
   }
 }
 
@@ -284,6 +293,43 @@ function constantTimeEqual(actual: string, expected: string): boolean {
     diff |= actualCode ^ expectedCode;
   }
   return diff === 0;
+}
+
+export const MINIMUM_SERVICE_TOKEN_LENGTH = 24;
+
+const PLACEHOLDER_SERVICE_TOKEN_PATTERNS = [
+  /^replace-with-runtime-worker-service-token$/u,
+  /^replace-with-control-plane-service-token$/u,
+  /^local-dev-/u,
+];
+
+export function isPlaceholderServiceToken(token: string | undefined): boolean {
+  return Boolean(token && PLACEHOLDER_SERVICE_TOKEN_PATTERNS.some((pattern) => pattern.test(token)));
+}
+
+export function assertServiceTokenConfiguration(options: StaticServiceTokenVerifierOptions): void {
+  if (options.authMode === 'disabled') {
+    if (options.nodeEnv === 'production') {
+      throw new ServiceAuthError('UNAUTHORIZED', 'TOOL_GATEWAY_AUTH_MODE=disabled is not allowed in production');
+    }
+    return;
+  }
+
+  const minimumLength = options.minimumTokenLength ?? MINIMUM_SERVICE_TOKEN_LENGTH;
+  const runtimeWorkerToken = options.tokens['runtime-worker'];
+  const controlPlaneToken = options.tokens['control-plane'];
+  if (!runtimeWorkerToken || !controlPlaneToken) {
+    throw new ServiceAuthError('UNAUTHORIZED', 'Tool Gateway service tokens are required');
+  }
+  if (runtimeWorkerToken.length < minimumLength || controlPlaneToken.length < minimumLength) {
+    throw new ServiceAuthError('UNAUTHORIZED', 'Tool Gateway service tokens do not meet minimum length');
+  }
+  if (isPlaceholderServiceToken(runtimeWorkerToken) || isPlaceholderServiceToken(controlPlaneToken)) {
+    throw new ServiceAuthError('UNAUTHORIZED', 'Tool Gateway service tokens must not use placeholder values');
+  }
+  if (constantTimeEqual(runtimeWorkerToken, controlPlaneToken)) {
+    throw new ServiceAuthError('UNAUTHORIZED', 'Tool Gateway service tokens must be distinct');
+  }
 }
 
 export function maskSensitiveFields(value: unknown): unknown {

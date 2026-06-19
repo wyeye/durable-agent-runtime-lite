@@ -20,9 +20,10 @@ import {
 const scenario = process.env.TENANT_POLICY_SMOKE_SCENARIO ?? 'policy';
 const runtimeApiUrl = trimTrailingSlash(process.env.RUNTIME_API_URL ?? 'http://localhost:3000');
 const databaseUrl = process.env.DATABASE_URL ?? 'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime';
-const tenantId = process.env.SMOKE_TENANT_ID ?? `tenant_policy_smoke_${scenario}`;
+const runId = Date.now();
+const tenantId = process.env.SMOKE_TENANT_ID ?? `tenant_policy_smoke_${scenario}_${runId}`;
 const userId = process.env.SMOKE_USER_ID ?? 'tenant_policy_smoke_user';
-const requestId = `tenant_policy_${scenario}_${Date.now()}`;
+const requestId = `tenant_policy_${scenario}_${runId}`;
 const runtimeHeaders = authHeaders(`${requestId}_runtime`);
 
 async function main(): Promise<void> {
@@ -72,8 +73,8 @@ async function main(): Promise<void> {
 
     if (scenario === 'snapshot') {
       assert.equal(finalTask.status, 'completed', finalTask.error_message ?? 'snapshot smoke task should complete');
-      const policyV2 = await publishDenySearchPolicy(db, tenantId);
-      assert.equal(policyV2.version, 2);
+      const nextPolicy = await publishDenySearchPolicy(db, tenantId);
+      assert.equal(nextPolicy.version, rootSnapshot.source_policy_version + 1);
       assert.equal(rootSnapshot.source_policy_version, 1, 'Existing root snapshot must remain locked to v1');
       const afterPublish = await new TenantRuntimePolicySnapshotRepository(db).getByRef(rootSnapshot.snapshot_ref, { tenantId });
       assert.equal(afterPublish?.source_policy_version, 1);
@@ -84,7 +85,7 @@ async function main(): Promise<void> {
         task_run_id: finalTask.task_run_id,
         root_snapshot_ref: rootSnapshot.snapshot_ref,
         root_source_policy_version: rootSnapshot.source_policy_version,
-        latest_policy_version: policyV2.version,
+        latest_policy_version: nextPolicy.version,
       }, null, 2));
       return;
     }

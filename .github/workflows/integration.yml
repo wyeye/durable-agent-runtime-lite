@@ -4,19 +4,23 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "17 18 * * *"
+  push:
+    branches:
+      - main
 
 concurrency:
   group: integration-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  docker-pi-crash-replay:
+  full-regression:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
 
     env:
       DATABASE_URL: postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime
       RUNTIME_API_URL: http://localhost:3000
+      TOOL_GATEWAY_URL: http://localhost:3200
       RUNTIME_WORKER_URL: http://localhost:3300
       TEMPORAL_ADDRESS: localhost:7233
       TEMPORAL_NAMESPACE: default
@@ -40,17 +44,134 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit and contract tests
+        run: pnpm test
+
       - name: Build workspace
         run: pnpm build
 
-      - name: Start Docker stack
-        run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up --build -d
+      - name: Temporal replay unit gate
+        run: pnpm test:temporal-replay
+
+      - name: Compose config
+        run: docker compose -f infra/docker-compose.yml config
+
+      - name: Pi compose config
+        run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml config
+
+      - name: Build production images
+        run: docker compose -f infra/docker-compose.yml build control-plane runtime-api runtime-worker tool-gateway
+
+      - name: Start dependencies
+        run: docker compose -f infra/docker-compose.yml up -d postgres valkey temporal temporal-ui
 
       - name: Run migrations against Docker DB
         run: pnpm db:migrate
 
-      - name: Run real worker crash recovery smoke
+      - name: Seed examples
+        run: pnpm seed:examples
+
+      - name: Start runtime stack
+        run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d mock-server tool-gateway runtime-worker runtime-api control-plane
+
+      - name: Wait for readiness
+        run: |
+          node - <<'NODE'
+          const targets = [
+            ['runtime-api', 'http://localhost:3000/readyz'],
+            ['tool-gateway', 'http://localhost:3200/readyz'],
+            ['runtime-worker', 'http://localhost:3300/readyz'],
+            ['control-plane', 'http://localhost:3100/readyz'],
+          ];
+          const deadline = Date.now() + 120_000;
+          while (Date.now() < deadline) {
+            const results = await Promise.all(targets.map(async ([name, url]) => {
+              try {
+                const response = await fetch(url);
+                return [name, response.ok, response.status];
+              } catch {
+                return [name, false, 0];
+              }
+            }));
+            if (results.every(([, ok]) => ok)) {
+              console.log(JSON.stringify(Object.fromEntries(results.map(([name, ok, status]) => [name, { ok, status }]))));
+              process.exit(0);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+          throw new Error('runtime stack did not become ready');
+          NODE
+
+      - name: Old smoke tests
+        run: |
+          pnpm smoke:temporal-db-e2e
+          pnpm smoke:control-plane-api-e2e
+          pnpm smoke:control-plane-ui-e2e
+
+      - name: Pi deterministic smoke tests
+        run: |
+          pnpm smoke:pi-readonly-e2e
+          pnpm smoke:pi-l3-e2e
+          pnpm smoke:pi-user-input-e2e
+          pnpm smoke:pi-handoff-e2e
+
+      - name: Switch worker to model gateway smoke mode
+        run: |
+          PI_AGENT_MODE=model_gateway \
+            docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d runtime-worker
+
+      - name: Pi model gateway smoke test
+        run: pnpm smoke:pi-model-gateway-e2e
+
+      - name: Switch worker back to deterministic smoke mode
+        run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d runtime-worker
+
+      - name: Wait for deterministic worker readiness
+        run: |
+          node - <<'NODE'
+          const deadline = Date.now() + 60_000;
+          while (Date.now() < deadline) {
+            try {
+              const response = await fetch('http://localhost:3300/readyz');
+              if (response.ok) {
+                const body = await response.json();
+                if (body?.checks?.pi_agent_mode === 'deterministic') {
+                  console.log(JSON.stringify(body.checks));
+                  process.exit(0);
+                }
+                console.log(`runtime-worker ready but not deterministic: ${JSON.stringify(body)}`);
+              } else {
+                console.log(`runtime-worker readiness status ${response.status}`);
+              }
+            } catch {
+              // keep polling
+            }
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+          throw new Error('runtime-worker did not become ready');
+          NODE
+
+      - name: Worker crash smoke
         run: pnpm smoke:pi-worker-crash-resume-e2e
+
+      - name: Tenant policy smoke tests
+        run: |
+          pnpm smoke:tenant-policy-e2e
+          pnpm smoke:tenant-policy-snapshot-e2e
+          pnpm smoke:tenant-concurrency-e2e
+
+      - name: Tenant deep-chain smoke tests
+        run: |
+          pnpm smoke:tenant-flow-agent-e2e
+          pnpm smoke:tenant-handoff-lineage-e2e
+          pnpm smoke:tenant-policy-crash-snapshot-e2e
+          pnpm smoke:tenant-admission-reconcile-e2e
 
       - name: Export real Temporal histories
         run: pnpm temporal:export-replay-fixtures
@@ -58,18 +179,23 @@ jobs:
       - name: Replay exported histories
         run: pnpm test:temporal-replay
 
+      - name: Docker stack status
+        run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml ps
+
       - name: Docker diagnostics on failure
         if: failure()
         run: |
           mkdir -p artifacts/docker
           docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml ps > artifacts/docker/ps.txt
-          docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml logs --no-color --tail=300 > artifacts/docker/logs.txt
+          docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml logs --no-color --tail=300 \
+            | sed -E 's/(TOKEN|SECRET|PASSWORD|API_KEY)=([^[:space:]]+)/\1=[REDACTED]/g; s/Bearer [A-Za-z0-9_.-]+/Bearer [REDACTED]/g; s/dev-only-[A-Za-z0-9_.-]+-token/dev-only-[REDACTED]-token/g' \
+            > artifacts/docker/logs.txt
 
       - name: Upload integration artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pi-crash-replay-artifacts
+          name: integration-artifacts
           path: |
             artifacts/
             tests/temporal-replay/histories/

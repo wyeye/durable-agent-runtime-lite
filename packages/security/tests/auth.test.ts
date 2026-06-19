@@ -10,6 +10,9 @@ import {
   requireControlPlanePermission,
 } from '../src/index.js';
 
+const workerToken = 'runtime-worker-token-for-tests';
+const controlToken = 'control-plane-token-for-tests';
+
 describe('control-plane header auth and RBAC', () => {
   it('parses identity, roles, and request id from headers', () => {
     const auth = parseAuthContext({
@@ -69,15 +72,15 @@ describe('service token auth', () => {
       authMode: 'service_token',
       nodeEnv: 'production',
       tokens: {
-        'runtime-worker': 'worker-token',
-        'control-plane': 'control-token',
+        'runtime-worker': workerToken,
+        'control-plane': controlToken,
       },
     });
 
     const identity = verifier.verify({
       ...buildServiceIdentityHeaders({
         serviceId: 'runtime-worker',
-        token: 'worker-token',
+        token: workerToken,
         requestId: 'req_1',
         tenantId: 'tenant_1',
         userId: 'user_1',
@@ -97,17 +100,17 @@ describe('service token auth', () => {
       authMode: 'service_token',
       nodeEnv: 'production',
       tokens: {
-        'runtime-worker': 'worker-token',
-        'control-plane': 'control-token',
+        'runtime-worker': workerToken,
+        'control-plane': controlToken,
       },
     });
 
     expect(() => verifier.verify({ 'x-service-id': 'runtime-worker' }, 'tool:invoke')).toThrow(ServiceAuthError);
     expect(() =>
-      verifier.verify(buildServiceIdentityHeaders({ serviceId: 'runtime-worker', token: 'control-token' }), 'tool:invoke'),
+      verifier.verify(buildServiceIdentityHeaders({ serviceId: 'runtime-worker', token: controlToken }), 'tool:invoke'),
     ).toThrow(/Invalid service bearer token/);
     expect(() =>
-      verifier.verify(buildServiceIdentityHeaders({ serviceId: 'control-plane', token: 'control-token' }), 'tool:invoke'),
+      verifier.verify(buildServiceIdentityHeaders({ serviceId: 'control-plane', token: controlToken }), 'tool:invoke'),
     ).toThrow(/not allowed/);
   });
 
@@ -119,5 +122,34 @@ describe('service token auth', () => {
     });
 
     expect(() => verifier.verify({}, 'tool:invoke')).toThrow(/not allowed in production/);
+  });
+
+  it('rejects short, placeholder, and identical service tokens in production', () => {
+    expect(() => new StaticServiceTokenVerifier({
+      authMode: 'service_token',
+      nodeEnv: 'production',
+      tokens: {
+        'runtime-worker': 'short',
+        'control-plane': controlToken,
+      },
+    }).validateConfiguration()).toThrow(/minimum length/);
+
+    expect(() => new StaticServiceTokenVerifier({
+      authMode: 'service_token',
+      nodeEnv: 'production',
+      tokens: {
+        'runtime-worker': 'replace-with-runtime-worker-service-token',
+        'control-plane': controlToken,
+      },
+    }).validateConfiguration()).toThrow(/placeholder/);
+
+    expect(() => new StaticServiceTokenVerifier({
+      authMode: 'service_token',
+      nodeEnv: 'production',
+      tokens: {
+        'runtime-worker': workerToken,
+        'control-plane': workerToken,
+      },
+    }).validateConfiguration()).toThrow(/distinct/);
   });
 });

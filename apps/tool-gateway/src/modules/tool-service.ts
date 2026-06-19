@@ -243,7 +243,8 @@ export class ToolService {
   }
 
   async getIdempotencyRecord(idempotencyKey: string) {
-    return this.idempotencyRepository?.get(idempotencyKey);
+    const record = await this.idempotencyRepository?.get(idempotencyKey);
+    return record ? maskSensitiveFields(record) : undefined;
   }
 
   async preview(toolName: string, payload: unknown): Promise<ToolPreviewResponse> {
@@ -523,7 +524,33 @@ export class ToolService {
       });
     }
 
+    const startedAt = Date.now();
     const result = await invokeMockAdapter({ toolName, args: request.arguments });
+    const durationMs = Math.max(0, Date.now() - startedAt);
+    const inputHash = hashJson(request.arguments);
+    const outputHash = hashJson(result);
+    const taskRunId = getTaskRunId(request.task_context);
+    const workflowId = getWorkflowId(request.task_context);
+    const toolCall = await this.toolCallLogStore.create({
+      ...(taskRunId ? { task_run_id: taskRunId } : {}),
+      ...(workflowId ? { workflow_id: workflowId } : {}),
+      tenant_id: request.tenant_id,
+      user_id: getUserId(request.user_context),
+      tool_name: toolName,
+      tool_version: request.tool_version,
+      risk_level: manifest.risk_level,
+      policy_decision: policy.decision,
+      status: 'committed',
+      mode: 'commit',
+      duration_ms: durationMs,
+      idempotency_key: request.idempotency_key,
+      input_hash: inputHash,
+      output_hash: outputHash,
+      adapter_type: manifest.adapter.type,
+      result_json: result,
+      ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
+      policy_decision_code: policy.reason,
+    });
     const auditEvent = await this.auditStore.append({
       tenant_id: request.tenant_id,
       actor_id: getUserId(request.user_context),
@@ -537,9 +564,10 @@ export class ToolService {
         tool_name: toolName,
         tool_version: request.tool_version,
         risk_level: request.risk_level ?? manifest.risk_level,
-        task_run_id: getTaskRunId(request.task_context),
-        input_hash: hashJson(request.arguments),
-        output_hash: hashJson(result),
+        tool_call_id: toolCall.tool_call_id,
+        task_run_id: taskRunId,
+        input_hash: inputHash,
+        output_hash: outputHash,
         policy_decision: policy.decision,
         ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
         policy_decision_code: policy.reason,
@@ -551,6 +579,7 @@ export class ToolService {
       tool_version: request.tool_version,
       status: 'succeeded',
       result,
+      tool_call_id: toolCall.tool_call_id,
       audit_event_id: auditEvent.event_id,
       idempotency_key: request.idempotency_key,
       policy,

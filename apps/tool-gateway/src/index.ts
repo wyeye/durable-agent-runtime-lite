@@ -29,8 +29,9 @@ import {
 import type { RuntimeConfig } from '@dar/config';
 import type { Kysely } from 'kysely';
 import { DbAuditStore } from './modules/audit.js';
-import { DbToolManifestRegistry } from './modules/tool-registry.js';
-import { DbHumanTaskLookupStore, ToolService } from './modules/tool-service.js';
+import { DbToolManifestRegistry, type ToolManifestRegistry } from './modules/tool-registry.js';
+import { DbHumanTaskLookupStore, ToolService, type TenantPolicySnapshotLookupStore } from './modules/tool-service.js';
+import { ToolGatewayReadinessService, type ToolGatewayReadinessResult } from './modules/readiness/tool-gateway-readiness-service.js';
 
 const appName = 'tool-gateway' as const;
 const logger = createLogger(appName);
@@ -110,6 +111,18 @@ function deniedError(result: ToolInvokeResponse | ToolPreviewResponse | ToolComm
 }
 
 export function buildServer(toolService = new ToolService(), config: RuntimeConfig = loadConfig()): FastifyInstance {
+  return buildServerWithReadiness(toolService, config);
+}
+
+export interface ToolGatewayReadinessChecker {
+  check(): Promise<ToolGatewayReadinessResult>;
+}
+
+export function buildServerWithReadiness(
+  toolService = new ToolService(),
+  config: RuntimeConfig = loadConfig(),
+  readiness?: ToolGatewayReadinessChecker,
+): FastifyInstance {
   const server = Fastify({ logger: false });
   const serviceVerifier = new StaticServiceTokenVerifier({
     authMode: config.TOOL_GATEWAY_AUTH_MODE,
@@ -129,14 +142,25 @@ export function buildServer(toolService = new ToolService(), config: RuntimeConf
     app: appName,
   }));
 
-  server.get('/readyz', async () => ({
-    status: 'ready',
-    app: appName,
-    checks: {
-      config: 'ok',
-      registry: 'ok',
-    },
-  }));
+  server.get('/readyz', async (_request, reply) => {
+    if (readiness) {
+      const result = await readiness.check();
+      reply.code(result.ready ? 200 : 503);
+      return {
+        status: result.ready ? 'ready' : 'not_ready',
+        app: appName,
+        ...result,
+      };
+    }
+    return {
+      status: 'ready',
+      app: appName,
+      checks: {
+        config: 'ok',
+        registry: 'ok',
+      },
+    };
+  });
 
   server.get('/v1/tools', async (request, reply) => {
     try {
@@ -310,7 +334,15 @@ export function buildServer(toolService = new ToolService(), config: RuntimeConf
 
   server.get('/v1/idempotency-records/:idempotencyKey', async (request, reply) => {
     try {
-      authorize(request, 'tool_call:read');
+      if (!config.TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED) {
+        reply.code(404);
+        return {
+          success: false,
+          data: null,
+          error: { code: 'DEBUG_ENDPOINT_DISABLED', message: 'Debug endpoint is disabled' },
+        };
+      }
+      authorize(request, 'idempotency:debug');
       const { idempotencyKey } = request.params as { idempotencyKey: string };
       const record = await toolService.getIdempotencyRecord(idempotencyKey);
       if (!record) {
@@ -337,6 +369,9 @@ export function buildServer(toolService = new ToolService(), config: RuntimeConf
 
 export interface ToolGatewayServiceHandle {
   toolService: ToolService;
+  db?: Kysely<Database>;
+  registry?: ToolManifestRegistry;
+  tenantPolicySnapshotStore?: TenantPolicySnapshotLookupStore;
   close(): Promise<void>;
 }
 
@@ -350,25 +385,34 @@ export function createToolGatewayService(config: RuntimeConfig = loadConfig()): 
   if (isProductionRuntime(config) && config.TENANT_RUNTIME_POLICY_MODE !== 'required') {
     throw new Error('TENANT_RUNTIME_POLICY_MODE=required is required in production');
   }
-  if (
-    isProductionRuntime(config)
-    && (!config.TOOL_GATEWAY_RUNTIME_WORKER_TOKEN || !config.TOOL_GATEWAY_CONTROL_PLANE_TOKEN)
-  ) {
-    throw new Error('Tool Gateway service tokens are required in production');
+  if (isProductionRuntime(config)) {
+    new StaticServiceTokenVerifier({
+      authMode: config.TOOL_GATEWAY_AUTH_MODE,
+      nodeEnv: config.NODE_ENV,
+      tokens: {
+        'runtime-worker': config.TOOL_GATEWAY_RUNTIME_WORKER_TOKEN,
+        'control-plane': config.TOOL_GATEWAY_CONTROL_PLANE_TOKEN,
+      },
+    }).validateConfiguration();
   }
 
   if (config.TOOL_GATEWAY_REGISTRY_SOURCE === 'db') {
     const db: Kysely<Database> = createDb({ databaseUrl: config.DATABASE_URL });
+    const registry = new DbToolManifestRegistry(db);
+    const tenantPolicySnapshotStore = new TenantRuntimePolicySnapshotRepository(db);
     return {
       toolService: new ToolService({
-        registry: new DbToolManifestRegistry(db),
+        registry,
         auditStore: new DbAuditStore(new AuditEventRepository(db)),
         idempotencyRepository: new IdempotencyRecordRepository(db),
         toolCallLogStore: new ToolCallLogRepository(db),
         humanTaskStore: new DbHumanTaskLookupStore(new HumanTaskRepository(db)),
-        tenantPolicySnapshotStore: new TenantRuntimePolicySnapshotRepository(db),
+        tenantPolicySnapshotStore,
         tenantPolicyMode: config.TENANT_RUNTIME_POLICY_MODE,
       }),
+      db,
+      registry,
+      tenantPolicySnapshotStore,
       close: async () => closeDb(db),
     };
   }
@@ -385,8 +429,14 @@ function isProductionRuntime(config: RuntimeConfig): boolean {
 
 export async function start(): Promise<void> {
   const config = loadConfig();
-  const { toolService, close } = createToolGatewayService(config);
-  const server = buildServer(toolService, config);
+  const { toolService, close, db, registry, tenantPolicySnapshotStore } = createToolGatewayService(config);
+  const readiness = new ToolGatewayReadinessService({
+    config,
+    ...(db ? { db } : {}),
+    ...(registry ? { registry } : {}),
+    ...(tenantPolicySnapshotStore ? { tenantPolicySnapshotStore } : {}),
+  });
+  const server = buildServerWithReadiness(toolService, config, readiness);
   const port = getAppPort(appName, config);
 
   server.addHook('onClose', async () => {

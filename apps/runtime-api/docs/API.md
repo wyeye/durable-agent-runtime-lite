@@ -210,3 +210,18 @@ corepack pnpm smoke:temporal-db-e2e
 smoke 会调用 `/v1/router/preview` 和 `/v1/tasks`。请求文本包含 `db-smoke`，该关键词只存在于 seed 的 DB RouteSpec 中，用于证明没有命中内置 `defaultRouteSpecs`。
 
 L3 本地测试时，smoke 会在 task_run 进入 `waiting_human` 后调用 `/v1/human-tasks` 找到 pending 任务，并调用 approve API；随后 worker 继续 commit。
+
+## Readiness
+
+`GET /healthz` 只表示进程存活。
+
+`GET /readyz` 使用真实依赖探测：
+
+- config；
+- PostgreSQL 轻量只读查询；
+- Route Registry 轻量只读查询；
+- Temporal 连接；
+- Tenant Policy repository 读取；
+- production auth 配置。
+
+production 下 readiness 要求 `RUNTIME_API_AUTH_MODE=header`、`RUNTIME_API_ROUTE_SOURCE=db`、`RUNTIME_API_WORKFLOW_STARTER=temporal`、`TENANT_RUNTIME_POLICY_MODE=required`。失败响应只返回安全 code，不返回连接串或内部 error message。

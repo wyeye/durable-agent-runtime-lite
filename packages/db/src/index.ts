@@ -110,6 +110,7 @@ export interface HumanTaskTable {
 
 export interface AuditEventTable {
   event_id: string;
+  event_key: string | null;
   tenant_id: string;
   actor_id: string | null;
   action: string;

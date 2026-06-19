@@ -315,9 +315,12 @@ export interface TenantAdmissionListOptions extends RepositoryTenantOptions {
   status?: TenantAdmissionStatus;
   taskRunId?: string;
   agentRunId?: string;
+  workflowId?: string;
   limit?: number;
   offset?: number;
   staleBefore?: string;
+  acquiredFrom?: string;
+  acquiredTo?: string;
 }
 
 export interface TenantPolicySnapshotListOptions extends RepositoryTenantOptions {
@@ -327,6 +330,8 @@ export interface TenantPolicySnapshotListOptions extends RepositoryTenantOptions
   derivationType?: TenantPolicySnapshotDerivationType;
   rootSnapshotRef?: string;
   parentSnapshotRef?: string;
+  createdFrom?: string;
+  createdTo?: string;
   limit?: number;
   offset?: number;
 }
@@ -1787,6 +1792,7 @@ export class AuditEventRepository {
     });
     const row: Insertable<AuditEventTable> = {
       event_id: auditEvent.event_id,
+      event_key: auditEvent.event_key ?? null,
       tenant_id: auditEvent.tenant_id,
       actor_id: auditEvent.actor_id ?? null,
       action: auditEvent.action,
@@ -1799,8 +1805,32 @@ export class AuditEventRepository {
       occurred_at: auditEvent.occurred_at,
     };
 
-    const saved = await this.db.insertInto('audit_event').values(row).returningAll().executeTakeFirstOrThrow();
-    return mapAuditEvent(saved);
+    const insert = this.db.insertInto('audit_event').values(row);
+    const saved = auditEvent.event_key
+      ? await insert
+          .onConflict((oc) => oc.column('event_key').where('event_key', 'is not', null).doNothing())
+          .returningAll()
+          .executeTakeFirst()
+      : await insert.returningAll().executeTakeFirst();
+    if (saved) {
+      return mapAuditEvent(saved);
+    }
+    if (auditEvent.event_key) {
+      const existing = await this.getByEventKey(auditEvent.event_key);
+      if (existing) {
+        return existing;
+      }
+    }
+    throw new Error('AUDIT_EVENT_INSERT_CONFLICT');
+  }
+
+  async getByEventKey(eventKey: string): Promise<AuditEvent | undefined> {
+    const row = await this.db
+      .selectFrom('audit_event')
+      .selectAll()
+      .where('event_key', '=', eventKey)
+      .executeTakeFirst();
+    return row ? mapAuditEvent(row) : undefined;
   }
 
   async list(options: ListAuditEventsOptions = {}): Promise<AuditEvent[]> {
@@ -2391,6 +2421,7 @@ export class TenantRuntimePolicyRepository {
     const policy = await this.updateStatus(tenantId, version, 'deprecated', options);
     await appendTenantPolicyRelease(this.db, policy, 'deprecate', options);
     await new AuditEventRepository(this.db).append({
+      event_key: `policy.deprecated:${tenantId}:${version}`,
       tenant_id: tenantId,
       actor_id: options.operatorId,
       action: 'policy.deprecated',
@@ -2407,6 +2438,7 @@ export class TenantRuntimePolicyRepository {
     const policy = await this.updateStatus(tenantId, version, 'disabled', options);
     await appendTenantPolicyRelease(this.db, policy, 'disable', options);
     await new AuditEventRepository(this.db).append({
+      event_key: `policy.disabled:${tenantId}:${version}`,
       tenant_id: tenantId,
       actor_id: options.operatorId,
       action: 'policy.disabled',
@@ -2634,6 +2666,12 @@ export class TenantRuntimePolicySnapshotRepository {
     if (options.parentSnapshotRef) {
       query = query.where('parent_snapshot_ref', '=', options.parentSnapshotRef);
     }
+    if (options.createdFrom) {
+      query = query.where('created_at', '>=', new Date(options.createdFrom));
+    }
+    if (options.createdTo) {
+      query = query.where('created_at', '<=', new Date(options.createdTo));
+    }
     if (options.status) {
       query = query
         .innerJoin('tenant_runtime_policy', (join) =>
@@ -2817,6 +2855,15 @@ export class TenantAgentAdmissionRepository {
     }
     if (options.agentRunId) {
       query = query.where('agent_run_id', '=', options.agentRunId);
+    }
+    if (options.workflowId) {
+      query = query.where('workflow_id', '=', options.workflowId);
+    }
+    if (options.acquiredFrom) {
+      query = query.where('acquired_at', '>=', new Date(options.acquiredFrom));
+    }
+    if (options.acquiredTo) {
+      query = query.where('acquired_at', '<=', new Date(options.acquiredTo));
     }
     const rows = await query
       .orderBy('updated_at', 'desc')
@@ -3523,6 +3570,9 @@ function mapAuditEvent(row: Selectable<AuditEventTable>): AuditEvent {
   if (row.actor_id) {
     auditEvent.actor_id = row.actor_id;
   }
+  if (row.event_key) {
+    auditEvent.event_key = row.event_key;
+  }
   if (row.reason) {
     auditEvent.reason = row.reason;
   }
@@ -3767,6 +3817,7 @@ async function appendTenantPolicyAudit(
   reason?: string,
 ): Promise<void> {
   await new AuditEventRepository(db).append({
+    event_key: `${action}:${policy.tenant_id}:${policy.version}`,
     tenant_id: policy.tenant_id,
     actor_id: actorId,
     action,

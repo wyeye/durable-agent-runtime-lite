@@ -1,184 +1,139 @@
 # Current Status
 
-Last updated for AR-1.2B: real worker crash recovery smoke, Activity retry/heartbeat/cancellation hardening, and Temporal replay gate with exported real histories.
+Last updated for AR-1.2C-FINAL completion: Tenant Policy Production Closure, operational visibility, readiness hardening, admission reconcile, audit idempotency, and full regression gates.
+
+## AR-1.2C Status
+
+**COMPLETE**
+
+The repository now includes the AR-1.2C implementation pieces, unit coverage, deep-chain smoke entry points, expanded integration workflow, and documentation. The full static, Docker, live compose, legacy smoke, Pi smoke, tenant policy smoke, new deep-chain smoke, crash-resume, Temporal fixture export, and replay sequence has been rerun successfully against the current diff.
 
 ## Completed Platform Capabilities
 
 1. DB-backed FlowSpec / RouteSpec / ToolManifest source of truth.
-2. runtime-api DB route source without production fallback to memory sample data.
+2. Runtime API DB route source without production fallback to memory sample data.
 3. Temporal workflow start and runtime-worker consumption.
-4. runtime-worker tool orchestration through tool-gateway.
-5. L3 `preview -> human approve/reject -> commit` governance.
+4. runtime-worker tool orchestration through Tool Gateway.
+5. L3 `preview -> human approve/reject -> commit` governance using Temporal Signals.
 6. Persistent `human_task`, `audit_event`, `tool_call_log`, and `idempotency_record`.
 7. Registry lifecycle states: `draft`, `validated`, `published`, `gray`, `deprecated`, `disabled`.
-8. Migration `004_control_plane_registry.sql`, governance columns, `capability_release`, and `archived -> deprecated` migration.
-9. Five DB Registry repositories and `CapabilityReleaseRepository`.
-10. `RegistryValidationService`.
-11. `RegistryReleaseService`.
-12. Publish, Flow + Route joint publish, gray, rollback, deprecate, disable.
-13. Deterministic gray allowlist selection.
-14. Header authentication and RBAC for control-plane.
-15. control-plane Registry management API.
-16. control-plane standard error mapping and OpenAPI.
-17. control-plane operations BFF for Human Task, TaskRun, Audit and ToolCall.
-18. runtime-api minimal Human Task and TaskRun query extensions.
-19. tool-gateway minimal Audit and ToolCall query extensions with sensitive field masking.
-20. control-plane Fastify API + Vite static resources in one Node/Fastify container.
-21. Docker + PostgreSQL + Temporal smoke path: `smoke:temporal-db-e2e`.
-22. control-plane API smoke: `smoke:control-plane-api-e2e`.
-23. control-plane UI smoke: `smoke:control-plane-ui-e2e`.
-24. Real Pi Agent Core inner loop in runtime-worker.
-25. Temporal `piDurableAgentWorkflow` supervisor for Pi segment boundaries.
-26. Persistent `agent_execution_plan`, `agent_run`, `agent_step`, and `agent_context_snapshot`.
-27. Safe Pi context snapshot serialization without hidden reasoning or secret-like fields.
-28. Deferred Pi tools that propose tool calls without executing side effects.
-29. Agent L3 governance path through Tool Gateway preview, Human Task Signal, commit, and Pi context resume.
-30. Explicit `/v1/agent-tasks`, `/v1/agent-runs`, `/v1/agent-runs/:id/steps`, and user-input Human Task response APIs.
-31. Cumulative `AgentBudgetLedger` across Pi segments, worker restart, and Continue-As-New.
-32. Agent tool idempotency keys include agent run, segment, call id, and operation.
-33. AgentStep lifecycle updates with authoritative tool result refs, human task ids, context refs, and handoff refs.
-34. Controlled `handoff_to_workflow` child `ConfigDrivenWorkflow` execution for allowed handoff targets.
-35. Model Gateway contract with structured assistant text/tool-call blocks and usage mapping.
-36. Dev/test mock Model Gateway under `devtools/mock-server`.
-37. Pi runtime smoke scripts for readonly, L3, user input, handoff, restart/resume, and model gateway paths.
-38. runtime-api header auth mode with production fail-closed identity requirements.
-39. runtime-api tenant/user mismatch checks for body/query identity fields and no default tenant fallback on protected routes.
-40. tool-gateway service-token identity checks for runtime-worker and control-plane callers.
-41. runtime-worker Tool Gateway client and control-plane BFF inject service identity headers.
-42. Real Docker `SIGKILL` Pi worker crash recovery smoke for waiting-user and L3 approval/commit paths.
-43. Pi Activity retry, heartbeat, cancellation, and non-retryable error option groups.
-44. Pi adapter pre-aborted `AbortSignal` handling maps cancellation to `AGENT_CANCELLED`.
-45. Temporal history export script using real `WorkflowHandle.fetchHistory()`.
-46. Temporal replay test gate for exported histories under `tests/temporal-replay/histories`.
-47. GitHub Actions integration workflow for Docker crash smoke, history export, and replay.
+8. Immutable `FlowExecutionPlan` and exact runtime `execution_plan_ref` usage.
+9. Real Pi Agent Core inner loop in runtime-worker.
+10. Temporal `piDurableAgentWorkflow` supervisor for Pi segment boundaries.
+11. Persistent `agent_execution_plan`, `agent_run`, `agent_step`, and `agent_context_snapshot`.
+12. Safe Pi context snapshot serialization without hidden reasoning or secret-like fields.
+13. Deferred Pi tools that propose tool calls without executing side effects.
+14. Agent L3 governance through Tool Gateway preview, Human Task Signal, commit, and Pi context resume.
+15. Controlled `handoff_to_workflow` child `ConfigDrivenWorkflow` execution for allowed handoff targets.
+16. Model Gateway contract with development mock server under `devtools/mock-server`.
+17. Runtime API header auth mode with production fail-closed identity requirements.
+18. Tool Gateway service-token identity checks for runtime-worker and control-plane callers.
+19. Real Docker `SIGKILL` Pi worker crash recovery smoke script and Temporal replay gate.
 
-## Completed In AR-0
+## Completed Tenant Policy Runtime
 
-1. Immutable `FlowExecutionPlan` contract and `flow_execution_plan` table.
-2. Registry publish creates an execution plan that locks Flow, Agent, Prompt, Tool, risk, allowed tools and budget references.
-3. runtime-api resolves and stores `execution_plan_ref` before starting `ConfigDrivenWorkflow`.
-4. runtime-worker loads execution plans by exact ref and does not select `latest` during workflow execution.
-5. Tool Gateway validates exact tool version/hash/risk from the execution plan.
-6. L3 Human Task wait now uses Temporal Signal after runtime-api writes the DB decision.
-7. runtime-worker readiness tracks the real Temporal Worker state and graceful shutdown closes Worker, NativeConnection and shared DB resources.
-8. CI workflow added for install, lint, typecheck, test, build, PostgreSQL repository tests and docker compose config.
+1. TenantRuntimePolicy lifecycle and migration `008_tenant_runtime_policy.sql`.
+2. Immutable Tenant Policy Snapshot.
+3. Snapshot lineage and migration `009_tenant_policy_snapshot_lineage.sql`.
+4. Root, Flow Agent Child, Workflow Handoff Child, and nested handoff snapshot derivation types.
+5. Worker model, tool, handoff, and budget effective policy enforcement.
+6. ConfigDrivenWorkflow non-agent tool step policy enforcement.
+7. Tool Gateway invoke/preview/commit final policy validation.
+8. PostgreSQL advisory transaction lock for concurrent Tenant Agent Admission.
+9. Tenant policy seed path in `scripts/seed-examples.ts`.
+10. Tenant policy, snapshot, and concurrency smoke scripts.
+11. Admission reconcile CLI with dry-run default, `--tenant-id`, `--batch-size`, `--stale-after-ms`, fail-closed Temporal connection handling, safe JSON output, idempotent `agent.admission.reconciled` audit, and DB/Temporal cleanup.
+12. Runtime API and Tool Gateway real `/readyz` services.
+13. Production service-token placeholder/length/difference validation.
+14. Tool Gateway debug idempotency endpoint disabled by default and gated by `idempotency:debug`.
+15. Tool Gateway readonly invoke now records committed `tool_call_log` rows for operational proof.
 
-## Completed In CP-R5 + CP-R6
+## Operations Visibility
 
-1. React app moved under `apps/control-plane/src/web`.
-2. Unified same-origin API client for `/api/v1/...`.
-3. Development Identity Panel with `user_id`, `tenant_id`, and `roles`.
-4. RBAC-aware write buttons and auditor read-only notice.
-5. Dashboard page.
-6. Generic Registry ResourcePage for Flow, Route, Tool, Agent and Prompt.
-7. JSON draft create/edit with local parse guard and formatting.
-8. `expected_revision` draft update support.
-9. Validate result display with errors, warnings and dependency graph.
-10. Publish, gray, rollback, deprecate and disable confirmation modals with `release_note`.
-11. Gray tenant/user allowlist input.
-12. Release history and Release Center.
-13. Simple side-by-side JSON version comparison.
-14. Flow step summary.
-15. Route threshold, examples, channel, role and gray allowlist summary.
-16. Tool L3/L4 risk labels and warnings.
-17. Agent Prompt/Tool dependency summary.
-18. Prompt content and variable summary.
-19. Human Task list/detail and approve/reject through BFF.
-20. TaskRun list/detail with links to Human Task, Audit and ToolCall.
-21. AuditEvent list/detail through BFF.
-22. ToolCall list/detail through BFF.
-23. Frontend tests for API client, auth headers, error mapping, Registry page model and no legacy sample default rows.
-24. Browser UI smoke script that validates Registry publish/rollback and UI Human Task approval.
+Control-plane has read-only APIs and UI pages for runtime policy snapshots and tenant admissions:
+
+```text
+GET /api/v1/tenant-runtime-policy-snapshots
+GET /api/v1/tenant-runtime-policy-snapshots/:snapshotId
+GET /api/v1/tenant-agent-admissions
+GET /api/v1/tenant-agent-admissions/:admissionId
+/policy-snapshots
+/tenant-admissions
+```
+
+Supported filters include snapshot root/parent/execution plan/source policy/derivation/created time and admission status/task/agent/workflow/acquired time. No create/update/delete routes are exposed for these resources.
+
+## Smoke Commands
+
+Existing smoke:
+
+```bash
+corepack pnpm smoke:temporal-db-e2e
+corepack pnpm smoke:control-plane-api-e2e
+corepack pnpm smoke:control-plane-ui-e2e
+corepack pnpm smoke:pi-readonly-e2e
+corepack pnpm smoke:pi-l3-e2e
+corepack pnpm smoke:pi-user-input-e2e
+corepack pnpm smoke:pi-handoff-e2e
+corepack pnpm smoke:pi-model-gateway-e2e
+corepack pnpm smoke:pi-worker-crash-resume-e2e
+corepack pnpm smoke:tenant-policy-e2e
+corepack pnpm smoke:tenant-policy-snapshot-e2e
+corepack pnpm smoke:tenant-concurrency-e2e
+```
+
+AR-1.2C smoke entry points:
+
+```bash
+corepack pnpm smoke:tenant-flow-agent-e2e
+corepack pnpm smoke:tenant-handoff-lineage-e2e
+corepack pnpm smoke:tenant-policy-crash-snapshot-e2e
+corepack pnpm smoke:tenant-admission-reconcile-e2e
+```
 
 ## Runtime Compatibility
-
-Executable Registry statuses remain:
-
-```text
-published
-gray
-```
-
-The following statuses must not enter production execution:
-
-```text
-draft
-validated
-deprecated
-disabled
-```
-
-runtime-api avoids DB production fallback to memory/default/sample routes. Non-matched DB routing does not start a default Agent workflow without an execution plan. tool-gateway avoids production fallback to built-in manifests when DB registry mode is configured.
-
-Temporal workflow inputs use immutable `execution_plan_ref` values. The execution plan contains the FlowSpec snapshot plus exact Agent, Prompt and Tool version/hash references, so running workflows are not changed by later publish, gray, rollback, disable, deprecate or tool version changes.
-
-Agent runtime inputs use immutable `agent_execution_plan_ref` values. `GenericAgentWorkflow` no longer constructs runtime agent metadata from loose `agent_id` fields; it delegates to `piDurableAgentWorkflow`.
-
-control-plane does not execute tools and does not copy the Human Task state machine. UI operations go through control-plane API/BFF.
-
-Pi runtime production compatibility:
-
-- production requires `PI_AGENT_MODE=model_gateway`;
-- deterministic Pi streams are development/test only;
-- `devtools/mock-server` is available only in the Pi smoke override and is not a production service;
-- runtime-worker stores context snapshots and references, not hidden reasoning or full sensitive model/tool payloads.
-
-## Security Model
-
-Header identity:
-
-```text
-x-user-id
-x-tenant-id
-x-roles
-x-request-id
-```
-
-Roles:
-
-- `platform_admin`
-- `capability_operator`
-- `auditor`
 
 Production requires:
 
 ```text
 CONTROL_PLANE_AUTH_MODE=header
 RUNTIME_API_AUTH_MODE=header
+RUNTIME_API_ROUTE_SOURCE=db
+RUNTIME_API_WORKFLOW_STARTER=temporal
 TOOL_GATEWAY_AUTH_MODE=service_token
+TOOL_GATEWAY_REGISTRY_SOURCE=db
 TENANT_RUNTIME_POLICY_MODE=required
+PI_AGENT_MODE=model_gateway
 ```
 
-`disabled` auth mode is allowed only in development/test. Production never silently uses a default administrator, default runtime user, default tenant, or anonymous Tool Gateway caller.
+Development/test may use deterministic Pi and mock Model Gateway through `infra/docker-compose.pi-smoke.yml`; `devtools/mock-server` is not a production app or production container.
 
-Tool Gateway service identities:
+## Audit State
 
-- `runtime-worker` may read ToolManifest safe views and call invoke / preview / commit.
-- `control-plane` may read ToolManifest, AuditEvent, and ToolCall data for BFF operations.
-- `runtime-api` has no Tool Gateway service identity and must not call Tool Gateway.
+Implemented event families include:
 
-Service tokens are read from environment variables and are not baked into images. Docker Compose uses clearly marked local dev-only placeholder values so local smoke paths can exercise the service-auth flow.
+- `policy.publish`
+- `policy.rollback`
+- `policy.deprecated`
+- `policy.disabled`
+- `policy.snapshot.created`
+- `policy.snapshot.derived`
+- `policy.snapshot.hash_mismatch`
+- `policy.resolve.allowed`
+- `policy.resolve.denied`
+- `agent.admission.reconciled`
+- `agent.human_task.created`
+- existing human task decision events
+- `tool.invoke`
+- `tool.preview`
+- `tool.commit`
+- `tool.idempotency_replay`
 
-Tenant runtime policy is represented by `tenant_runtime_policy`, immutable `tenant_runtime_policy_snapshot`, and `tenant_agent_admission`. `runtime-api` resolves a policy snapshot before starting DB-backed workflows and stores the snapshot/admission identity on `task_run`; `runtime-worker` forwards that identity to Tool Gateway calls; `tool-gateway` independently loads the immutable snapshot and denies tool calls whose tool/version/operation or execution plan hash does not match. Development and test may keep `TENANT_RUNTIME_POLICY_MODE=optional`; production startup paths require `required`.
+Migration `010_runtime_audit_and_ops.sql` adds `audit_event.event_key` plus indexes for retry-safe logical events and operations queries.
 
-## Primary Docs
+## Verified Regression Gate
 
-- `docs/15_registry_lifecycle.md`
-- `docs/16_control_plane_api.md`
-- `docs/17_control_plane_security.md`
-- `docs/18_control_plane_ui.md`
-- `docs/19_pi_segmented_agent_runtime.md`
-- `docs/20_pi_runtime_hardening.md`
-- `docs/21_model_gateway_contract.md`
-- `docs/13_docker_deployment.md`
-- `apps/control-plane/docs/API.md`
-- `apps/control-plane/docs/DEV_PLAN.md`
-- `apps/control-plane/docs/DEV_SPEC.md`
-- `docs/13_docker_deployment.md`
-
-## Verification Commands
-
-The expected final verification set is:
+The following gate passed for this completion. Commands are shown without the local `rtk` wrapper used in this workspace.
 
 ```bash
 corepack pnpm lint
@@ -186,45 +141,44 @@ corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm build
 docker compose -f infra/docker-compose.yml config
-docker compose -f infra/docker-compose.yml build control-plane runtime-api runtime-worker tool-gateway
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml config
+COMPOSE_PARALLEL_LIMIT=1 docker compose -f infra/docker-compose.yml build control-plane runtime-api runtime-worker tool-gateway
 docker compose -f infra/docker-compose.yml up -d postgres valkey temporal temporal-ui
 corepack pnpm db:migrate
 corepack pnpm seed:examples
-docker compose -f infra/docker-compose.yml up -d tool-gateway runtime-worker runtime-api control-plane
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d mock-server tool-gateway runtime-worker runtime-api control-plane
+curl http://localhost:3000/readyz
+curl http://localhost:3200/readyz
+curl http://localhost:3100/readyz
+curl http://localhost:3300/readyz
 corepack pnpm smoke:temporal-db-e2e
 corepack pnpm smoke:control-plane-api-e2e
 corepack pnpm smoke:control-plane-ui-e2e
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml config
 corepack pnpm smoke:pi-readonly-e2e
 corepack pnpm smoke:pi-l3-e2e
 corepack pnpm smoke:pi-user-input-e2e
 corepack pnpm smoke:pi-handoff-e2e
-corepack pnpm smoke:pi-restart-resume-e2e
-corepack pnpm smoke:pi-worker-crash-resume-e2e
+PI_AGENT_MODE=model_gateway docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d runtime-worker
 corepack pnpm smoke:pi-model-gateway-e2e
-corepack pnpm temporal:export-replay-fixtures
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d runtime-worker
+corepack pnpm smoke:pi-worker-crash-resume-e2e
+corepack pnpm smoke:tenant-policy-e2e
+corepack pnpm smoke:tenant-policy-snapshot-e2e
+corepack pnpm smoke:tenant-concurrency-e2e
+corepack pnpm smoke:tenant-flow-agent-e2e
+corepack pnpm smoke:tenant-handoff-lineage-e2e
+corepack pnpm smoke:tenant-policy-crash-snapshot-e2e
+corepack pnpm smoke:tenant-admission-reconcile-e2e
+TEMPORAL_REPLAY_SMOKE_RESULT_FILE=artifacts/pi-worker-crash-resume/result.json corepack pnpm temporal:export-replay-fixtures
 corepack pnpm test:temporal-replay
+git diff --check
 ```
 
-## Not Completed Yet
+Runtime API `/readyz` verified `config`, `database`, `route_registry`, `temporal`, `tenant_policy`, and `auth`. Tool Gateway `/readyz` verified `config`, `database`, `tool_registry`, `policy_snapshot_store`, and `service_auth`. Control-plane and runtime-worker returned ready states; runtime-worker was restored to deterministic smoke mode after the model-gateway smoke.
 
-This stage intentionally does not implement:
+## Out Of Scope / Remaining
 
-1. Low-code flow canvas or drag-and-drop designer.
-2. Live production model-gateway smoke with real credentials.
-3. Real business system adapters.
-4. Rich `agent.*` audit event taxonomy beyond the current persisted AgentRun/AgentStep, HumanTask, ToolCall and Audit records.
-5. Enterprise SSO.
-6. Random gray traffic splitting.
-7. Any fifth production app or production container.
-8. TenantRuntimePolicy tables, snapshots, resolver, and policy enforcement.
-9. Full OpenTelemetry trace/metric instrumentation across all four apps.
-10. Replay fixture rotation/versioning policy beyond the current AR-1.2B crash-smoke histories.
-
-## Suggested Next Batch
-
-1. Add a rotation policy for replay histories after workflow-shape changes and Temporal SDK upgrades.
-2. Add richer `agent.*` audit events and log assertions.
-3. Improve UI ergonomics around AgentRun/AgentStep inspection and context refs.
-4. Add evaluation/test-set operations for Route and Flow releases.
-5. Add production identity integration behind the existing Header Auth boundary.
+1. Full aspirational `agent.run.*`, `agent.segment.*`, `agent.tool.*`, `agent.handoff.*`, `agent.continue_as_new`, and `agent.worker.recovered` audit taxonomy is not completely implemented.
+2. No production OpenTelemetry completeness work was attempted.
+3. No live production model-gateway smoke with real credentials was attempted.
+4. No real business system adapters, fifth production app, or fifth production container were added.

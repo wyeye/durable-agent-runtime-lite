@@ -576,9 +576,10 @@ export async function createHumanTaskActivity(
     );
     await new TaskRunRepository(db).updateStatus(context.task_run_id, { status: 'waiting_human' });
     await new AuditEventRepository(db).append({
+      event_key: `agent.human_task.created:${context.tenant_id}:${humanTask.human_task_id}`,
       tenant_id: context.tenant_id,
       actor_id: context.user_id,
-      action: 'human_task.create',
+      action: 'agent.human_task.created',
       target_type: 'human_task',
       target_id: humanTask.human_task_id,
       result: 'pending',

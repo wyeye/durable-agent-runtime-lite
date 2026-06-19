@@ -63,3 +63,11 @@ Deferred Pi tools 只能产生 proposal，不得持有 Tool Gateway、DB、Tempo
 - FlowSpec 解释器单测覆盖条件、跳转、失败、补偿。
 - Pi Adapter 使用 deterministic stream 和 local Model Gateway mock 做契约测试。
 - Tool Gateway 调用使用 Mock Server 做集成测试。
+
+## Tenant Policy Runtime
+
+- `ConfigDrivenWorkflow` 只在 Activity 中加载 root policy snapshot，不在 Workflow 中直接访问 DB。
+- Flow 中的 Agent step 会派生 `flow_agent_child` snapshot，并把 child snapshot ref/hash 传给 `piDurableAgentWorkflow`。
+- Agent handoff 会派生 `workflow_handoff` 或 `nested_handoff` snapshot，再启动目标 `ConfigDrivenWorkflow` child。
+- Tool 执行仍必须通过 Activity -> Tool Gateway；worker 的 policy check 是 fail-fast，不是最终授权边界。
+- Admission id 随 TaskRun/Workflow/AgentRun 传递，workflow terminal 状态通过 Activity 释放 admission。

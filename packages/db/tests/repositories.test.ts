@@ -34,6 +34,7 @@ import {
   hashTenantRuntimePolicy,
   ToolCallLogRepository,
   ToolManifestRepository,
+  AuditEventRepository,
 } from '../src/index.js';
 
 class FakeQuery {
@@ -68,6 +69,10 @@ class FakeQuery {
   }
 
   onConflict() {
+    return this;
+  }
+
+  is() {
     return this;
   }
 
@@ -825,6 +830,31 @@ describe('db repositories', () => {
       mode: 'commit',
       result_json: { written: true },
       output_hash: 'output_hash',
+    });
+  });
+
+  it('stores audit event keys for retry-safe logical events', async () => {
+    const db = new FakeDb({ audit_event: [] });
+    const repository = new AuditEventRepository(db as never);
+
+    await expect(repository.append({
+      event_key: 'agent.admission.reconciled:tenant_1:admission_1',
+      tenant_id: 'tenant_1',
+      actor_id: 'system:admission-reconcile',
+      action: 'agent.admission.reconciled',
+      target_type: 'tenant_agent_admission',
+      target_id: 'admission_1',
+      result: 'succeeded',
+      reason: 'workflow_completed',
+      payload: {
+        tenant_id: 'tenant_1',
+        task_run_id: 'task_1',
+        tenant_admission_id: 'admission_1',
+      },
+    })).resolves.toMatchObject({
+      event_key: 'agent.admission.reconciled:tenant_1:admission_1',
+      action: 'agent.admission.reconciled',
+      payload: { tenant_admission_id: 'admission_1' },
     });
   });
 });

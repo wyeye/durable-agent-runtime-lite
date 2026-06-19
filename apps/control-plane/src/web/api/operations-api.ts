@@ -5,7 +5,10 @@ import type {
   DashboardSummaryResponse,
   HumanTaskGetResponse,
   HumanTaskListResponse,
+  PaginatedResponse,
   TaskRun,
+  TenantAgentAdmission,
+  TenantRuntimePolicySnapshot,
   ToolCallLog,
 } from '@dar/contracts';
 import type { ApiClient } from './client.js';
@@ -53,6 +56,29 @@ export interface ToolCallFilters {
   task_run_id?: string;
   tool_name?: string;
   status?: string;
+  page?: number;
+  page_size?: number;
+}
+
+export interface TenantPolicySnapshotFilters {
+  root_snapshot_ref?: string;
+  parent_snapshot_ref?: string;
+  execution_plan_ref?: string;
+  source_policy_version?: number;
+  derivation_type?: string;
+  created_from?: string;
+  created_to?: string;
+  page?: number;
+  page_size?: number;
+}
+
+export interface TenantAdmissionFilters {
+  status?: string;
+  task_run_id?: string;
+  agent_run_id?: string;
+  workflow_id?: string;
+  acquired_from?: string;
+  acquired_to?: string;
   page?: number;
   page_size?: number;
 }
@@ -125,4 +151,26 @@ export function listToolCalls(client: ApiClient, filters: ToolCallFilters): Prom
 
 export function getToolCall(client: ApiClient, toolCallId: string): Promise<ToolCallLog> {
   return client.request(`/api/v1/operations/tool-calls/${encodeURIComponent(toolCallId)}`);
+}
+
+export function listTenantPolicySnapshots(
+  client: ApiClient,
+  filters: TenantPolicySnapshotFilters,
+): Promise<PaginatedResponse<TenantRuntimePolicySnapshot>> {
+  return client.request('/api/v1/tenant-runtime-policy-snapshots', { query: filters });
+}
+
+export function getTenantPolicySnapshot(client: ApiClient, snapshotId: string): Promise<TenantRuntimePolicySnapshot> {
+  return client.request(`/api/v1/tenant-runtime-policy-snapshots/${encodeURIComponent(snapshotId)}`);
+}
+
+export function listTenantAdmissions(
+  client: ApiClient,
+  filters: TenantAdmissionFilters,
+): Promise<PaginatedResponse<TenantAgentAdmission>> {
+  return client.request('/api/v1/tenant-agent-admissions', { query: filters });
+}
+
+export function getTenantAdmission(client: ApiClient, admissionId: string): Promise<TenantAgentAdmission> {
+  return client.request(`/api/v1/tenant-agent-admissions/${encodeURIComponent(admissionId)}`);
 }

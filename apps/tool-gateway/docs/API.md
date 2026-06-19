@@ -120,6 +120,14 @@ L3 commit 会校验：
 
 开发/调试接口。DB 模式从 `idempotency_record` 表读取。
 
+默认关闭：
+
+```text
+TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED=false
+```
+
+开启后要求独立权限 `idempotency:debug`，不再复用 `tool_call:read`。返回数据会脱敏。
+
 ## Risk Levels
 
 - `L0`：无敏感副作用，本地计算类。
@@ -135,6 +143,21 @@ L3 commit 会校验：
 - `TOOL_GATEWAY_AUTH_MODE=disabled|service_token`：service identity mode；production requires `service_token`。
 - `TOOL_GATEWAY_RUNTIME_WORKER_TOKEN`：token accepted for the `runtime-worker` service.
 - `TOOL_GATEWAY_CONTROL_PLANE_TOKEN`：token accepted for the `control-plane` service.
+- production 会拒绝缺失、相同、过短或已知 placeholder service token。
+
+## Readiness
+
+`GET /healthz` 只表示进程存活。
+
+`GET /readyz` 使用真实依赖探测：
+
+- config；
+- PostgreSQL 轻量只读查询；
+- Tool Registry 读取；
+- Tenant Policy Snapshot store 读取；
+- service-token 配置。
+
+production 下 readiness 要求 `TOOL_GATEWAY_REGISTRY_SOURCE=db`、`TOOL_GATEWAY_AUTH_MODE=service_token`、`TENANT_RUNTIME_POLICY_MODE=required`。
 
 ## Local DB Registry Flow
 

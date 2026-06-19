@@ -12,6 +12,8 @@ import { TaskRunsPage } from './pages/task-runs/TaskRunsPage.js';
 import { AgentRunsPage } from './pages/agent-runs/AgentRunsPage.js';
 import { AuditEventsPage } from './pages/audit/AuditEventsPage.js';
 import { ToolCallsPage } from './pages/tool-calls/ToolCallsPage.js';
+import { PolicySnapshotsPage } from './pages/policy-snapshots/PolicySnapshotsPage.js';
+import { TenantAdmissionsPage } from './pages/tenant-admissions/TenantAdmissionsPage.js';
 
 export const router = createBrowserRouter([
   {
@@ -31,6 +33,8 @@ export const router = createBrowserRouter([
       { path: 'agent-runs', element: <AgentRunsPage /> },
       { path: 'audit-events', element: <AuditEventsPage /> },
       { path: 'tool-calls', element: <ToolCallsPage /> },
+      { path: 'policy-snapshots', element: <PolicySnapshotsPage /> },
+      { path: 'tenant-admissions', element: <TenantAdmissionsPage /> },
       { path: '*', element: <Navigate to="/dashboard" replace /> },
     ],
   },

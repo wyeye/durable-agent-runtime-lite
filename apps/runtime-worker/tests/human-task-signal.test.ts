@@ -66,6 +66,27 @@ describe('ConfigDrivenWorkflow human task signals', () => {
       expect(commits).toEqual([]);
     });
   }, 30_000);
+
+  it('does not update task_run status when running as a child workflow', async () => {
+    const statuses: string[] = [];
+    const worker = await createWorker({
+      loadExecutionPlanByRefActivity: async () => activityPlan(),
+      updateTaskRunStatusActivity: async (input: { status: string }) => {
+        statuses.push(input.status);
+      },
+    });
+
+    await worker.runUntil(async () => {
+      const handle = await environment!.client.workflow.start('configDrivenWorkflow', {
+        taskQueue: TASK_QUEUES.runtimeWorkerMain,
+        workflowId: 'wf_child_status_owner',
+        args: [{ ...activityWorkflowInput('wf_child_status_owner'), task_status_owner: false }],
+      });
+      const result = await handle.result();
+      expect(result.status).toBe('completed');
+      expect(statuses).toEqual([]);
+    });
+  }, 30_000);
 });
 
 async function createWorker(overrides: Record<string, unknown>): Promise<Worker> {
@@ -114,6 +135,14 @@ function workflowInput(workflowId: string) {
     flow_sha256: 'b'.repeat(64),
     request_id: 'req_signal',
     input: { text: 'approve later' },
+  };
+}
+
+function activityWorkflowInput(workflowId: string) {
+  return {
+    ...workflowInput(workflowId),
+    flow_id: 'flow_activity',
+    execution_plan_ref: 'db://flow-execution-plan/plan_activity',
   };
 }
 
@@ -172,6 +201,29 @@ function l3Plan(): FlowExecutionPlan {
     ],
     allowed_tools: [],
     budget: { max_steps: 0, max_tokens: 0 },
+    generated_at: '2026-01-01T00:00:00.000Z',
+    execution_plan_hash: 'c'.repeat(64),
+  };
+}
+
+function activityPlan(): FlowExecutionPlan {
+  return {
+    execution_plan_id: 'plan_activity',
+    execution_plan_ref: 'db://flow-execution-plan/plan_activity',
+    tenant_id: 'tenant_1',
+    flow_id: 'flow_activity',
+    flow_version: 1,
+    flow_sha256: 'b'.repeat(64),
+    flow_spec: {
+      flow_id: 'flow_activity',
+      version: 1,
+      runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: TASK_QUEUES.runtimeWorkerMain },
+      steps: [{ id: 'normalize', type: 'activity', activity: 'input.normalize' }],
+    },
+    agents: [],
+    tools: [],
+    allowed_tools: [],
+    budget: { max_steps: 1, max_tokens: 100 },
     generated_at: '2026-01-01T00:00:00.000Z',
     execution_plan_hash: 'c'.repeat(64),
   };

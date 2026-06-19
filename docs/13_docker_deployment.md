@@ -141,9 +141,18 @@ corepack pnpm smoke:pi-model-gateway-e2e
 
 The model-gateway smoke uses `PI_SMOKE_MODE=model_gateway` and
 `devtools/mock-server /v1/generate` to return structured tool-call blocks. The
-other Pi smokes use deterministic Pi-compatible streams, but still exercise real
-Pi Agent Core, Temporal workflow supervision, Tool Gateway, DB state, Human Task
-signals, and context snapshot recovery.
+worker must be restarted with `PI_AGENT_MODE=model_gateway` before running it:
+
+```bash
+PI_AGENT_MODE=model_gateway \
+  docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d runtime-worker
+corepack pnpm smoke:pi-model-gateway-e2e
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d runtime-worker
+```
+
+The other Pi smokes use deterministic Pi-compatible streams, but still exercise
+real Pi Agent Core, Temporal workflow supervision, Tool Gateway, DB state, Human
+Task signals, and context snapshot recovery.
 
 `smoke:pi-worker-crash-resume-e2e` is the real crash recovery gate. It kills the
 compose `runtime-worker` service with `SIGKILL`, verifies `/readyz` is no longer
@@ -265,3 +274,22 @@ When modifying Docker support:
 4. Do not place secrets in Dockerfiles or compose files.
 5. Update `.env.example` and app docs when new environment variables are introduced.
 6. Validate `/healthz` and `/readyz` after changing startup behavior.
+
+## AR-1.2C readiness and tenant policy checks
+
+`runtime-api /readyz` now probes config, PostgreSQL, DB Route Registry, Temporal, Tenant Policy repository and auth mode. `tool-gateway /readyz` probes config, PostgreSQL, Tool Registry, Tenant Policy Snapshot store and service-token configuration.
+
+Production containers must keep:
+
+```text
+RUNTIME_API_AUTH_MODE=header
+RUNTIME_API_ROUTE_SOURCE=db
+RUNTIME_API_WORKFLOW_STARTER=temporal
+TOOL_GATEWAY_AUTH_MODE=service_token
+TOOL_GATEWAY_REGISTRY_SOURCE=db
+TENANT_RUNTIME_POLICY_MODE=required
+```
+
+Compose defaults use `dev-only-*` service tokens for local development only. Production deployments must inject distinct, non-placeholder runtime-worker and control-plane tokens through environment/secret management; do not bake them into images.
+
+The full integration workflow also runs tenant policy, lineage, crash snapshot, admission reconcile and Temporal replay smoke commands. A failure in any smoke fails the job.

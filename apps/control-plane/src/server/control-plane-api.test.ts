@@ -16,7 +16,9 @@ import type {
   RegistryValidationResult,
   StandardSuccessResponse,
   TaskRun,
+  TenantAgentAdmission,
   TenantRuntimePolicy,
+  TenantRuntimePolicySnapshot,
   ToolCallLog,
 } from '@dar/contracts';
 import { loadConfig } from '@dar/config';
@@ -272,6 +274,58 @@ describe('control-plane API', () => {
     await close();
   });
 
+  it('exposes read-only tenant policy snapshot and admission operations', async () => {
+    const service = new FakeRegistryApi();
+    const { app, close } = await testApp({ registryService: service });
+
+    const snapshots = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tenant-runtime-policy-snapshots?derivation_type=root&page_size=10',
+      headers: auditorHeaders,
+    });
+    expect(snapshots.statusCode).toBe(200);
+    expect(snapshots.json().data.items[0]).toMatchObject({
+      snapshot_ref: 'tenant-policy-snapshot:snapshot_1',
+      tenant_id: 'tenant_1',
+    });
+
+    const snapshot = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tenant-runtime-policy-snapshots/tenant-policy-snapshot%3Asnapshot_1',
+      headers: authHeaders,
+    });
+    expect(snapshot.statusCode).toBe(200);
+    expect(snapshot.json().data.snapshot_id).toBe('snapshot_1');
+
+    const admissions = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tenant-agent-admissions?status=active&page_size=10',
+      headers: auditorHeaders,
+    });
+    expect(admissions.statusCode).toBe(200);
+    expect(admissions.json().data.items[0]).toMatchObject({
+      admission_id: 'admission_1',
+      status: 'active',
+    });
+
+    const admission = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tenant-agent-admissions/admission_1',
+      headers: authHeaders,
+    });
+    expect(admission.statusCode).toBe(200);
+    expect(admission.json().data.task_run_id).toBe('task_1');
+
+    const writeAttempt = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tenant-agent-admissions',
+      headers: adminHeaders,
+      payload: {},
+    });
+    expect(writeAttempt.statusCode).toBe(404);
+    await close();
+  });
+
   it('lets platform_admin approve human tasks through the BFF', async () => {
     const runtime = new FakeRuntimeApiClient();
     const { app, close } = await testApp({ runtimeApiClient: runtime });
@@ -414,6 +468,22 @@ class FakeRegistryApi implements RegistryApi {
       prompts_published: 1,
     };
   }
+
+  async listTenantPolicySnapshots() {
+    return { items: [snapshot()], page: 1, page_size: 20 };
+  }
+
+  async getTenantPolicySnapshot() {
+    return snapshot();
+  }
+
+  async listTenantAgentAdmissions() {
+    return { items: [admission()], page: 1, page_size: 20 };
+  }
+
+  async getTenantAgentAdmission() {
+    return admission();
+  }
 }
 
 class FakeRuntimeApiClient {
@@ -544,6 +614,59 @@ function tenantPolicyRecord(overrides: Partial<TestTenantPolicyRecord> = {}): Te
     updated_at: new Date().toISOString(),
     revision: 1,
     gray_policy: { tenant_allowlist: [], user_allowlist: [] },
+    ...overrides,
+  };
+}
+
+function snapshot(overrides: Partial<TenantRuntimePolicySnapshot> = {}): TenantRuntimePolicySnapshot {
+  return {
+    snapshot_id: 'snapshot_1',
+    snapshot_ref: 'tenant-policy-snapshot:snapshot_1',
+    tenant_id: 'tenant_1',
+    root_snapshot_ref: 'tenant-policy-snapshot:snapshot_1',
+    derivation_type: 'root',
+    lineage_depth: 0,
+    source_policy_version: 1,
+    source_policy_hash: 'a'.repeat(64),
+    execution_plan_ref: 'db://agent-execution-plan/agent_plan_1',
+    execution_plan_hash: 'b'.repeat(64),
+    execution_plan_type: 'agent',
+    resolved_allowed_tools: [],
+    resolved_denied_tools: [],
+    resolved_allowed_models: [],
+    resolved_allowed_handoffs: [],
+    resolved_budget: {
+      max_segments: 1,
+      max_model_turns: 1,
+      max_tool_calls: 1,
+      max_handoffs: 0,
+      max_input_tokens: 100,
+      max_output_tokens: 100,
+      max_total_tokens: 200,
+      max_duration_ms: 1000,
+      max_context_bytes: 4096,
+    },
+    max_concurrent_agent_runs: 1,
+    snapshot_hash: 'c'.repeat(64),
+    created_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    ...overrides,
+  };
+}
+
+function admission(overrides: Partial<TenantAgentAdmission> = {}): TenantAgentAdmission {
+  return {
+    admission_id: 'admission_1',
+    tenant_id: 'tenant_1',
+    task_run_id: 'task_1',
+    agent_run_id: 'agent_run_1',
+    workflow_id: 'workflow_1',
+    workflow_run_id: 'run_1',
+    policy_snapshot_ref: 'tenant-policy-snapshot:snapshot_1',
+    status: 'active',
+    acquired_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    activated_at: new Date('2025-01-01T00:00:01.000Z').toISOString(),
+    updated_at: new Date('2025-01-01T00:00:01.000Z').toISOString(),
+    revision: 2,
     ...overrides,
   };
 }

@@ -163,8 +163,8 @@ const productionConfig = {
   PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW: 20,
   RUNTIME_API_AUTH_MODE: 'header',
   TOOL_GATEWAY_AUTH_MODE: 'service_token',
-  TOOL_GATEWAY_RUNTIME_WORKER_TOKEN: 'worker-token',
-  TOOL_GATEWAY_CONTROL_PLANE_TOKEN: 'control-token',
+  TOOL_GATEWAY_RUNTIME_WORKER_TOKEN: 'runtime-worker-token-for-tests',
+  TOOL_GATEWAY_CONTROL_PLANE_TOKEN: 'control-plane-token-for-tests',
   CONTROL_PLANE_AUTH_MODE: 'header',
   CONTROL_PLANE_SWAGGER_ENABLED: true,
 } as const;
@@ -178,7 +178,7 @@ const serviceAuthConfig: RuntimeConfig = {
 
 const runtimeWorkerHeaders = buildServiceIdentityHeaders({
   serviceId: 'runtime-worker',
-  token: 'worker-token',
+  token: 'runtime-worker-token-for-tests',
   requestId: 'req_service_worker',
   tenantId: 'tenant_1',
   userId: 'user_1',
@@ -186,7 +186,7 @@ const runtimeWorkerHeaders = buildServiceIdentityHeaders({
 
 const controlPlaneHeaders = buildServiceIdentityHeaders({
   serviceId: 'control-plane',
-  token: 'control-token',
+  token: 'control-plane-token-for-tests',
   requestId: 'req_service_control',
   tenantId: 'tenant_1',
   userId: 'operator_1',
@@ -210,6 +210,20 @@ describe('tool-gateway invoke', () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().data.status).toBe('succeeded');
+    const toolCallId = response.json().data.tool_call_id as string;
+    expect(toolCallId).toBeTruthy();
+
+    const toolCall = await server.inject({ method: 'GET', url: `/v1/tool-calls/${toolCallId}` });
+    expect(toolCall.statusCode).toBe(200);
+    expect(toolCall.json().data).toMatchObject({
+      tool_call_id: toolCallId,
+      task_run_id: 'task_1',
+      tool_name: 'knowledge.search',
+      status: 'committed',
+      mode: 'commit',
+    });
+    expect(toolCall.json().data.input_hash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(toolCall.json().data.output_hash).toMatch(/^[a-f0-9]{64}$/u);
     await server.close();
   });
 

@@ -6,6 +6,8 @@ import {
   agentStepQuerySchema,
   operationAuditQuerySchema,
   taskRunQuerySchema,
+  tenantAgentAdmissionQuerySchema,
+  tenantPolicySnapshotQuerySchema,
   toolCallQuerySchema,
 } from '@dar/contracts';
 import type { RuntimeApiOperationsClient } from '../clients/runtime-api-client.js';
@@ -142,6 +144,34 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
     const auth = requirePermission(request, 'operations:read');
     const { toolCallId } = request.params as { toolCallId: string };
     return ok(await options.toolGatewayClient.getToolCall(toolCallId, forward(auth, requestIdOf(request))), auth.request_id);
+  });
+
+  server.get('/api/v1/tenant-runtime-policy-snapshots', {
+    schema: { querystring: jsonSchema(tenantPolicySnapshotQuerySchema) },
+  }, async (request) => {
+    const auth = requirePermission(request, 'operations:read');
+    const query = tenantPolicySnapshotQuerySchema.parse(request.query);
+    return ok(await options.registryService.listTenantPolicySnapshots({ ...query, tenant_id: auth.tenant_id }, { tenantId: auth.tenant_id }), auth.request_id);
+  });
+
+  server.get('/api/v1/tenant-runtime-policy-snapshots/:snapshotId', async (request) => {
+    const auth = requirePermission(request, 'operations:read');
+    const { snapshotId } = request.params as { snapshotId: string };
+    return ok(await options.registryService.getTenantPolicySnapshot(snapshotId, { tenantId: auth.tenant_id }), auth.request_id);
+  });
+
+  server.get('/api/v1/tenant-agent-admissions', {
+    schema: { querystring: jsonSchema(tenantAgentAdmissionQuerySchema) },
+  }, async (request) => {
+    const auth = requirePermission(request, 'operations:read');
+    const query = tenantAgentAdmissionQuerySchema.parse(request.query);
+    return ok(await options.registryService.listTenantAgentAdmissions({ ...query, tenant_id: auth.tenant_id }, { tenantId: auth.tenant_id }), auth.request_id);
+  });
+
+  server.get('/api/v1/tenant-agent-admissions/:admissionId', async (request) => {
+    const auth = requirePermission(request, 'operations:read');
+    const { admissionId } = request.params as { admissionId: string };
+    return ok(await options.registryService.getTenantAgentAdmission(admissionId, { tenantId: auth.tenant_id }), auth.request_id);
   });
 }
 

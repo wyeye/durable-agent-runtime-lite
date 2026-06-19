@@ -85,6 +85,10 @@ GET  /api/v1/operations/tool-calls/:toolCallId
 GET  /api/v1/operations/agent-runs
 GET  /api/v1/operations/agent-runs/:agentRunId
 GET  /api/v1/operations/agent-runs/:agentRunId/steps
+GET  /api/v1/tenant-runtime-policy-snapshots
+GET  /api/v1/tenant-runtime-policy-snapshots/:snapshotId
+GET  /api/v1/tenant-agent-admissions
+GET  /api/v1/tenant-agent-admissions/:admissionId
 ```
 
 BFF 会向下游透传 `x-user-id`、`x-tenant-id`、`x-roles`、`x-request-id`，下游不可用映射为 `503 DOWNSTREAM_UNAVAILABLE`。
@@ -106,6 +110,8 @@ Fastify 在 production 同进程托管 Vite build 产物。前端页面均通过
 /audit-events
 /tool-calls
 /agent-runs
+/policy-snapshots
+/tenant-admissions
 ```
 
 开发身份面板会为 API client 注入：
@@ -139,6 +145,20 @@ AgentRun 页面：
 - 通过 BFF 查询 runtime-api，不直接访问数据库；
 - 显示 AgentRun 累计状态、model turn、token usage、tool call count、handoff count；
 - Drawer 中显示 AgentStep、tool result refs、human task ids、context snapshot refs 和 handoff refs。
+
+Policy Snapshot 页面：
+
+- 只读查询 control-plane API；
+- 展示 root/parent lineage、derivation type、source policy version/hash、execution plan ref/hash；
+- Drawer 展示 effective tools、models、handoffs 和 budget；
+- 不提供 create/update/delete。
+
+Tenant Admission 页面：
+
+- 只读查询 control-plane API；
+- 支持 status、task、agent、workflow 和 acquired time 过滤；
+- 展示 reserved/active/released/rejected/reconciled、TaskRun、AgentRun、Workflow、Policy Snapshot 和 release reason；
+- 不提供 create/update/delete。
 
 ## 错误码
 

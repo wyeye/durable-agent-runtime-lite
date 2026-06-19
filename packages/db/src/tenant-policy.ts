@@ -344,6 +344,13 @@ export class TenantRuntimePolicyResolver {
     snapshot?: TenantRuntimePolicySnapshot,
   ): Promise<void> {
     await new AuditEventRepository(this.db).append({
+      event_key: [
+        action,
+        input.tenant_id,
+        input.execution_plan_ref,
+        snapshot?.snapshot_ref ?? reason,
+        input.request_id ?? 'no-request',
+      ].join(':'),
       tenant_id: input.tenant_id,
       actor_id: input.user_id,
       action,
