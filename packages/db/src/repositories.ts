@@ -2,8 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import type {
   AgentExecutionMode,
   AgentExecutionPlan,
+  AgentStepStatus,
   AgentRunRecord,
   AgentStepRecord,
+  AgentToolResultReference,
   AgentUsage,
   AuditEvent,
   FlowExecutionPlan,
@@ -215,6 +217,7 @@ export interface CreateAgentRunInput {
   userId: string;
   taskRunId: string;
   workflowId: string;
+  workflowRunId?: string;
   parentWorkflowId?: string;
   executionMode?: AgentExecutionMode;
   executionPlan: AgentExecutionPlan;
@@ -222,6 +225,7 @@ export interface CreateAgentRunInput {
 
 export interface UpdateAgentRunInput {
   status?: AgentRunRecord['status'];
+  workflowRunId?: string;
   currentSegmentIndex?: number;
   modelTurnCount?: number;
   toolCallCount?: number;
@@ -242,6 +246,24 @@ export interface ListAgentRunsOptions extends RepositoryTenantOptions {
 
 export interface CreateAgentStepInput extends Omit<AgentStepRecord, 'agent_step_id' | 'created_at' | 'updated_at'> {
   agent_step_id?: string;
+}
+
+export interface UpdateAgentStepBoundaryInput {
+  stableStepKey: string;
+  segmentStatus?: AgentStepStatus;
+  decisionSummary?: string;
+  proposedToolCalls?: AgentStepRecord['proposed_tool_calls'];
+  toolResultRefs?: AgentToolResultReference[];
+  authoritativeToolResultRefs?: AgentToolResultReference[];
+  humanTaskIds?: string[];
+  contextSnapshotBefore?: AgentStepRecord['context_snapshot_before'];
+  contextSnapshotAfter?: AgentStepRecord['context_snapshot_after'];
+  contextSnapshotRef?: AgentStepRecord['context_snapshot_ref'];
+  handoffRefs?: Array<Record<string, unknown>>;
+  outputRef?: string;
+  usage?: Partial<AgentUsage>;
+  errorCode?: string;
+  errorMessage?: string;
 }
 
 export interface CreateAgentContextSnapshotInput {
@@ -624,7 +646,7 @@ export class FlowExecutionPlanRepository {
       flow_id: plan.flow_id,
       flow_version: plan.flow_version,
       flow_sha256: plan.flow_sha256,
-      plan_json: plan,
+      plan_json: toDbJson(plan),
       execution_plan_hash: plan.execution_plan_hash,
       generated_at: plan.generated_at,
     };
@@ -735,7 +757,7 @@ export async function buildAgentExecutionPlan(
     max_tool_calls: agentRecord.spec.allowed_tools.length,
     max_total_tokens: agentRecord.spec.max_tokens,
   });
-  const outputSchema = parseOptionalJsonObject(agentRecord.spec.output_schema);
+  const outputSchema = parseAgentOutputSchema(agentRecord.spec.output_schema);
   const generatedAt = input.generatedAt ?? new Date().toISOString();
   const executionPlanId = `agent_plan_${randomUUID()}`;
   const executionPlanRef = buildAgentExecutionPlanRef(executionPlanId);
@@ -778,17 +800,36 @@ export async function buildAgentExecutionPlan(
   });
 }
 
+export function agentExecutionPlanContentHash(plan: AgentExecutionPlan): string {
+  return hashJson(agentExecutionPlanContent(plan));
+}
+
+function agentExecutionPlanContent(plan: AgentExecutionPlan): Record<string, unknown> {
+  return {
+    tenant_id: plan.tenant_id,
+    agent_id: plan.agent_id,
+    agent_version: plan.agent_version,
+    agent_sha256: plan.agent_sha256,
+    prompt_id: plan.prompt_id,
+    prompt_version: plan.prompt_version,
+    prompt_sha256: plan.prompt_sha256,
+    model_policy: plan.model_policy,
+    allowed_tools: plan.allowed_tools,
+    allowed_handoffs: plan.allowed_handoffs,
+    ...(plan.output_schema ? { output_schema: plan.output_schema } : {}),
+    budget: plan.budget,
+    plan: plan.plan,
+  };
+}
+
 export class AgentExecutionPlanRepository {
   constructor(private readonly db: Kysely<Database>) {}
 
   async createForAgent(input: BuildAgentExecutionPlanInput): Promise<AgentExecutionPlan> {
     const plan = await buildAgentExecutionPlan(this.db, input);
     const existing = await this.getByAgentVersion(plan.agent_id, plan.agent_version, { tenantId: plan.tenant_id });
-    if (existing && existing.execution_plan_hash === plan.execution_plan_hash) {
+    if (existing && agentExecutionPlanContentHash(existing) === agentExecutionPlanContentHash(plan)) {
       return existing;
-    }
-    if (existing && existing.execution_plan_hash !== plan.execution_plan_hash) {
-      throw new Error(`AgentExecutionPlan hash conflict for ${plan.agent_id}@${plan.agent_version}`);
     }
 
     const row: Insertable<AgentExecutionPlanTable> = {
@@ -801,12 +842,12 @@ export class AgentExecutionPlanRepository {
       prompt_id: plan.prompt_id,
       prompt_version: plan.prompt_version,
       prompt_sha256: plan.prompt_sha256,
-      model_policy_json: { value: plan.model_policy },
-      allowed_tools_json: plan.allowed_tools,
-      allowed_handoffs_json: plan.allowed_handoffs,
-      output_schema_json: plan.output_schema ?? null,
-      budget_json: plan.budget,
-      plan_json: plan,
+      model_policy_json: toDbJson({ value: plan.model_policy }),
+      allowed_tools_json: toDbJson(plan.allowed_tools),
+      allowed_handoffs_json: toDbJson(plan.allowed_handoffs),
+      output_schema_json: plan.output_schema ? toDbJson(plan.output_schema) : null,
+      budget_json: toDbJson(plan.budget),
+      plan_json: toDbJson(plan),
       execution_plan_hash: plan.execution_plan_hash,
       generated_at: plan.generated_at,
     };
@@ -1205,9 +1246,9 @@ export class TaskRunRepository {
       status: taskRun.status,
       error_code: taskRun.error_code ?? null,
       error_message: taskRun.error_message ?? null,
-      input_json: input.input,
-      route_result_json: input.routeResult ?? null,
-      workflow_start_json: input.workflowStart ?? null,
+      input_json: toDbJson(input.input),
+      route_result_json: input.routeResult ? toDbJson(input.routeResult) : null,
+      workflow_start_json: input.workflowStart ? toDbJson(input.workflowStart) : null,
     };
 
     const saved = await this.db
@@ -1281,7 +1322,7 @@ export class TaskRunRepository {
   ): Promise<TaskRun | undefined> {
     const row = await this.db
       .updateTable('task_run')
-      .set({ workflow_start_json: workflowStart, updated_at: new Date() })
+      .set({ workflow_start_json: toDbJson(workflowStart), updated_at: new Date() })
       .where('task_run_id', '=', taskRunId)
       .returningAll()
       .executeTakeFirst();
@@ -1303,6 +1344,7 @@ export class AgentRunRepository {
       user_id: input.userId,
       task_run_id: input.taskRunId,
       workflow_id: input.workflowId,
+      workflow_run_id: input.workflowRunId ?? null,
       parent_workflow_id: input.parentWorkflowId ?? null,
       execution_plan_ref: plan.execution_plan_ref,
       execution_plan_hash: plan.execution_plan_hash,
@@ -1326,8 +1368,20 @@ export class AgentRunRepository {
       error_code: null,
       error_message: null,
     };
-    const saved = await this.db.insertInto('agent_run').values(row).returningAll().executeTakeFirstOrThrow();
-    return mapAgentRun(saved);
+    const saved = await this.db
+      .insertInto('agent_run')
+      .values(row)
+      .onConflict((oc) => oc.column('agent_run_id').doNothing())
+      .returningAll()
+      .executeTakeFirst();
+    if (saved) {
+      return mapAgentRun(saved);
+    }
+    const existing = await this.get(agentRunId, { tenantId: input.tenantId });
+    if (!existing) {
+      throw new Error(`AgentRun insert conflict but existing run was not found: ${agentRunId}`);
+    }
+    return existing;
   }
 
   async get(agentRunId: string, options: RepositoryTenantOptions = {}): Promise<AgentRunRecord | undefined> {
@@ -1365,6 +1419,9 @@ export class AgentRunRepository {
     const rowUpdate: Updateable<AgentRunTable> = { updated_at: new Date() };
     if (input.status) {
       rowUpdate.status = agentRunStatusSchema.parse(input.status);
+    }
+    if (input.workflowRunId !== undefined) {
+      rowUpdate.workflow_run_id = input.workflowRunId;
     }
     if (input.currentSegmentIndex !== undefined) {
       rowUpdate.current_segment_index = input.currentSegmentIndex;
@@ -1426,11 +1483,16 @@ export class AgentStepRepository {
       stable_step_key: parsed.stable_step_key,
       segment_status: parsed.segment_status,
       decision_summary: parsed.decision_summary ?? null,
-      proposed_tool_calls_json: parsed.proposed_tool_calls,
-      tool_result_refs_json: parsed.tool_result_refs,
-      context_snapshot_ref: parsed.context_snapshot_ref ?? null,
+      proposed_tool_calls_json: toDbJson(parsed.proposed_tool_calls),
+      tool_result_refs_json: toDbJson(parsed.tool_result_refs),
+      authoritative_tool_result_refs_json: toDbJson(parsed.authoritative_tool_result_refs),
+      human_task_ids_json: toDbJson(parsed.human_task_ids),
+      context_snapshot_before_ref: parsed.context_snapshot_before ? toDbJson(parsed.context_snapshot_before) : null,
+      context_snapshot_after_ref: parsed.context_snapshot_after ? toDbJson(parsed.context_snapshot_after) : null,
+      handoff_refs_json: toDbJson(parsed.handoff_refs),
+      context_snapshot_ref: parsed.context_snapshot_ref ? toDbJson(parsed.context_snapshot_ref) : null,
       output_ref: parsed.output_ref ?? null,
-      usage_json: parsed.usage,
+      usage_json: toDbJson(parsed.usage),
       error_code: parsed.error_code ?? null,
       error_message: parsed.error_message ?? null,
     };
@@ -1438,7 +1500,15 @@ export class AgentStepRepository {
     const saved = await this.db
       .insertInto('agent_step')
       .values(row)
-      .onConflict((oc) => oc.column('stable_step_key').doNothing())
+      .onConflict((oc) => oc.column('stable_step_key').doUpdateSet({
+        segment_status: row.segment_status,
+        decision_summary: row.decision_summary,
+        proposed_tool_calls_json: row.proposed_tool_calls_json,
+        usage_json: row.usage_json,
+        error_code: row.error_code,
+        error_message: row.error_message,
+        updated_at: new Date(),
+      }))
       .returningAll()
       .executeTakeFirst();
 
@@ -1450,6 +1520,66 @@ export class AgentStepRepository {
       throw new Error(`AgentStep insert conflict but existing step was not found: ${parsed.stable_step_key}`);
     }
     return existing;
+  }
+
+  async updateBoundaryResult(input: UpdateAgentStepBoundaryInput): Promise<AgentStepRecord> {
+    const rowUpdate: Updateable<AgentStepTable> = {
+      updated_at: new Date(),
+    };
+    if (input.segmentStatus) {
+      rowUpdate.segment_status = input.segmentStatus;
+    }
+    if (input.decisionSummary !== undefined) {
+      rowUpdate.decision_summary = input.decisionSummary;
+    }
+    if (input.proposedToolCalls !== undefined) {
+      rowUpdate.proposed_tool_calls_json = toDbJson(input.proposedToolCalls);
+    }
+    if (input.toolResultRefs !== undefined) {
+      rowUpdate.tool_result_refs_json = toDbJson(input.toolResultRefs);
+    }
+    if (input.authoritativeToolResultRefs !== undefined) {
+      rowUpdate.authoritative_tool_result_refs_json = toDbJson(input.authoritativeToolResultRefs);
+      rowUpdate.tool_result_refs_json = toDbJson(input.toolResultRefs ?? input.authoritativeToolResultRefs);
+    }
+    if (input.humanTaskIds !== undefined) {
+      rowUpdate.human_task_ids_json = toDbJson(input.humanTaskIds);
+    }
+    if (input.contextSnapshotBefore !== undefined) {
+      rowUpdate.context_snapshot_before_ref = input.contextSnapshotBefore ? toDbJson(input.contextSnapshotBefore) : null;
+    }
+    if (input.contextSnapshotAfter !== undefined) {
+      rowUpdate.context_snapshot_after_ref = input.contextSnapshotAfter ? toDbJson(input.contextSnapshotAfter) : null;
+    }
+    if (input.contextSnapshotRef !== undefined) {
+      rowUpdate.context_snapshot_ref = input.contextSnapshotRef ? toDbJson(input.contextSnapshotRef) : null;
+    }
+    if (input.handoffRefs !== undefined) {
+      rowUpdate.handoff_refs_json = toDbJson(input.handoffRefs);
+    }
+    if (input.outputRef !== undefined) {
+      rowUpdate.output_ref = input.outputRef;
+    }
+    if (input.usage !== undefined) {
+      rowUpdate.usage_json = toDbJson(agentUsageSchema.parse(input.usage));
+    }
+    if (input.errorCode !== undefined) {
+      rowUpdate.error_code = input.errorCode;
+    }
+    if (input.errorMessage !== undefined) {
+      rowUpdate.error_message = input.errorMessage;
+    }
+
+    const row = await this.db
+      .updateTable('agent_step')
+      .set(rowUpdate)
+      .where('stable_step_key', '=', input.stableStepKey)
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new Error(`AgentStep not found: ${input.stableStepKey}`);
+    }
+    return mapAgentStep(row);
   }
 
   async getByStableKey(stableStepKey: string): Promise<AgentStepRecord | undefined> {
@@ -1492,7 +1622,7 @@ export class AgentContextSnapshotRepository {
       agent_run_id: input.agentRunId,
       previous_snapshot_id: input.previousSnapshotId ?? null,
       schema_version: schemaVersion,
-      sanitized_messages_json: input.sanitizedMessages,
+      sanitized_messages_json: toDbJson(input.sanitizedMessages),
       snapshot_hash: snapshotHash,
       message_count: messageCount,
       byte_size: byteSize,
@@ -1550,7 +1680,7 @@ export class AuditEventRepository {
       target_id: auditEvent.target_id,
       result: auditEvent.result,
       reason: auditEvent.reason ?? null,
-      payload: auditEvent.payload,
+      payload: toDbJson(auditEvent.payload),
       trace_id: auditEvent.trace_id ?? null,
       occurred_at: auditEvent.occurred_at,
     };
@@ -1615,9 +1745,9 @@ export class HumanTaskRepository {
       kind: parsed.kind,
       status: 'pending',
       assignee: parsed.assignee ?? null,
-      candidate_groups: parsed.candidate_groups,
-      payload,
-      requested_schema_json: parsed.requested_schema ?? null,
+      candidate_groups: toDbJson(parsed.candidate_groups),
+      payload: toDbJson(payload),
+      requested_schema_json: parsed.requested_schema ? toDbJson(parsed.requested_schema) : null,
       response_json: null,
       responded_by: null,
       responded_at: null,
@@ -1688,14 +1818,14 @@ export class HumanTaskRepository {
       .updateTable('human_task')
       .set({
         status: 'resolved',
-        response_json: parsed.response,
+        response_json: toDbJson(parsed.response),
         responded_by: parsed.user_id,
         responded_at: respondedAt,
         response_idempotency_key: parsed.response_idempotency_key,
-        decision: {
+        decision: toDbJson({
           status: 'resolved',
           payload: parsed.response,
-        },
+        }),
         decided_by: parsed.user_id,
         decided_at: respondedAt,
         completed_at: respondedAt,
@@ -1765,11 +1895,11 @@ export class HumanTaskRepository {
       .updateTable('human_task')
       .set({
         status,
-        decision: {
+        decision: toDbJson({
           status,
           reason: input.decisionReason,
           payload: input.payload ?? {},
-        },
+        }),
         decided_by: input.decidedBy,
         decided_at: decidedAt,
         decision_reason: input.decisionReason ?? null,
@@ -1807,7 +1937,7 @@ export class IdempotencyRecordRepository {
       target_type: parsed.target_type,
       target_id: parsed.target_id,
       request_hash: parsed.request_hash,
-      response_json: parsed.response_json ?? null,
+      response_json: parsed.response_json ? toDbJson(parsed.response_json) : null,
       status: parsed.status,
     };
 
@@ -1865,8 +1995,8 @@ export class ToolCallLogRepository {
       error_code: toolCallLog.error_code ?? null,
       adapter_type: toolCallLog.adapter_type ?? null,
       mode: toolCallLog.mode ?? null,
-      preview_json: toolCallLog.preview_json ?? null,
-      result_json: toolCallLog.result_json ?? null,
+      preview_json: toolCallLog.preview_json ? toDbJson(toolCallLog.preview_json) : null,
+      result_json: toolCallLog.result_json ? toDbJson(toolCallLog.result_json) : null,
     };
 
     const saved = await this.db.insertInto('tool_call_log').values(row).returningAll().executeTakeFirstOrThrow();
@@ -2334,15 +2464,48 @@ function manifestSpecVersion(manifest: ToolManifest): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
 }
 
-function parseOptionalJsonObject(value: string | undefined): Record<string, unknown> | undefined {
+export function parseAgentOutputSchema(value: string | undefined): Record<string, unknown> | undefined {
   if (!value) {
     return undefined;
   }
-  const parsed: unknown = JSON.parse(value);
+  if (/^[A-Za-z0-9_.:-]+$/u.test(value)) {
+    return { $ref: value };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('AgentSpec output_schema must be a schema ref or JSON object string');
+  }
   if (!isRecord(parsed)) {
     throw new Error('AgentSpec output_schema must be a JSON object string');
   }
   return parsed;
+}
+
+function toDbJson(value: unknown): string {
+  return JSON.stringify(value);
+}
+
+function fromDbJson(value: unknown): unknown {
+  if (typeof value !== 'string') {
+    return value;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function jsonRecord(value: unknown): Record<string, unknown> | undefined {
+  const parsed = fromDbJson(value);
+  return isRecord(parsed) ? parsed : undefined;
+}
+
+function jsonArray(value: unknown): unknown[] {
+  const parsed = fromDbJson(value);
+  return Array.isArray(parsed) ? parsed : [];
 }
 
 function normalizeWriteStatus(status: SpecStatus | undefined): SpecStatus {
@@ -2392,7 +2555,7 @@ function mapTaskRun(row: Selectable<TaskRunTable>): TaskRun {
 
 function mapFlowExecutionPlan(row: Selectable<FlowExecutionPlanTable>): FlowExecutionPlan {
   const plan = flowExecutionPlanSchema.parse({
-    ...(isRecord(row.plan_json) ? row.plan_json : {}),
+    ...(jsonRecord(row.plan_json) ?? {}),
     execution_plan_id: row.execution_plan_id,
     execution_plan_ref: row.execution_plan_ref,
     tenant_id: row.tenant_id,
@@ -2424,7 +2587,7 @@ function mapFlowExecutionPlan(row: Selectable<FlowExecutionPlanTable>): FlowExec
 
 function mapAgentExecutionPlan(row: Selectable<AgentExecutionPlanTable>): AgentExecutionPlan {
   const plan = agentExecutionPlanSchema.parse({
-    ...(isRecord(row.plan_json) ? row.plan_json : {}),
+    ...(jsonRecord(row.plan_json) ?? {}),
     execution_plan_id: row.execution_plan_id,
     execution_plan_ref: row.execution_plan_ref,
     tenant_id: row.tenant_id,
@@ -2468,6 +2631,7 @@ function mapAgentRun(row: Selectable<AgentRunTable>): AgentRunRecord {
     user_id: row.user_id,
     task_run_id: row.task_run_id,
     workflow_id: row.workflow_id,
+    ...(row.workflow_run_id ? { workflow_run_id: row.workflow_run_id } : {}),
     ...(row.parent_workflow_id ? { parent_workflow_id: row.parent_workflow_id } : {}),
     execution_plan_ref: row.execution_plan_ref,
     execution_plan_hash: row.execution_plan_hash,
@@ -2503,11 +2667,18 @@ function mapAgentStep(row: Selectable<AgentStepTable>): AgentStepRecord {
     stable_step_key: row.stable_step_key,
     segment_status: row.segment_status,
     ...(row.decision_summary ? { decision_summary: row.decision_summary } : {}),
-    proposed_tool_calls: Array.isArray(row.proposed_tool_calls_json) ? row.proposed_tool_calls_json : [],
-    tool_result_refs: Array.isArray(row.tool_result_refs_json) ? row.tool_result_refs_json : [],
-    ...(isRecord(row.context_snapshot_ref) ? { context_snapshot_ref: row.context_snapshot_ref } : {}),
+    proposed_tool_calls: jsonArray(row.proposed_tool_calls_json),
+    tool_result_refs: jsonArray(row.tool_result_refs_json),
+    authoritative_tool_result_refs: jsonArray(row.authoritative_tool_result_refs_json).length > 0
+      ? jsonArray(row.authoritative_tool_result_refs_json)
+      : jsonArray(row.tool_result_refs_json),
+    human_task_ids: jsonArray(row.human_task_ids_json).map(String),
+    ...(jsonRecord(row.context_snapshot_before_ref) ? { context_snapshot_before: jsonRecord(row.context_snapshot_before_ref) } : {}),
+    ...(jsonRecord(row.context_snapshot_after_ref) ? { context_snapshot_after: jsonRecord(row.context_snapshot_after_ref) } : {}),
+    handoff_refs: jsonArray(row.handoff_refs_json).filter(isRecord),
+    ...(jsonRecord(row.context_snapshot_ref) ? { context_snapshot_ref: jsonRecord(row.context_snapshot_ref) } : {}),
     ...(row.output_ref ? { output_ref: row.output_ref } : {}),
-    usage: isRecord(row.usage_json) ? agentUsageSchema.parse(row.usage_json) : {},
+    usage: jsonRecord(row.usage_json) ? agentUsageSchema.parse(jsonRecord(row.usage_json)) : {},
     ...(row.error_code ? { error_code: row.error_code } : {}),
     ...(row.error_message ? { error_message: row.error_message } : {}),
     created_at: toIso(row.created_at),
@@ -2528,7 +2699,7 @@ function snapshotRefFromSnapshotRow(row: Selectable<AgentContextSnapshotTable>):
 function snapshotFromRow(row: Selectable<AgentContextSnapshotTable>): { ref: PiContextSnapshotRef; messages: unknown[]; previousSnapshotId?: string } {
   return {
     ref: snapshotRefFromSnapshotRow(row),
-    messages: Array.isArray(row.sanitized_messages_json) ? row.sanitized_messages_json : [],
+    messages: jsonArray(row.sanitized_messages_json),
     ...(row.previous_snapshot_id ? { previousSnapshotId: row.previous_snapshot_id } : {}),
   };
 }
@@ -2542,7 +2713,7 @@ function mapAuditEvent(row: Selectable<AuditEventTable>): AuditEvent {
     target_id: row.target_id,
     result: row.result as AuditEvent['result'],
     occurred_at: toIso(row.occurred_at),
-    payload: isRecord(row.payload) ? row.payload : {},
+    payload: jsonRecord(row.payload) ?? {},
   };
 
   if (row.actor_id) {
@@ -2571,7 +2742,7 @@ function mapIdempotencyRecord(row: Selectable<IdempotencyRecordTable>): Idempote
   };
 
   if (row.response_json !== null) {
-    record.response_json = row.response_json;
+    record.response_json = fromDbJson(row.response_json);
   }
 
   return idempotencyRecordSchema.parse(record);
@@ -2584,8 +2755,8 @@ function mapHumanTask(row: Selectable<HumanTaskTable>): HumanTask {
     task_run_id: row.task_run_id,
     kind: row.kind as HumanTask['kind'],
     status: row.status as HumanTask['status'],
-    candidate_groups: Array.isArray(row.candidate_groups) ? row.candidate_groups.map(String) : [],
-    payload: isRecord(row.payload) ? row.payload : {},
+    candidate_groups: jsonArray(row.candidate_groups).map(String),
+    payload: jsonRecord(row.payload) ?? {},
     created_at: toIso(row.created_at),
   };
 
@@ -2595,11 +2766,11 @@ function mapHumanTask(row: Selectable<HumanTaskTable>): HumanTask {
   if (row.assignee) {
     humanTask.assignee = row.assignee;
   }
-  if (isRecord(row.requested_schema_json)) {
-    humanTask.requested_schema = row.requested_schema_json;
+  if (jsonRecord(row.requested_schema_json)) {
+    humanTask.requested_schema = jsonRecord(row.requested_schema_json);
   }
-  if (isRecord(row.response_json)) {
-    humanTask.response = row.response_json;
+  if (jsonRecord(row.response_json)) {
+    humanTask.response = jsonRecord(row.response_json);
   }
   if (row.responded_by) {
     humanTask.responded_by = row.responded_by;
@@ -2610,8 +2781,8 @@ function mapHumanTask(row: Selectable<HumanTaskTable>): HumanTask {
   if (row.response_idempotency_key) {
     humanTask.response_idempotency_key = row.response_idempotency_key;
   }
-  if (isRecord(row.decision)) {
-    humanTask.decision = row.decision;
+  if (jsonRecord(row.decision)) {
+    humanTask.decision = jsonRecord(row.decision);
   }
   if (row.decided_by) {
     humanTask.decided_by = row.decided_by;
@@ -2673,10 +2844,10 @@ function mapToolCallLog(row: Selectable<ToolCallLogTable>): ToolCallLog {
     toolCallLog.adapter_type = row.adapter_type;
   }
   if (row.preview_json !== null) {
-    toolCallLog.preview_json = row.preview_json;
+    toolCallLog.preview_json = fromDbJson(row.preview_json);
   }
   if (row.result_json !== null) {
-    toolCallLog.result_json = row.result_json;
+    toolCallLog.result_json = fromDbJson(row.result_json);
   }
 
   return toolCallLogSchema.parse(toolCallLog);

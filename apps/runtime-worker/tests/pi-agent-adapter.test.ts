@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentExecutionPlan } from '@dar/contracts';
 import { createDeterministicPiStream } from '../src/agent/deterministic-pi-stream.js';
+import { createModelGatewayModel, createModelGatewayPiStream } from '../src/agent/model-gateway-pi-stream.js';
 import { runPiAgentSegment } from '../src/agent/pi-agent-adapter.js';
 import { restorePiMessages, serializePiContext, replaceDeferredToolResults } from '../src/agent/pi-context-codec.js';
 
@@ -81,6 +82,100 @@ describe('PiAgentAdapter', () => {
     expect(toolResults).toHaveLength(1);
     expect(JSON.stringify(toolResults[0])).toContain('authoritative_tool_result');
     expect(JSON.stringify(toolResults[0])).toContain('real result');
+  });
+
+  it('preserves handoff call id for authoritative result replacement', async () => {
+    const runtime = createDeterministicPiStream('handoff');
+    try {
+      const executionPlan = {
+        ...plan('deterministic:handoff'),
+        allowed_handoffs: ['db://flow-execution-plan/plan_handoff'],
+        plan: {
+          ...plan('deterministic:handoff').plan,
+          allowed_handoffs: ['db://flow-execution-plan/plan_handoff'],
+        },
+      };
+      const result = await runPiAgentSegment({
+        executionPlan,
+        model: runtime.model,
+        streamFn: runtime.streamFn,
+        initialUserInput: 'handoff',
+        segmentIndex: 0,
+        budgetRemaining: executionPlan.budget,
+        maxContextBytes: 262_144,
+      });
+
+      expect(result.segmentResult.status).toBe('handoff_requested');
+      if (result.segmentResult.status !== 'handoff_requested') {
+        throw new Error('expected handoff request');
+      }
+      expect(result.segmentResult.call_id).toBe('call_handoff_1');
+    } finally {
+      runtime.unregister();
+    }
+  });
+
+  it('maps structured Model Gateway tool calls into Pi deferred tool proposals', async () => {
+    const server = await import('node:http').then(({ createServer }) =>
+      createServer((request, response) => {
+        if (request.url !== '/v1/generate') {
+          response.statusCode = 404;
+          response.end();
+          return;
+        }
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+          id: 'resp_1',
+          model: 'dar-local-model',
+          message: {
+            role: 'assistant',
+            content: [{
+              type: 'tool_call',
+              id: 'call_model_1',
+              name: 'knowledge.search',
+              arguments: { query: 'from model gateway' },
+            }],
+          },
+          finish_reason: 'tool_call',
+          usage: { input_tokens: 3, output_tokens: 4, total_tokens: 7 },
+        }));
+      }),
+    );
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('server did not bind to a TCP port');
+    }
+    try {
+      const result = await runPiAgentSegment({
+        executionPlan: plan('model_gateway:readonly_tool'),
+        model: createModelGatewayModel('dar-local-model'),
+        streamFn: createModelGatewayPiStream({
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          apiKey: 'test-key',
+          model: 'dar-local-model',
+          timeoutMs: 5_000,
+          maxRetries: 0,
+        }),
+        initialUserInput: 'readonly_tool',
+        segmentIndex: 0,
+        budgetRemaining: plan('model_gateway:readonly_tool').budget,
+        maxContextBytes: 262_144,
+      });
+
+      expect(result.segmentResult.status).toBe('tool_requested');
+      if (result.segmentResult.status !== 'tool_requested') {
+        throw new Error('expected tool request');
+      }
+      expect(result.segmentResult.proposed_tool_calls[0]).toMatchObject({
+        call_id: 'call_model_1',
+        tool_name: 'knowledge.search',
+        arguments: { query: 'from model gateway' },
+      });
+      expect(result.segmentResult.usage.total_tokens).toBe(7);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   });
 });
 

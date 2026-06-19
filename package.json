@@ -23,7 +23,13 @@
     "smoke:db-registry": "tsx scripts/smoke-db-registry.ts",
     "smoke:temporal-db-e2e": "tsx scripts/smoke-temporal-db-e2e.ts",
     "smoke:control-plane-api-e2e": "tsx scripts/smoke-control-plane-api-e2e.ts",
-    "smoke:control-plane-ui-e2e": "tsx scripts/smoke-control-plane-ui-e2e.ts"
+    "smoke:control-plane-ui-e2e": "tsx scripts/smoke-control-plane-ui-e2e.ts",
+    "smoke:pi-readonly-e2e": "PI_SMOKE_SCENARIO=readonly_tool PI_SMOKE_MODE=deterministic tsx scripts/smoke-pi-e2e.ts",
+    "smoke:pi-l3-e2e": "PI_SMOKE_SCENARIO=l3_tool PI_SMOKE_MODE=deterministic tsx scripts/smoke-pi-e2e.ts",
+    "smoke:pi-user-input-e2e": "PI_SMOKE_SCENARIO=user_input PI_SMOKE_MODE=deterministic tsx scripts/smoke-pi-e2e.ts",
+    "smoke:pi-handoff-e2e": "PI_SMOKE_SCENARIO=handoff PI_SMOKE_MODE=deterministic tsx scripts/smoke-pi-e2e.ts",
+    "smoke:pi-restart-resume-e2e": "PI_SMOKE_SCENARIO=restart_resume PI_SMOKE_MODE=deterministic tsx scripts/smoke-pi-e2e.ts",
+    "smoke:pi-model-gateway-e2e": "PI_SMOKE_SCENARIO=model_gateway PI_SMOKE_MODE=model_gateway tsx scripts/smoke-pi-e2e.ts"
   },
   "devDependencies": {
     "@dar/config": "workspace:*",

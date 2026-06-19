@@ -1,0 +1,30 @@
+services:
+  mock-server:
+    build:
+      context: ..
+      dockerfile: devtools/mock-server/Dockerfile
+    image: durable-agent-runtime/mock-server:local
+    container_name: dar-mock-server
+    environment:
+      NODE_ENV: development
+      APP_ENV: development
+      HOST: 0.0.0.0
+      PORT: 4100
+      LOG_LEVEL: info
+    ports:
+      - "${MOCK_SERVER_HOST_PORT:-4100}:4100"
+
+  runtime-worker:
+    depends_on:
+      mock-server:
+        condition: service_started
+    environment:
+      NODE_ENV: development
+      APP_ENV: development
+      PI_AGENT_MODE: ${PI_AGENT_MODE:-deterministic}
+      MODEL_GATEWAY_BASE_URL: http://mock-server:4100
+      MODEL_GATEWAY_API_KEY: dev-only-placeholder
+      MODEL_GATEWAY_MODEL: dar-local-model
+      MODEL_GATEWAY_TIMEOUT_MS: 30000
+      MODEL_GATEWAY_MAX_RETRIES: 1
+      PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW: ${PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW:-2}

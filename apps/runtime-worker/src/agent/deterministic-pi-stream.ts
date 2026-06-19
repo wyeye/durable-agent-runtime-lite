@@ -112,7 +112,7 @@ function responseForScenario(
       ), model);
     case 'l3_tool':
       return withModel(fauxAssistantMessage(
-        [fauxToolCall(firstToolName(context, 'record.write.mock'), { record: { summary: 'deterministic write' } }, { id: 'call_l3_1' })],
+        [fauxToolCall(preferredToolName(context, 'record.write.mock'), { record: { summary: 'deterministic write' } }, { id: 'call_l3_1' })],
         { stopReason: 'toolUse' },
       ), model);
     case 'need_user':
@@ -178,4 +178,8 @@ function withModel(message: AssistantMessage, model: Model<string>): AssistantMe
 
 function firstToolName(context: Context, fallback: string): string {
   return context.tools?.find((tool) => tool.name !== REQUEST_USER_INPUT_TOOL && tool.name !== HANDOFF_TO_WORKFLOW_TOOL)?.name ?? fallback;
+}
+
+function preferredToolName(context: Context, preferred: string): string {
+  return context.tools?.some((tool) => tool.name === preferred) ? preferred : firstToolName(context, preferred);
 }

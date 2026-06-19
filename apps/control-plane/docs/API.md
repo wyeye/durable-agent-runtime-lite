@@ -82,6 +82,9 @@ GET  /api/v1/operations/task-runs/:taskRunId
 GET  /api/v1/operations/audit-events
 GET  /api/v1/operations/tool-calls
 GET  /api/v1/operations/tool-calls/:toolCallId
+GET  /api/v1/operations/agent-runs
+GET  /api/v1/operations/agent-runs/:agentRunId
+GET  /api/v1/operations/agent-runs/:agentRunId/steps
 ```
 
 BFF 会向下游透传 `x-user-id`、`x-tenant-id`、`x-roles`、`x-request-id`，下游不可用映射为 `503 DOWNSTREAM_UNAVAILABLE`。
@@ -102,6 +105,7 @@ Fastify 在 production 同进程托管 Vite build 产物。前端页面均通过
 /task-runs
 /audit-events
 /tool-calls
+/agent-runs
 ```
 
 开发身份面板会为 API client 注入：
@@ -129,6 +133,12 @@ Human Task 页面：
 - `auditor` 只读，不显示 approve/reject。
 - `platform_admin` 和 `capability_operator` 可通过 BFF approve/reject。
 - 审批理由会作为 `decision_reason` 下发给 runtime-api。
+
+AgentRun 页面：
+
+- 通过 BFF 查询 runtime-api，不直接访问数据库；
+- 显示 AgentRun 累计状态、model turn、token usage、tool call count、handoff count；
+- Drawer 中显示 AgentStep、tool result refs、human task ids、context snapshot refs 和 handoff refs。
 
 ## 错误码
 

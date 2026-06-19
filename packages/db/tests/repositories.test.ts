@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type {
+  AgentExecutionPlan,
   FlowExecutionPlan,
   FlowSpec,
   HumanTask,
@@ -10,8 +11,10 @@ import type {
   ToolManifest,
 } from '@dar/contracts';
 import {
+  agentExecutionPlanContentHash,
   AgentContextSnapshotRepository,
   AgentExecutionPlanRepository,
+  AgentStepRepository,
   buildExecutionPlanRef,
   buildAgentExecutionPlanRef,
   buildDbFlowSnapshotRef,
@@ -20,6 +23,7 @@ import {
   hashJson,
   HumanTaskRepository,
   IdempotencyRecordRepository,
+  parseAgentOutputSchema,
   parseDbFlowSnapshotRef,
   RouteConfigRepository,
   stableStringify,
@@ -31,6 +35,7 @@ import {
 class FakeQuery {
   private rows: unknown[];
   private first: unknown;
+  private shouldReturnAll = false;
 
   constructor(rows: unknown[] = [], first?: unknown) {
     this.rows = rows;
@@ -83,6 +88,7 @@ class FakeQuery {
   }
 
   returningAll() {
+    this.shouldReturnAll = true;
     return this;
   }
 
@@ -100,7 +106,7 @@ class FakeQuery {
   }
 
   async executeTakeFirstOrThrow() {
-    const value = this.first ?? this.rows[0];
+    const value = this.shouldReturnAll && this.first ? this.first : this.first ?? this.rows[0];
     if (!value) {
       throw new Error('missing fake row');
     }
@@ -175,6 +181,13 @@ describe('db repositories', () => {
     expect(parseDbFlowSnapshotRef(ref)).toEqual({ flowId: 'db_route_flow', version: 7 });
     expect(parseDbFlowSnapshotRef('sample_flow@1')).toBeUndefined();
     expect(buildExecutionPlanRef('plan_1')).toBe('db://flow-execution-plan/plan_1');
+  });
+
+  it('normalizes AgentSpec output_schema refs and JSON schema strings', () => {
+    expect(parseAgentOutputSchema('agent_run_result_v1')).toEqual({ $ref: 'agent_run_result_v1' });
+    expect(parseAgentOutputSchema('{"type":"object"}')).toEqual({ type: 'object' });
+    expect(parseAgentOutputSchema(undefined)).toBeUndefined();
+    expect(() => parseAgentOutputSchema('not valid json ref!')).toThrow(/schema ref or JSON object string/u);
   });
 
   it('loads published FlowSpec, RouteSpec, and ToolManifest from the DB tables', async () => {
@@ -351,6 +364,82 @@ describe('db repositories', () => {
     expect(JSON.stringify(plan.allowed_tools)).not.toMatch(/authorization|api_key|endpoint_ref/i);
   });
 
+  it('compares AgentExecutionPlan content without generated ids or timestamps for idempotent regeneration', () => {
+    const hash = 'e'.repeat(64);
+    const basePlan: Omit<AgentExecutionPlan, 'execution_plan_id' | 'execution_plan_ref' | 'execution_plan_hash' | 'generated_at'> = {
+      tenant_id: 'tenant_1',
+      agent_id: 'agent_1',
+      agent_version: 1,
+      agent_sha256: hash,
+      prompt_id: 'prompt_1',
+      prompt_version: 1,
+      prompt_sha256: hash,
+      model_policy: 'deterministic:final_only',
+      allowed_tools: [],
+      allowed_handoffs: [],
+      budget: {
+        max_segments: 3,
+        max_model_turns: 3,
+        max_tool_calls: 0,
+        max_input_tokens: 0,
+        max_output_tokens: 0,
+        max_total_tokens: 1000,
+        max_duration_ms: 300000,
+        max_handoffs: 0,
+        max_context_bytes: 262144,
+      },
+      plan: {
+        agent_id: 'agent_1',
+        agent_version: 1,
+        agent_sha256: hash,
+        prompt_id: 'prompt_1',
+        prompt_version: 1,
+        prompt_sha256: hash,
+        system_prompt: 'safe prompt',
+        model_policy: 'deterministic:final_only',
+        allowed_tools: [],
+        allowed_handoffs: [],
+        budget: {
+          max_segments: 3,
+          max_model_turns: 3,
+          max_tool_calls: 0,
+          max_input_tokens: 0,
+          max_output_tokens: 0,
+          max_total_tokens: 1000,
+          max_duration_ms: 300000,
+          max_handoffs: 0,
+          max_context_bytes: 262144,
+        },
+      },
+    };
+    const firstPlan: AgentExecutionPlan = {
+      ...basePlan,
+      execution_plan_id: 'agent_plan_1',
+      execution_plan_ref: buildAgentExecutionPlanRef('agent_plan_1'),
+      execution_plan_hash: hashJson({ ...basePlan, execution_plan_id: 'agent_plan_1' }),
+      generated_at: '2026-01-01T00:00:00.000Z',
+    };
+    const regeneratedPlan: AgentExecutionPlan = {
+      ...basePlan,
+      execution_plan_id: 'agent_plan_2',
+      execution_plan_ref: buildAgentExecutionPlanRef('agent_plan_2'),
+      execution_plan_hash: hashJson({ ...basePlan, execution_plan_id: 'agent_plan_2' }),
+      generated_at: '2026-01-02T00:00:00.000Z',
+    };
+    const changedPlan: AgentExecutionPlan = {
+      ...regeneratedPlan,
+      model_policy: 'deterministic:readonly_tool',
+      plan: {
+        ...regeneratedPlan.plan,
+        model_policy: 'deterministic:readonly_tool',
+      },
+    };
+
+    expect(firstPlan.execution_plan_hash).not.toBe(regeneratedPlan.execution_plan_hash);
+    expect(agentExecutionPlanContentHash(firstPlan)).toBe(agentExecutionPlanContentHash(regeneratedPlan));
+    expect(agentExecutionPlanContentHash(firstPlan)).not.toBe(agentExecutionPlanContentHash(changedPlan));
+  });
+
   it('returns idempotency replay or conflict from stored request hash', async () => {
     const record: IdempotencyRecord = {
       idempotency_key: 'tenant_1:tool:idem_1',
@@ -474,6 +563,67 @@ describe('db repositories', () => {
       snapshot_id: 'snapshot_1',
       schema_version: 'pi-context/v1',
       message_count: 1,
+    });
+  });
+
+  it('updates AgentStep boundary results without creating a second step', async () => {
+    const now = new Date('2025-01-01T00:00:00.000Z').toISOString();
+    const db = new FakeDb({
+      agent_step: [{
+        agent_step_id: 'agent_step_1',
+        agent_run_id: 'agent_run_1',
+        segment_index: 0,
+        stable_step_key: 'agent_run_1:0',
+        segment_status: 'waiting_tool',
+        decision_summary: 'Pi requested 1 tool call(s)',
+        proposed_tool_calls_json: [],
+        tool_result_refs_json: [],
+        authoritative_tool_result_refs_json: [],
+        human_task_ids_json: [],
+        context_snapshot_before_ref: null,
+        context_snapshot_after_ref: null,
+        handoff_refs_json: [],
+        context_snapshot_ref: null,
+        output_ref: null,
+        usage_json: {},
+        error_code: null,
+        error_message: null,
+        created_at: now,
+        updated_at: now,
+      }],
+    });
+
+    await expect(new AgentStepRepository(db as never).updateBoundaryResult({
+      stableStepKey: 'agent_run_1:0',
+      segmentStatus: 'tool_resolved',
+      authoritativeToolResultRefs: [{
+        tool_call_id: 'call_1',
+        tool_name: 'knowledge.search',
+        tool_version: '1.0.0',
+        result_ref: 'tool-call:tool_call_1',
+        status: 'succeeded',
+        is_error: false,
+      }],
+      contextSnapshotAfter: {
+        snapshot_id: 'snapshot_after',
+        schema_version: 'pi-context/v1',
+        snapshot_hash: 'a'.repeat(64),
+        message_count: 4,
+        byte_size: 512,
+      },
+      contextSnapshotRef: {
+        snapshot_id: 'snapshot_after',
+        schema_version: 'pi-context/v1',
+        snapshot_hash: 'a'.repeat(64),
+        message_count: 4,
+        byte_size: 512,
+      },
+    })).resolves.toMatchObject({
+      stable_step_key: 'agent_run_1:0',
+      segment_status: 'tool_resolved',
+      tool_result_refs: [{ result_ref: 'tool-call:tool_call_1' }],
+      authoritative_tool_result_refs: [{ tool_call_id: 'call_1' }],
+      context_snapshot_after: { snapshot_id: 'snapshot_after' },
     });
   });
 

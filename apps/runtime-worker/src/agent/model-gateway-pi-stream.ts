@@ -2,11 +2,12 @@ import {
   type AssistantMessage,
   type Context,
   type Model,
+  type Usage,
   createAssistantMessageEventStream,
   fauxAssistantMessage,
 } from '@earendil-works/pi-ai';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
-import { ModelGatewayClient } from '@dar/model-client';
+import { ModelGatewayClient, type ModelGenerateResponse } from '@dar/model-client';
 
 export interface ModelGatewayPiStreamOptions {
   baseUrl: string;
@@ -47,7 +48,7 @@ export function createModelGatewayPiStream(options: ModelGatewayPiStreamOptions)
       max_tokens: streamOptions?.maxTokens,
       signal: streamOptions?.signal,
     }).then((response) => {
-      const message = fauxAssistantMessage(response.content);
+      const message = assistantMessageFromGatewayResponse(response, options.model);
       pushFinal(stream, withGatewayModel(message, options.model));
     }).catch((error: unknown) => {
       const message = withGatewayModel(fauxAssistantMessage([], {
@@ -68,13 +69,20 @@ export function createModelGatewayPiStream(options: ModelGatewayPiStreamOptions)
 
 function pushFinal(stream: ReturnType<typeof createAssistantMessageEventStream>, message: AssistantMessage): void {
   stream.push({ type: 'start', partial: message });
-  const textBlock = message.content.find((block) => block.type === 'text');
-  if (textBlock?.type === 'text') {
-    stream.push({ type: 'text_start', contentIndex: 0, partial: message });
-    stream.push({ type: 'text_delta', contentIndex: 0, delta: textBlock.text, partial: message });
-    stream.push({ type: 'text_end', contentIndex: 0, content: textBlock.text, partial: message });
+  for (const [index, block] of message.content.entries()) {
+    if (block.type === 'text') {
+      stream.push({ type: 'text_start', contentIndex: index, partial: message });
+      stream.push({ type: 'text_delta', contentIndex: index, delta: block.text, partial: message });
+      stream.push({ type: 'text_end', contentIndex: index, content: block.text, partial: message });
+      continue;
+    }
+    if (block.type === 'toolCall') {
+      stream.push({ type: 'toolcall_start', contentIndex: index, partial: message });
+      stream.push({ type: 'toolcall_delta', contentIndex: index, delta: JSON.stringify(block.arguments), partial: message });
+      stream.push({ type: 'toolcall_end', contentIndex: index, toolCall: block, partial: message });
+    }
   }
-  stream.push({ type: 'done', reason: 'stop', message });
+  stream.push({ type: 'done', reason: doneReason(message.stopReason), message });
   stream.end(message);
 }
 
@@ -84,6 +92,64 @@ function withGatewayModel(message: AssistantMessage, modelId: string): Assistant
     api: 'dar-model-gateway',
     provider: 'dar-model-gateway',
     model: modelId,
+  };
+}
+
+function assistantMessageFromGatewayResponse(response: ModelGenerateResponse, modelId: string): AssistantMessage {
+  const content = response.message.content.map((block) => {
+    if (block.type === 'text') {
+      return { type: 'text' as const, text: block.text };
+    }
+    return {
+      type: 'toolCall' as const,
+      id: block.id,
+      name: block.name,
+      arguments: block.arguments,
+    };
+  });
+  return {
+    ...fauxAssistantMessage(content, {
+      stopReason: stopReasonFromFinishReason(response.finish_reason),
+    }),
+    model: response.model ?? modelId,
+    usage: usageFromGateway(response.usage),
+  };
+}
+
+function stopReasonFromFinishReason(finishReason: ModelGenerateResponse['finish_reason']): AssistantMessage['stopReason'] {
+  switch (finishReason) {
+    case 'tool_call':
+      return 'toolUse';
+    case 'length':
+      return 'length';
+    case 'error':
+      return 'error';
+    case 'stop':
+      return 'stop';
+  }
+}
+
+function doneReason(stopReason: AssistantMessage['stopReason']): 'stop' | 'length' | 'toolUse' {
+  if (stopReason === 'toolUse' || stopReason === 'length') {
+    return stopReason;
+  }
+  return 'stop';
+}
+
+function usageFromGateway(usage: ModelGenerateResponse['usage']): Usage {
+  return {
+    input: usage.input_tokens,
+    output: usage.output_tokens,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: usage.total_tokens,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
   };
 }
 

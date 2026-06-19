@@ -1,3 +1,5 @@
+import type { AgentBudgetLedger, PiContextSnapshotRef } from '@dar/contracts';
+
 export const TASK_QUEUES = {
   runtimeWorkerMain: 'runtime-worker-main',
 } as const;
@@ -49,9 +51,16 @@ export interface PiDurableAgentWorkflowInput {
   task_run_id: string;
   workflow_id?: string;
   parent_workflow_id?: string;
+  agent_run_id?: string;
   agent_execution_plan_ref: string;
   execution_mode?: 'answer_only' | 'plan_only' | 'mediated_tool_call';
   initial_user_input?: string;
+  context_snapshot_ref?: PiContextSnapshotRef;
+  budget_ledger?: AgentBudgetLedger;
+  segment_index?: number;
+  started_at_ms?: number;
+  continue_as_new_segment_threshold?: number;
+  handoff_chain?: string[];
   request_id: string;
   trace_id?: string;
 }

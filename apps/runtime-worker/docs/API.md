@@ -21,6 +21,20 @@ TOOL_GATEWAY_URL=http://tool-gateway:3200
 
 worker 与 runtime-api 共享 task queue：`runtime-worker-main`。
 
+## Pi Agent Runtime
+
+`runtime-worker` owns the real Pi Agent Core integration. `piDurableAgentWorkflow`
+supervises segment boundaries and `runPiSegmentActivity` creates/restores the Pi
+`Agent`.
+
+Runtime modes:
+
+- `PI_AGENT_MODE=disabled`：不执行 agent。
+- `PI_AGENT_MODE=deterministic`：development/test only，仍走真实 Pi Core，只替换模型流。
+- `PI_AGENT_MODE=model_gateway`：生产模式，通过 `packages/model-client` 调本地/外部 Model Gateway。
+
+Production rejects deterministic mode.
+
 ## Endpoints
 
 ### `GET /healthz`
@@ -136,9 +150,42 @@ Seed 的 `sample_flow` 中 `record.write.mock` 是 L3：
 
 状态回写在 Activity 中通过 `TaskRunRepository` 完成，Workflow 本体不直接访问 DB、HTTP、LLM、Pi、`Date.now` 或 `Math.random`。
 
+## AgentRun / AgentStep APIs
+
+runtime-worker persists:
+
+- `agent_run.workflow_run_id` for the current Temporal run;
+- cumulative model turns, tool calls, handoffs and token usage;
+- `agent_step.authoritative_tool_result_refs_json`;
+- `agent_step.human_task_ids_json`;
+- `agent_step.context_snapshot_before_ref`;
+- `agent_step.context_snapshot_after_ref`;
+- `agent_step.handoff_refs_json`.
+
+`AgentStepRepository.updateBoundaryResult` updates the same stable row after
+tool, human input or handoff boundaries are resolved.
+
+## Budget, Continue-As-New and Handoff
+
+`piDurableAgentWorkflow` carries `AgentBudgetLedger` and passes only remaining
+budget into each Pi segment. Tool proposals, including denied proposals, consume
+tool-call budget. Handoff consumes handoff budget.
+
+`PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW` is loaded through an Activity and
+applied after a persisted boundary snapshot. Continue-As-New carries
+`agent_run_id`, execution plan ref, context snapshot ref, budget ledger,
+segment index and safe request context.
+
+`handoff_to_workflow` starts a child `ConfigDrivenWorkflow` only when the exact
+target `FlowExecutionPlan` ref is listed in `allowed_handoffs`. Parent/child refs
+are stored on the corresponding AgentStep.
+
 ## Environment
 
 - `DATABASE_URL`：DB FlowSpec Activity 使用的 PostgreSQL URL。
 - `RUNTIME_WORKER_MODE=mock|temporal`：worker mode。
 - `TOOL_GATEWAY_URL` / `TOOL_GATEWAY_BASE_URL`：tool Activity 调用 tool-gateway。
 - `TEMPORAL_ADDRESS` / `TEMPORAL_NAMESPACE`：Temporal worker 连接参数。
+- `PI_AGENT_MODE=disabled|deterministic|model_gateway`：Pi runtime mode。
+- `PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW`：safe-boundary Continue-As-New threshold。
+- `MODEL_GATEWAY_BASE_URL` / `MODEL_GATEWAY_API_KEY` / `MODEL_GATEWAY_MODEL`：model_gateway mode。

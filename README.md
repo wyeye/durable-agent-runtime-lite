@@ -6,7 +6,7 @@ Durable Agent Runtime Lite 是一个四应用通用 Agent Runtime 骨架：
 |---|---|
 | `apps/control-plane` | 能力运营端，Registry 管理 API、运营查询 BFF、OpenAPI、Vite 静态资源托管 |
 | `apps/runtime-api` | 统一运行入口，规则 Router、TaskRun、Workflow Starter |
-| `apps/runtime-worker` | Temporal Worker 入口、ConfigDrivenWorkflow、GenericAgentWorkflow、Activity、Pi mock |
+| `apps/runtime-worker` | Temporal Worker 入口、ConfigDrivenWorkflow、GenericAgentWorkflow、Activity、Pi Agent Core 分段运行时 |
 | `apps/tool-gateway` | 工具唯一出口，Manifest、Schema 校验、幂等、审计、mock adapter |
 
 核心约束：生产 app 只能是以上 4 个；工具调用必须经 `tool-gateway`；`runtime-worker` 不直连业务系统；Temporal Workflow 只保留确定性编排。
@@ -23,7 +23,7 @@ pnpm build
 pnpm dev
 ```
 
-`pnpm dev` 会通过 Turborepo 并行启动各 workspace 的 dev 脚本。当前 MVP 开发默认使用 memory RouteSpec、mock workflow starter、mock Pi Runner 和 mock tool adapter；未提供 `.env` 时会加载本地安全默认值。
+`pnpm dev` 会通过 Turborepo 并行启动各 workspace 的 dev 脚本。当前 MVP 开发默认使用 memory RouteSpec、mock workflow starter、禁用的 Pi Agent 模式和 mock tool adapter；未提供 `.env` 时会加载本地安全默认值。真实 Pi Core 运行在 `runtime-worker` 内，`PI_AGENT_MODE=deterministic` 仅用于 development/test，production 只允许 `PI_AGENT_MODE=model_gateway`。
 
 可选配置：
 
@@ -118,6 +118,7 @@ runtime-worker:
   DATABASE_URL=postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
   TEMPORAL_ADDRESS=temporal:7233
   TOOL_GATEWAY_URL=http://tool-gateway:3200
+  PI_AGENT_MODE=disabled
 
 tool-gateway:
   TOOL_GATEWAY_REGISTRY_SOURCE=db
@@ -129,6 +130,21 @@ control-plane:
   TOOL_GATEWAY_URL=http://tool-gateway:3200
   DATABASE_URL=postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
 ```
+
+Pi runtime smoke 使用 dev/test override 启动本地 mock gateway：
+
+```bash
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml config
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d mock-server tool-gateway runtime-worker runtime-api control-plane
+corepack pnpm smoke:pi-readonly-e2e
+corepack pnpm smoke:pi-l3-e2e
+corepack pnpm smoke:pi-user-input-e2e
+corepack pnpm smoke:pi-handoff-e2e
+corepack pnpm smoke:pi-restart-resume-e2e
+corepack pnpm smoke:pi-model-gateway-e2e
+```
+
+这些 smoke 通过 `/v1/agent-tasks` 使用真实 Pi Agent Core。deterministic 模式只替换模型流，不替换 Pi 内循环；model-gateway smoke 使用 `devtools/mock-server /v1/generate` 返回结构化 tool call。
 
 ## MVP smoke path
 
@@ -285,6 +301,12 @@ pnpm smoke:db-registry
 pnpm smoke:temporal-db-e2e
 pnpm smoke:control-plane-api-e2e
 pnpm smoke:control-plane-ui-e2e
+pnpm smoke:pi-readonly-e2e
+pnpm smoke:pi-l3-e2e
+pnpm smoke:pi-user-input-e2e
+pnpm smoke:pi-handoff-e2e
+pnpm smoke:pi-restart-resume-e2e
+pnpm smoke:pi-model-gateway-e2e
 ```
 
 ## DB-backed Source of Truth
@@ -320,3 +342,6 @@ db://flow/{flow_id}/versions/{version}
 6. `docs/15_registry_lifecycle.md`
 7. `docs/16_control_plane_api.md`
 8. `docs/17_control_plane_security.md`
+9. `docs/19_pi_segmented_agent_runtime.md`
+10. `docs/20_pi_runtime_hardening.md`
+11. `docs/21_model_gateway_contract.md`

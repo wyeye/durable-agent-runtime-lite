@@ -61,8 +61,17 @@ jobs:
       - name: PostgreSQL repository tests
         run: RUN_POSTGRES_TESTS=1 pnpm --filter @dar/db test
 
+      - name: Pi runtime focused tests
+        run: pnpm --filter @dar/runtime-worker test
+
+      - name: Model Gateway contract tests
+        run: pnpm --filter @dar/model-client test
+
       - name: PostgreSQL registry release tests
         run: RUN_POSTGRES_TESTS=1 pnpm --filter @dar/control-plane test
 
       - name: Docker Compose config
         run: docker compose -f infra/docker-compose.yml config
+
+      - name: Docker Compose Pi smoke config
+        run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml config

@@ -1,6 +1,34 @@
 import { request } from 'undici';
 import { z } from 'zod';
 
+export const modelGatewayTextBlockSchema = z.object({
+  type: z.literal('text'),
+  text: z.string(),
+});
+
+export const modelGatewayToolCallBlockSchema = z.object({
+  type: z.literal('tool_call'),
+  id: z.string().min(1),
+  name: z.string().min(1),
+  arguments: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const modelGatewayContentBlockSchema = z.discriminatedUnion('type', [
+  modelGatewayTextBlockSchema,
+  modelGatewayToolCallBlockSchema,
+]);
+
+export const modelGatewayMessageSchema = z.object({
+  role: z.literal('assistant'),
+  content: z.array(modelGatewayContentBlockSchema).default([]),
+});
+
+export const modelGatewayUsageSchema = z.object({
+  input_tokens: z.number().int().nonnegative().default(0),
+  output_tokens: z.number().int().nonnegative().default(0),
+  total_tokens: z.number().int().nonnegative().default(0),
+});
+
 export const modelGenerateRequestSchema = z.object({
   model: z.string().min(1),
   messages: z.array(
@@ -17,12 +45,34 @@ export const modelGenerateRequestSchema = z.object({
   signal: z.instanceof(AbortSignal).optional(),
 });
 
-export const modelGenerateResponseSchema = z.object({
+const rawModelGenerateResponseSchema = z.object({
   id: z.string().optional(),
-  content: z.string(),
-  usage: z.record(z.string(), z.unknown()).optional(),
+  content: z.string().optional(),
+  message: modelGatewayMessageSchema.optional(),
+  finish_reason: z.enum(['stop', 'tool_call', 'length', 'error']).default('stop'),
+  usage: modelGatewayUsageSchema.optional(),
+  model: z.string().optional(),
+  provider_metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
+export const modelGenerateResponseSchema = rawModelGenerateResponseSchema.transform((response) => {
+  const message = response.message ?? {
+    role: 'assistant' as const,
+    content: response.content ? [{ type: 'text' as const, text: response.content }] : [],
+  };
+  return {
+    ...response,
+    content: response.content ?? message.content.flatMap((block) => block.type === 'text' ? [block.text] : []).join('\n'),
+    message,
+    usage: response.usage ?? { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+  };
+});
+
+export type ModelGatewayTextBlock = z.infer<typeof modelGatewayTextBlockSchema>;
+export type ModelGatewayToolCallBlock = z.infer<typeof modelGatewayToolCallBlockSchema>;
+export type ModelGatewayContentBlock = z.infer<typeof modelGatewayContentBlockSchema>;
+export type ModelGatewayMessage = z.infer<typeof modelGatewayMessageSchema>;
+export type ModelGatewayUsage = z.infer<typeof modelGatewayUsageSchema>;
 export type ModelGenerateRequest = z.infer<typeof modelGenerateRequestSchema>;
 export type ModelGenerateResponse = z.infer<typeof modelGenerateResponseSchema>;
 

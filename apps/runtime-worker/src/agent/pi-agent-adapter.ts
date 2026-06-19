@@ -36,7 +36,7 @@ export type PiSegmentResultWithoutSnapshot =
   | { status: 'completed'; final_answer?: string; usage: AgentUsage; model_turn_count: number }
   | { status: 'tool_requested'; proposed_tool_calls: ProposedToolCall[]; usage: AgentUsage; model_turn_count: number }
   | { status: 'user_input_required'; question: string; requested_schema: Record<string, unknown>; usage: AgentUsage; model_turn_count: number }
-  | { status: 'handoff_requested'; target_execution_plan_ref: string; arguments: Record<string, unknown>; usage: AgentUsage; model_turn_count: number }
+  | { status: 'handoff_requested'; call_id: string; target_execution_plan_ref: string; arguments: Record<string, unknown>; usage: AgentUsage; model_turn_count: number }
   | { status: 'stopped_by_budget'; error_code: string; error_message: string; usage: AgentUsage; model_turn_count: number }
   | { status: 'failed'; error_code: string; error_message: string; usage: AgentUsage; model_turn_count: number }
   | { status: 'cancelled'; error_code: string; error_message: string; usage: AgentUsage; model_turn_count: number };
@@ -192,8 +192,10 @@ function buildSegmentResult(input: {
     }
     if (hasHandoff) {
       const request = input.proposals[0]?.arguments ?? {};
+      const proposal = input.proposals[0];
       return {
         status: 'handoff_requested',
+        call_id: proposal?.call_id ?? 'handoff_call',
         target_execution_plan_ref: typeof request.target_execution_plan_ref === 'string' ? request.target_execution_plan_ref : '',
         arguments: isRecord(request.arguments) ? request.arguments : {},
         usage: input.usage,

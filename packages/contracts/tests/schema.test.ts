@@ -430,7 +430,7 @@ describe('contracts schemas', () => {
       agent_run_id: 'agent_run_1',
       segment_index: 0,
       stable_step_key: 'agent_run_1:0',
-      segment_status: 'tool_requested',
+      segment_status: 'waiting_tool',
       decision_summary: 'Need a read-only lookup.',
       proposed_tool_calls: [{
         call_id: 'call_1',
@@ -441,7 +441,7 @@ describe('contracts schemas', () => {
         risk_level: 'L1',
         source_order: 0,
       }],
-    }).segment_status).toBe('tool_requested');
+    }).segment_status).toBe('waiting_tool');
 
     expect(humanTaskRespondRequestSchema.parse({
       tenant_id: 'tenant_1',

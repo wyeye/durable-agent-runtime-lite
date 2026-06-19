@@ -211,6 +211,7 @@ export interface AgentRunTable {
   user_id: string;
   task_run_id: string;
   workflow_id: string;
+  workflow_run_id: string | null;
   parent_workflow_id: string | null;
   execution_plan_ref: string;
   execution_plan_hash: string;
@@ -246,6 +247,11 @@ export interface AgentStepTable {
   decision_summary: string | null;
   proposed_tool_calls_json: Json;
   tool_result_refs_json: Json;
+  authoritative_tool_result_refs_json: Json;
+  human_task_ids_json: Json;
+  context_snapshot_before_ref: Json | null;
+  context_snapshot_after_ref: Json | null;
+  handoff_refs_json: Json;
   context_snapshot_ref: Json | null;
   output_ref: string | null;
   usage_json: Json;

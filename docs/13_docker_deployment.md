@@ -102,6 +102,44 @@ Risk policy summary:
 - L3 cannot directly invoke side effects; preview writes `tool_call_log=pending_confirmation`, approve/reject writes `human_task` and audit, commit writes `tool_call_log=committed` and `idempotency_record`.
 - L4 is denied by default and audited.
 
+## Pi Runtime Smoke Override
+
+`infra/docker-compose.pi-smoke.yml` is a development/test override. It adds only
+the dev-only `mock-server` and changes runtime-worker Pi settings for smoke
+tests. It does not add a fifth production app and is not required by production
+compose.
+
+```bash
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml config
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d mock-server tool-gateway runtime-worker runtime-api control-plane
+```
+
+The override sets:
+
+```text
+PI_AGENT_MODE=deterministic by default
+APP_ENV=development
+MODEL_GATEWAY_BASE_URL=http://mock-server:4100
+PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW=2
+```
+
+Smoke commands:
+
+```bash
+corepack pnpm smoke:pi-readonly-e2e
+corepack pnpm smoke:pi-l3-e2e
+corepack pnpm smoke:pi-user-input-e2e
+corepack pnpm smoke:pi-handoff-e2e
+corepack pnpm smoke:pi-restart-resume-e2e
+corepack pnpm smoke:pi-model-gateway-e2e
+```
+
+The model-gateway smoke uses `PI_SMOKE_MODE=model_gateway` and
+`devtools/mock-server /v1/generate` to return structured tool-call blocks. The
+other Pi smokes use deterministic Pi-compatible streams, but still exercise real
+Pi Agent Core, Temporal workflow supervision, Tool Gateway, DB state, Human Task
+signals, and context snapshot recovery.
+
 ## Control-plane single container
 
 `apps/control-plane/Dockerfile` now builds both:
@@ -190,6 +228,8 @@ If smoke fails, inspect:
 6. whether `/v1/human-tasks?tenant_id=default&user_id=smoke_user&task_run_id=<id>&status=pending` returns a task if workflow is waiting;
 7. whether `tool_call_log` has a `pending_confirmation`, `approved`, `rejected`, or `committed` L3 record;
 8. whether `task_run.error_code` / `task_run.error_message` explains a workflow failure.
+9. for Pi smoke, whether `mock-server` is running when `PI_AGENT_MODE=model_gateway`;
+10. whether `agent_step.authoritative_tool_result_refs_json` or `handoff_refs_json` explains a boundary failure.
 
 ## Notes for Codex
 

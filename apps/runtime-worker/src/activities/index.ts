@@ -1,5 +1,4 @@
 import {
-  agentBudgetSchema,
   agentUsageSchema,
   piSegmentRequestSchema,
   piSegmentResultSchema,
@@ -13,6 +12,9 @@ import {
   type FlowExecutionPlanAgent,
   type FlowExecutionPlanTool,
   type AgentRunResult,
+  type AgentStepRecord,
+  type AgentToolExecutionIdentity,
+  type AgentToolResultReference,
   type AgentExecutionPlan,
   type AgentRunRecord,
   type AgentAuthoritativeToolResult,
@@ -111,6 +113,8 @@ export interface UpdateTaskRunStatusActivityInput extends ActivityContext {
 }
 
 export interface CreateAgentRunActivityInput extends ActivityContext {
+  agent_run_id?: string;
+  workflow_run_id?: string;
   execution_plan_ref: string;
   parent_workflow_id?: string;
   execution_mode?: 'answer_only' | 'plan_only' | 'mediated_tool_call';
@@ -119,6 +123,7 @@ export interface CreateAgentRunActivityInput extends ActivityContext {
 export interface UpdateAgentRunActivityInput {
   agent_run_id: string;
   status?: AgentRunRecord['status'];
+  workflow_run_id?: string;
   current_segment_index?: number;
   model_turn_count?: number;
   tool_call_count?: number;
@@ -133,6 +138,7 @@ export interface PersistToolResultsActivityInput {
   agent_run_id: string;
   previous_context_snapshot_ref: PiContextSnapshotRef;
   tool_results: AgentAuthoritativeToolResult[];
+  max_context_bytes: number;
   request_context: ActivityContext;
 }
 
@@ -142,7 +148,30 @@ export interface AppendUserInputActivityInput {
   human_task_id: string;
   response: Record<string, unknown>;
   responded_by: string;
+  max_context_bytes: number;
   request_context: ActivityContext;
+}
+
+export interface UpdateAgentStepActivityInput {
+  stable_step_key: string;
+  segment_status?: AgentStepRecord['segment_status'];
+  decision_summary?: string;
+  proposed_tool_calls?: AgentStepRecord['proposed_tool_calls'];
+  authoritative_tool_result_refs?: AgentToolResultReference[];
+  tool_result_refs?: AgentToolResultReference[];
+  human_task_ids?: string[];
+  context_snapshot_before?: PiContextSnapshotRef;
+  context_snapshot_after?: PiContextSnapshotRef;
+  context_snapshot_ref?: PiContextSnapshotRef;
+  handoff_refs?: Array<Record<string, unknown>>;
+  output_ref?: string;
+  usage?: Partial<ReturnType<typeof agentUsageSchema.parse>>;
+  error_code?: string;
+  error_message?: string;
+}
+
+export interface PiRuntimeConfigActivityResult {
+  max_segments_before_continue_as_new: number;
 }
 
 export async function normalizeInput(input: unknown): Promise<Record<string, unknown>> {
@@ -178,10 +207,12 @@ export async function createAgentRunActivity(input: CreateAgentRunActivityInput)
     throw new Error(`AgentExecutionPlan not found: ${input.execution_plan_ref}`);
   }
   const agentRun = await new AgentRunRepository(db).create({
+    ...(input.agent_run_id ? { agentRunId: input.agent_run_id } : {}),
     tenantId: input.tenant_id,
     userId: input.user_id,
     taskRunId: input.task_run_id,
     workflowId: input.workflow_id,
+    ...(input.workflow_run_id ? { workflowRunId: input.workflow_run_id } : {}),
     ...(input.parent_workflow_id ? { parentWorkflowId: input.parent_workflow_id } : {}),
     executionMode: input.execution_mode ?? 'mediated_tool_call',
     executionPlan,
@@ -193,6 +224,7 @@ export async function createAgentRunActivity(input: CreateAgentRunActivityInput)
 export async function updateAgentRunActivity(input: UpdateAgentRunActivityInput): Promise<AgentRunRecord> {
   const updated = await new AgentRunRepository(getProcessDb()).update(input.agent_run_id, {
     ...(input.status ? { status: input.status } : {}),
+    ...(input.workflow_run_id !== undefined ? { workflowRunId: input.workflow_run_id } : {}),
     ...(input.current_segment_index !== undefined ? { currentSegmentIndex: input.current_segment_index } : {}),
     ...(input.model_turn_count !== undefined ? { modelTurnCount: input.model_turn_count } : {}),
     ...(input.tool_call_count !== undefined ? { toolCallCount: input.tool_call_count } : {}),
@@ -269,10 +301,15 @@ export async function runPiSegmentActivity(request: PiSegmentRequest): Promise<P
       agent_run_id: parsed.agent_run_id,
       segment_index: parsed.segment_index,
       stable_step_key: `${parsed.agent_run_id}:${parsed.segment_index}`,
-      segment_status: segmentResult.status,
+      segment_status: stepStatusForSegment(segmentResult),
       decision_summary: decisionSummaryForSegment(segmentResult),
       proposed_tool_calls: segmentResult.status === 'tool_requested' ? segmentResult.proposed_tool_calls : [],
       tool_result_refs: [],
+      authoritative_tool_result_refs: [],
+      human_task_ids: [],
+      context_snapshot_before: parsed.context_snapshot_ref,
+      context_snapshot_after: snapshotRef,
+      handoff_refs: [],
       context_snapshot_ref: snapshotRef,
       usage: segmentResult.usage,
       ...(segmentResult.status === 'failed' || segmentResult.status === 'stopped_by_budget' || segmentResult.status === 'cancelled'
@@ -298,7 +335,7 @@ export async function persistToolResultsToPiContextActivity(
   }
   const restoredMessages = restorePiMessages({ schema_version: PI_CONTEXT_SCHEMA_VERSION, messages: snapshot.messages });
   const replaced = replaceDeferredToolResults(restoredMessages, input.tool_results, {
-    maxBytes: agentBudgetSchema.parse({}).max_context_bytes,
+    maxBytes: input.max_context_bytes,
   });
   return new AgentContextSnapshotRepository(db).create({
     agentRunId: input.agent_run_id,
@@ -329,7 +366,7 @@ export async function appendUserInputToPiContextActivity(
     ...restoredMessages,
     userMessage,
   ];
-  const serialized = serializePiContext(messages, { maxBytes: agentBudgetSchema.parse({}).max_context_bytes });
+  const serialized = serializePiContext(messages, { maxBytes: input.max_context_bytes });
   return new AgentContextSnapshotRepository(db).create({
     agentRunId: input.agent_run_id,
     previousSnapshotId: input.previous_context_snapshot_ref.snapshot_id,
@@ -338,10 +375,31 @@ export async function appendUserInputToPiContextActivity(
   });
 }
 
+export async function updateAgentStepActivity(input: UpdateAgentStepActivityInput): Promise<AgentStepRecord> {
+  return new AgentStepRepository(getProcessDb()).updateBoundaryResult({
+    stableStepKey: input.stable_step_key,
+    ...(input.segment_status ? { segmentStatus: input.segment_status } : {}),
+    ...(input.decision_summary !== undefined ? { decisionSummary: input.decision_summary } : {}),
+    ...(input.proposed_tool_calls !== undefined ? { proposedToolCalls: input.proposed_tool_calls } : {}),
+    ...(input.tool_result_refs !== undefined ? { toolResultRefs: input.tool_result_refs } : {}),
+    ...(input.authoritative_tool_result_refs !== undefined ? { authoritativeToolResultRefs: input.authoritative_tool_result_refs } : {}),
+    ...(input.human_task_ids !== undefined ? { humanTaskIds: input.human_task_ids } : {}),
+    ...(input.context_snapshot_before !== undefined ? { contextSnapshotBefore: input.context_snapshot_before } : {}),
+    ...(input.context_snapshot_after !== undefined ? { contextSnapshotAfter: input.context_snapshot_after } : {}),
+    ...(input.context_snapshot_ref !== undefined ? { contextSnapshotRef: input.context_snapshot_ref } : {}),
+    ...(input.handoff_refs !== undefined ? { handoffRefs: input.handoff_refs } : {}),
+    ...(input.output_ref !== undefined ? { outputRef: input.output_ref } : {}),
+    ...(input.usage !== undefined ? { usage: input.usage } : {}),
+    ...(input.error_code !== undefined ? { errorCode: input.error_code } : {}),
+    ...(input.error_message !== undefined ? { errorMessage: input.error_message } : {}),
+  });
+}
+
 export async function invokeToolActivity(
   context: ActivityContext,
   tool: FlowExecutionPlanTool,
   args: Record<string, unknown>,
+  identity?: AgentToolExecutionIdentity,
 ): Promise<ToolInvokeResponse> {
   const config = loadConfig();
   const client = new ToolGatewayClient({ baseUrl: getToolGatewayUrl(config) });
@@ -354,7 +412,7 @@ export async function invokeToolActivity(
       user_context: { user_id: context.user_id },
       task_context: { task_run_id: context.task_run_id, workflow_id: context.workflow_id },
       arguments: args,
-      idempotency_key: `${context.task_run_id}:${tool.tool_name}`,
+      idempotency_key: identity ? buildAgentToolIdempotencyKey(identity) : `${context.task_run_id}:${tool.tool_name}`,
       risk_level: tool.risk_level,
       request_id: context.request_id,
     }),
@@ -365,6 +423,7 @@ export async function previewToolActivity(
   context: ActivityContext,
   tool: FlowExecutionPlanTool,
   args: Record<string, unknown>,
+  identity?: AgentToolExecutionIdentity,
 ): Promise<ToolPreviewResponse> {
   const config = loadConfig();
   const client = new ToolGatewayClient({ baseUrl: getToolGatewayUrl(config) });
@@ -377,7 +436,7 @@ export async function previewToolActivity(
       user_context: { user_id: context.user_id },
       task_context: { task_run_id: context.task_run_id, workflow_id: context.workflow_id },
       arguments: args,
-      idempotency_key: `${context.task_run_id}:${tool.tool_name}:preview`,
+      idempotency_key: identity ? buildAgentToolIdempotencyKey(identity) : `${context.task_run_id}:${tool.tool_name}:preview`,
       risk_level: tool.risk_level,
       request_id: context.request_id,
     }),
@@ -389,6 +448,7 @@ export async function commitToolActivity(
   toolCallId: string,
   tool: FlowExecutionPlanTool,
   args: Record<string, unknown>,
+  identity?: AgentToolExecutionIdentity,
 ): Promise<ToolCommitResponse> {
   const config = loadConfig();
   const client = new ToolGatewayClient({ baseUrl: getToolGatewayUrl(config) });
@@ -402,7 +462,7 @@ export async function commitToolActivity(
       user_context: { user_id: context.user_id },
       task_context: { task_run_id: context.task_run_id, workflow_id: context.workflow_id },
       arguments: args,
-      idempotency_key: `${context.task_run_id}:${tool.tool_name}:commit:${toolCallId}`,
+      idempotency_key: identity ? buildAgentToolIdempotencyKey(identity) : `${context.task_run_id}:${tool.tool_name}:commit:${toolCallId}`,
       request_id: context.request_id,
     }),
   );
@@ -495,6 +555,13 @@ export async function loadExecutionPlanByRefActivity(executionPlanRef: string): 
   return flowExecutionPlanSchema.parse(plan);
 }
 
+export async function loadPiRuntimeConfigActivity(): Promise<PiRuntimeConfigActivityResult> {
+  const config = loadConfig();
+  return {
+    max_segments_before_continue_as_new: config.PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW,
+  };
+}
+
 function isProductionRuntime(config: ReturnType<typeof loadConfig>): boolean {
   return config.NODE_ENV === 'production' || config.APP_ENV === 'production';
 }
@@ -579,4 +646,39 @@ function decisionSummaryForSegment(segmentResult: PiSegmentResult): string {
     case 'cancelled':
       return segmentResult.error_message.slice(0, 2000);
   }
+}
+
+function stepStatusForSegment(segmentResult: PiSegmentResult): AgentStepRecord['segment_status'] {
+  switch (segmentResult.status) {
+    case 'completed':
+      return 'completed';
+    case 'tool_requested':
+      return 'waiting_tool';
+    case 'user_input_required':
+      return 'waiting_user';
+    case 'handoff_requested':
+      return 'handoff_started';
+    case 'stopped_by_budget':
+      return 'budget_exceeded';
+    case 'failed':
+      return 'failed';
+    case 'cancelled':
+      return 'cancelled';
+  }
+}
+
+function buildAgentToolIdempotencyKey(identity: AgentToolExecutionIdentity): string {
+  return [
+    'agent',
+    sanitizeKeySegment(identity.agent_run_id),
+    'segment',
+    String(identity.segment_index),
+    'call',
+    sanitizeKeySegment(identity.call_id),
+    identity.operation,
+  ].join(':');
+}
+
+function sanitizeKeySegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_.-]/gu, '-');
 }

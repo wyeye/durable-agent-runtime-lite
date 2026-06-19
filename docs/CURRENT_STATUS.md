@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated for AR-1: Pi segmented agent loop and Temporal durable supervisor.
+Last updated for AR-1.1: Pi runtime hardening, handoff, and local Pi smoke baseline.
 
 ## Completed Platform Capabilities
 
@@ -34,6 +34,13 @@ Last updated for AR-1: Pi segmented agent loop and Temporal durable supervisor.
 28. Deferred Pi tools that propose tool calls without executing side effects.
 29. Agent L3 governance path through Tool Gateway preview, Human Task Signal, commit, and Pi context resume.
 30. Explicit `/v1/agent-tasks`, `/v1/agent-runs`, `/v1/agent-runs/:id/steps`, and user-input Human Task response APIs.
+31. Cumulative `AgentBudgetLedger` across Pi segments, worker restart, and Continue-As-New.
+32. Agent tool idempotency keys include agent run, segment, call id, and operation.
+33. AgentStep lifecycle updates with authoritative tool result refs, human task ids, context refs, and handoff refs.
+34. Controlled `handoff_to_workflow` child `ConfigDrivenWorkflow` execution for allowed handoff targets.
+35. Model Gateway contract with structured assistant text/tool-call blocks and usage mapping.
+36. Dev/test mock Model Gateway under `devtools/mock-server`.
+37. Pi runtime smoke scripts for readonly, L3, user input, handoff, restart/resume, and model gateway paths.
 
 ## Completed In AR-0
 
@@ -99,6 +106,13 @@ Agent runtime inputs use immutable `agent_execution_plan_ref` values. `GenericAg
 
 control-plane does not execute tools and does not copy the Human Task state machine. UI operations go through control-plane API/BFF.
 
+Pi runtime production compatibility:
+
+- production requires `PI_AGENT_MODE=model_gateway`;
+- deterministic Pi streams are development/test only;
+- `devtools/mock-server` is available only in the Pi smoke override and is not a production service;
+- runtime-worker stores context snapshots and references, not hidden reasoning or full sensitive model/tool payloads.
+
 ## Security Model
 
 Header identity:
@@ -131,6 +145,8 @@ CONTROL_PLANE_AUTH_MODE=header
 - `docs/17_control_plane_security.md`
 - `docs/18_control_plane_ui.md`
 - `docs/19_pi_segmented_agent_runtime.md`
+- `docs/20_pi_runtime_hardening.md`
+- `docs/21_model_gateway_contract.md`
 - `apps/control-plane/docs/API.md`
 - `apps/control-plane/docs/DEV_PLAN.md`
 - `apps/control-plane/docs/DEV_SPEC.md`
@@ -154,6 +170,13 @@ docker compose -f infra/docker-compose.yml up -d tool-gateway runtime-worker run
 corepack pnpm smoke:temporal-db-e2e
 corepack pnpm smoke:control-plane-api-e2e
 corepack pnpm smoke:control-plane-ui-e2e
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml config
+corepack pnpm smoke:pi-readonly-e2e
+corepack pnpm smoke:pi-l3-e2e
+corepack pnpm smoke:pi-user-input-e2e
+corepack pnpm smoke:pi-handoff-e2e
+corepack pnpm smoke:pi-restart-resume-e2e
+corepack pnpm smoke:pi-model-gateway-e2e
 ```
 
 ## Not Completed Yet
@@ -163,14 +186,16 @@ This stage intentionally does not implement:
 1. Low-code flow canvas or drag-and-drop designer.
 2. Live production model-gateway smoke with real credentials.
 3. Real business system adapters.
-4. Full workflow handoff child execution policy beyond fail-closed validation.
-5. Enterprise SSO.
-6. Random gray traffic splitting.
-7. Any fifth production app or production container.
+4. Rich `agent.*` audit event taxonomy beyond the current persisted AgentRun/AgentStep, HumanTask, ToolCall and Audit records.
+5. Automated Docker worker stop/start inside `smoke:pi-restart-resume-e2e`; the script validates the same context snapshot resume path, while operational restart remains a manual compose step.
+6. Enterprise SSO.
+7. Random gray traffic splitting.
+8. Any fifth production app or production container.
 
 ## Suggested Next Batch
 
-1. Add full Pi smoke scripts for readonly tool, L3 resume, user input, handoff and restart recovery.
-2. Improve UI ergonomics around AgentRun/AgentStep inspection and context refs.
-3. Add evaluation/test-set operations for Route and Flow releases.
-4. Add production identity integration behind the existing Header Auth boundary.
+1. Run full Docker Pi smoke suite in CI workflow_dispatch/nightly with actual container startup.
+2. Add richer `agent.*` audit events and log assertions.
+3. Improve UI ergonomics around AgentRun/AgentStep inspection and context refs.
+4. Add evaluation/test-set operations for Route and Flow releases.
+5. Add production identity integration behind the existing Header Auth boundary.

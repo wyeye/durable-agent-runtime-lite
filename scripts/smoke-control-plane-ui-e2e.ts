@@ -228,7 +228,7 @@ function agentSpec(ids: { agent: string; prompt: string; tool: string }, version
     agent_id: ids.agent,
     version,
     prompt_ref: `${ids.prompt}@1`,
-    model_policy: 'mock',
+    model_policy: 'deterministic:final_only',
     allowed_tools: [`${ids.tool}@1.0.0`],
     allowed_handoffs: [],
     max_steps: 3,

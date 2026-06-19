@@ -176,9 +176,13 @@ Pi rules:
 
 - Pi can plan, summarize, classify, generate text and propose tool calls.
 - Pi must not directly call external systems.
+- Pi must not receive Tool Gateway, DB, Temporal Client, filesystem, shell, MCP or business API capabilities.
+- Pi Deferred Tools may only emit proposals; real tool invocation must be mediated by Workflow -> Activity -> Tool Gateway.
 - Pi should return structured results.
 - In mediated mode, Pi returns proposed tool calls; Workflow and Tool Gateway decide whether to execute them.
 - Pi output statuses should be limited to known states such as `final`, `need_tool`, `need_user`, `handoff_to_workflow` and `failed`.
+- `PI_AGENT_MODE=deterministic` is development/test only; production must use `PI_AGENT_MODE=model_gateway`.
+- `handoff_to_workflow` may only start an allowed exact `FlowExecutionPlan` child workflow.
 
 ---
 
@@ -974,4 +978,3 @@ When starting from a skeleton repository, implement in this order:
 11. E2E smoke path.
 
 Do not attempt to implement the whole system in one change.
-

@@ -40,6 +40,19 @@ export const agentRunStatusSchema = z.enum([
   'budget_exceeded',
   'timed_out',
 ]);
+export const agentStepStatusSchema = z.enum([
+  'segment_created',
+  'waiting_tool',
+  'waiting_human',
+  'waiting_user',
+  'tool_resolved',
+  'handoff_started',
+  'handoff_completed',
+  'completed',
+  'failed',
+  'cancelled',
+  'budget_exceeded',
+]);
 export const piSegmentStatusSchema = z.enum([
   'completed',
   'tool_requested',
@@ -898,6 +911,30 @@ export const agentUsageSchema = z.object({
 });
 const emptyAgentUsage = { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
 
+export const agentBudgetLedgerSchema = z.object({
+  segment_count: z.number().int().nonnegative().default(0),
+  model_turn_count: z.number().int().nonnegative().default(0),
+  tool_call_count: z.number().int().nonnegative().default(0),
+  handoff_count: z.number().int().nonnegative().default(0),
+  input_tokens: z.number().int().nonnegative().default(0),
+  output_tokens: z.number().int().nonnegative().default(0),
+  total_tokens: z.number().int().nonnegative().default(0),
+  estimated_cost: z.number().nonnegative().default(0),
+  elapsed_duration_ms: z.number().int().nonnegative().default(0),
+  context_bytes: z.number().int().nonnegative().default(0),
+});
+
+export const agentToolExecutionOperationSchema = z.enum(['invoke', 'preview', 'commit']);
+
+export const agentToolExecutionIdentitySchema = z.object({
+  agent_run_id: z.string().min(1),
+  segment_index: z.number().int().nonnegative(),
+  call_id: z.string().min(1),
+  operation: agentToolExecutionOperationSchema,
+  tool_name: z.string().min(1),
+  tool_version: z.string().min(1),
+});
+
 export const agentToolPlanEntrySchema = z.object({
   tool_name: z.string().min(1),
   tool_version: z.string().min(1),
@@ -979,6 +1016,10 @@ export const agentToolResultReferenceSchema = z.object({
   tool_version: z.string().min(1),
   result_ref: z.string().optional(),
   result_summary: z.string().max(2000).optional(),
+  status: z.string().min(1).optional(),
+  audit_event_id: z.string().min(1).optional(),
+  tool_call_log_id: z.string().min(1).optional(),
+  error_code: z.string().min(1).optional(),
   is_error: z.boolean().default(false),
 });
 
@@ -1013,6 +1054,7 @@ export const piSegmentResultSchema = z.discriminatedUnion('status', [
   }),
   z.object({
     status: z.literal('handoff_requested'),
+    call_id: z.string().min(1),
     target_execution_plan_ref: z.string().min(1),
     arguments: jsonObjectSchema.default({}),
     context_snapshot_ref: piContextSnapshotRefSchema,
@@ -1050,10 +1092,15 @@ export const agentStepRecordSchema = z.object({
   agent_run_id: z.string().min(1),
   segment_index: z.number().int().nonnegative(),
   stable_step_key: z.string().min(1),
-  segment_status: piSegmentStatusSchema,
+  segment_status: agentStepStatusSchema,
   decision_summary: decisionSummarySchema.optional(),
   proposed_tool_calls: z.array(proposedToolCallSchema).default([]),
   tool_result_refs: z.array(agentToolResultReferenceSchema).default([]),
+  authoritative_tool_result_refs: z.array(agentToolResultReferenceSchema).default([]),
+  human_task_ids: z.array(z.string().min(1)).default([]),
+  context_snapshot_before: piContextSnapshotRefSchema.optional(),
+  context_snapshot_after: piContextSnapshotRefSchema.optional(),
+  handoff_refs: z.array(jsonObjectSchema).default([]),
   context_snapshot_ref: piContextSnapshotRefSchema.optional(),
   output_ref: z.string().optional(),
   usage: agentUsageSchema.default(emptyAgentUsage),
@@ -1069,6 +1116,7 @@ export const agentRunRecordSchema = z.object({
   user_id: z.string().min(1),
   task_run_id: z.string().min(1),
   workflow_id: z.string().min(1),
+  workflow_run_id: z.string().min(1).optional(),
   parent_workflow_id: z.string().optional(),
   execution_plan_ref: z.string().min(1),
   execution_plan_hash: sha256Schema,
@@ -1122,6 +1170,7 @@ export type ToolInvokeMode = z.infer<typeof toolInvokeModeSchema>;
 export type ToolPolicyDecision = z.infer<typeof toolPolicyDecisionSchema>;
 export type AgentExecutionMode = z.infer<typeof agentExecutionModeSchema>;
 export type AgentRunStatus = z.infer<typeof agentRunStatusSchema>;
+export type AgentStepStatus = z.infer<typeof agentStepStatusSchema>;
 export type PiSegmentStatus = z.infer<typeof piSegmentStatusSchema>;
 export type SpecStatus = z.infer<typeof specStatusSchema>;
 export type SpecStatusTransition = z.infer<typeof specStatusTransitionSchema>;
@@ -1210,7 +1259,10 @@ export type RunTaskResponse = z.infer<typeof runTaskResponseSchema>;
 export type AgentRunRequest = z.infer<typeof agentRunRequestSchema>;
 export type AgentRunResult = z.infer<typeof agentRunResultSchema>;
 export type AgentBudget = z.infer<typeof agentBudgetSchema>;
+export type AgentBudgetLedger = z.infer<typeof agentBudgetLedgerSchema>;
 export type AgentUsage = z.infer<typeof agentUsageSchema>;
+export type AgentToolExecutionOperation = z.infer<typeof agentToolExecutionOperationSchema>;
+export type AgentToolExecutionIdentity = z.infer<typeof agentToolExecutionIdentitySchema>;
 export type AgentToolPlanEntry = z.infer<typeof agentToolPlanEntrySchema>;
 export type ProposedToolCall = z.infer<typeof proposedToolCallSchema>;
 export type ResolvedAgentPlan = z.infer<typeof resolvedAgentPlanSchema>;
