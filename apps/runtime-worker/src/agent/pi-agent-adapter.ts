@@ -57,6 +57,7 @@ export async function runPiAgentSegment(input: PiAgentAdapterInput): Promise<PiA
   let modelTurnCount = 0;
   let finalAnswer: string | undefined;
   let errorMessage: string | undefined;
+  let cancelled = input.abortSignal?.aborted === true;
 
   const agent = new Agent({
     initialState: {
@@ -95,8 +96,14 @@ export async function runPiAgentSegment(input: PiAgentAdapterInput): Promise<PiA
     }
   });
 
-  const abortListener = () => agent.abort();
+  const abortListener = () => {
+    cancelled = true;
+    agent.abort();
+  };
   input.abortSignal?.addEventListener('abort', abortListener, { once: true });
+  if (input.abortSignal?.aborted) {
+    abortListener();
+  }
 
   try {
     if (input.contextMessages && input.contextMessages.length > 0) {
@@ -119,6 +126,7 @@ export async function runPiAgentSegment(input: PiAgentAdapterInput): Promise<PiA
     usage,
     modelTurnCount,
     budgetRemaining: input.budgetRemaining,
+    cancelled,
   };
   if (finalAnswer) {
     resultInput.finalAnswer = finalAnswer;
@@ -139,11 +147,22 @@ function buildSegmentResult(input: {
   proposals: ProposedToolCall[];
   finalAnswer?: string;
   errorMessage?: string;
+  cancelled?: boolean;
   context: SerializedPiContext;
   usage: AgentUsage;
   modelTurnCount: number;
   budgetRemaining: AgentBudget;
 }): PiSegmentResultWithoutSnapshot {
+  if (input.cancelled) {
+    return {
+      status: 'cancelled',
+      error_code: 'AGENT_CANCELLED',
+      error_message: input.errorMessage ?? 'Pi segment was cancelled',
+      usage: input.usage,
+      model_turn_count: input.modelTurnCount,
+    };
+  }
+
   if (input.errorMessage) {
     return {
       status: 'failed',

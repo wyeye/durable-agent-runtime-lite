@@ -1,4 +1,9 @@
 import {
+  ApplicationFailure,
+  CancelledFailure,
+  Context,
+} from '@temporalio/activity';
+import {
   agentUsageSchema,
   piSegmentRequestSchema,
   piSegmentResultSchema,
@@ -53,6 +58,20 @@ import {
   serializePiContext,
 } from '../agent/pi-context-codec.js';
 import { runPiAgentSegment } from '../agent/pi-agent-adapter.js';
+
+const NON_RETRYABLE_ERROR_CODES = new Set([
+  'VALIDATION_FAILED',
+  'AUTH_FAILED',
+  'POLICY_DENIED',
+  'NOT_FOUND',
+  'TOOL_ARGUMENT_VALIDATION_FAILED',
+  'TOOL_POLICY_DENIED',
+  'TOOL_HASH_MISMATCH',
+  'TOOL_RISK_MISMATCH',
+  'HUMAN_CONFIRMATION_REQUIRED',
+  'IDEMPOTENCY_CONFLICT',
+  'PI_SEGMENT_NON_RETRYABLE',
+]);
 
 const sampleFlowSpec: FlowSpec = {
   flow_id: 'sample_flow',
@@ -201,207 +220,279 @@ export async function loadAgentExecutionPlanByRefActivity(
   executionPlanRef: string,
   tenantId?: string,
 ): Promise<AgentExecutionPlan> {
-  const plan = await new AgentExecutionPlanRepository(getProcessDb()).getByRef(executionPlanRef, tenantId ? { tenantId } : {});
-  if (!plan) {
-    throw new Error(`AgentExecutionPlan not found: ${executionPlanRef}`);
-  }
-  return plan;
+  return classifyActivityFailure('loadAgentExecutionPlanByRefActivity', async () => {
+    const plan = await new AgentExecutionPlanRepository(getProcessDb()).getByRef(executionPlanRef, tenantId ? { tenantId } : {});
+    if (!plan) {
+      throw ApplicationFailure.nonRetryable(`AgentExecutionPlan not found: ${executionPlanRef}`, 'NOT_FOUND');
+    }
+    return plan;
+  });
 }
 
 export async function createAgentRunActivity(input: CreateAgentRunActivityInput): Promise<AgentRunRecord> {
-  const db = getProcessDb();
-  const executionPlan = await new AgentExecutionPlanRepository(db).getByRef(input.execution_plan_ref, {
-    tenantId: input.tenant_id,
+  return classifyActivityFailure('createAgentRunActivity', async () => {
+    const db = getProcessDb();
+    const executionPlan = await new AgentExecutionPlanRepository(db).getByRef(input.execution_plan_ref, {
+      tenantId: input.tenant_id,
+    });
+    if (!executionPlan) {
+      throw ApplicationFailure.nonRetryable(`AgentExecutionPlan not found: ${input.execution_plan_ref}`, 'NOT_FOUND');
+    }
+    const agentRun = await new AgentRunRepository(db).create({
+      ...(input.agent_run_id ? { agentRunId: input.agent_run_id } : {}),
+      tenantId: input.tenant_id,
+      userId: input.user_id,
+      taskRunId: input.task_run_id,
+      workflowId: input.workflow_id,
+      ...(input.workflow_run_id ? { workflowRunId: input.workflow_run_id } : {}),
+      ...(input.parent_workflow_id ? { parentWorkflowId: input.parent_workflow_id } : {}),
+      executionMode: input.execution_mode ?? 'mediated_tool_call',
+      executionPlan,
+    });
+    await new AgentRunRepository(db).update(agentRun.agent_run_id, { status: 'running' });
+    return agentRun;
   });
-  if (!executionPlan) {
-    throw new Error(`AgentExecutionPlan not found: ${input.execution_plan_ref}`);
-  }
-  const agentRun = await new AgentRunRepository(db).create({
-    ...(input.agent_run_id ? { agentRunId: input.agent_run_id } : {}),
-    tenantId: input.tenant_id,
-    userId: input.user_id,
-    taskRunId: input.task_run_id,
-    workflowId: input.workflow_id,
-    ...(input.workflow_run_id ? { workflowRunId: input.workflow_run_id } : {}),
-    ...(input.parent_workflow_id ? { parentWorkflowId: input.parent_workflow_id } : {}),
-    executionMode: input.execution_mode ?? 'mediated_tool_call',
-    executionPlan,
-  });
-  await new AgentRunRepository(db).update(agentRun.agent_run_id, { status: 'running' });
-  return agentRun;
 }
 
 export async function updateAgentRunActivity(input: UpdateAgentRunActivityInput): Promise<AgentRunRecord> {
-  const updated = await new AgentRunRepository(getProcessDb()).update(input.agent_run_id, {
-    ...(input.status ? { status: input.status } : {}),
-    ...(input.workflow_run_id !== undefined ? { workflowRunId: input.workflow_run_id } : {}),
-    ...(input.current_segment_index !== undefined ? { currentSegmentIndex: input.current_segment_index } : {}),
-    ...(input.model_turn_count !== undefined ? { modelTurnCount: input.model_turn_count } : {}),
-    ...(input.tool_call_count !== undefined ? { toolCallCount: input.tool_call_count } : {}),
-    ...(input.handoff_count !== undefined ? { handoffCount: input.handoff_count } : {}),
-    ...(input.usage ? { usage: input.usage } : {}),
-    ...(input.completed !== undefined ? { completed: input.completed } : {}),
-    ...(input.error_code !== undefined ? { errorCode: input.error_code } : {}),
-    ...(input.error_message !== undefined ? { errorMessage: input.error_message } : {}),
+  return classifyActivityFailure('updateAgentRunActivity', async () => {
+    const updated = await new AgentRunRepository(getProcessDb()).update(input.agent_run_id, {
+      ...(input.status ? { status: input.status } : {}),
+      ...(input.workflow_run_id !== undefined ? { workflowRunId: input.workflow_run_id } : {}),
+      ...(input.current_segment_index !== undefined ? { currentSegmentIndex: input.current_segment_index } : {}),
+      ...(input.model_turn_count !== undefined ? { modelTurnCount: input.model_turn_count } : {}),
+      ...(input.tool_call_count !== undefined ? { toolCallCount: input.tool_call_count } : {}),
+      ...(input.handoff_count !== undefined ? { handoffCount: input.handoff_count } : {}),
+      ...(input.usage ? { usage: input.usage } : {}),
+      ...(input.completed !== undefined ? { completed: input.completed } : {}),
+      ...(input.error_code !== undefined ? { errorCode: input.error_code } : {}),
+      ...(input.error_message !== undefined ? { errorMessage: input.error_message } : {}),
+    });
+    if (!updated) {
+      throw ApplicationFailure.nonRetryable(`AgentRun not found: ${input.agent_run_id}`, 'NOT_FOUND');
+    }
+    return updated;
   });
-  if (!updated) {
-    throw new Error(`AgentRun not found: ${input.agent_run_id}`);
-  }
-  return updated;
 }
 
 export async function runPiSegmentActivity(request: PiSegmentRequest): Promise<PiSegmentResult> {
-  const parsed = piSegmentRequestSchema.parse(request);
-  const db = getProcessDb();
-  const executionPlan = await new AgentExecutionPlanRepository(db).getByRef(
-    parsed.execution_plan_ref,
-    { tenantId: parsed.request_context.tenant_id },
-  );
-  if (!executionPlan) {
-    throw new Error(`AgentExecutionPlan not found: ${parsed.execution_plan_ref}`);
-  }
-  const agentRun = await new AgentRunRepository(db).get(parsed.agent_run_id, {
-    tenantId: parsed.request_context.tenant_id,
-  });
-  if (!agentRun) {
-    throw new Error(`AgentRun not found: ${parsed.agent_run_id}`);
-  }
-  if (agentRun.execution_plan_hash !== executionPlan.execution_plan_hash) {
-    throw new Error(`AgentRun execution plan hash mismatch: ${parsed.agent_run_id}`);
-  }
-
-  const snapshot = parsed.context_snapshot_ref
-    ? await new AgentContextSnapshotRepository(db).get(parsed.context_snapshot_ref.snapshot_id)
-    : undefined;
-  if (parsed.context_snapshot_ref && !snapshot) {
-    throw new Error(`Pi context snapshot not found: ${parsed.context_snapshot_ref.snapshot_id}`);
-  }
-
-  const piRuntime = createPiRuntime(executionPlan.model_policy);
-  try {
-    const adapterInput: Parameters<typeof runPiAgentSegment>[0] = {
-      executionPlan,
-      model: piRuntime.model,
-      streamFn: piRuntime.streamFn,
-      segmentIndex: parsed.segment_index,
-      budgetRemaining: parsed.budget_remaining,
-      maxContextBytes: parsed.budget_remaining.max_context_bytes,
-    };
-    if (snapshot?.messages) {
-      adapterInput.contextMessages = snapshot.messages;
+  return classifyActivityFailure('runPiSegmentActivity', async () => {
+    const parsed = piSegmentRequestSchema.parse(request);
+    const db = getProcessDb();
+    heartbeatActivity({ activity: 'runPiSegmentActivity', phase: 'load_execution_plan', segment_index: parsed.segment_index });
+    const executionPlan = await new AgentExecutionPlanRepository(db).getByRef(
+      parsed.execution_plan_ref,
+      { tenantId: parsed.request_context.tenant_id },
+    );
+    if (!executionPlan) {
+      throw ApplicationFailure.nonRetryable(`AgentExecutionPlan not found: ${parsed.execution_plan_ref}`, 'NOT_FOUND');
     }
-    if (parsed.initial_user_input) {
-      adapterInput.initialUserInput = parsed.initial_user_input;
-    }
-    const adapterResult = await runPiAgentSegment(adapterInput);
-    const snapshotInput: Parameters<AgentContextSnapshotRepository['create']>[0] = {
-      agentRunId: parsed.agent_run_id,
-      schemaVersion: PI_CONTEXT_SCHEMA_VERSION,
-      sanitizedMessages: adapterResult.context.messages,
-    };
-    if (parsed.context_snapshot_ref?.snapshot_id) {
-      snapshotInput.previousSnapshotId = parsed.context_snapshot_ref.snapshot_id;
-    }
-    const snapshotRef = await new AgentContextSnapshotRepository(db).create(snapshotInput);
-    const segmentResult = piSegmentResultSchema.parse({
-      ...adapterResult.segmentResult,
-      context_snapshot_ref: snapshotRef,
+    const agentRun = await new AgentRunRepository(db).get(parsed.agent_run_id, {
+      tenantId: parsed.request_context.tenant_id,
     });
-    await new AgentStepRepository(db).create({
+    if (!agentRun) {
+      throw ApplicationFailure.nonRetryable(`AgentRun not found: ${parsed.agent_run_id}`, 'NOT_FOUND');
+    }
+    if (agentRun.execution_plan_hash !== executionPlan.execution_plan_hash) {
+      throw ApplicationFailure.nonRetryable(`AgentRun execution plan hash mismatch: ${parsed.agent_run_id}`, 'VALIDATION_FAILED');
+    }
+
+    heartbeatActivity({ activity: 'runPiSegmentActivity', phase: 'load_context', segment_index: parsed.segment_index });
+    const snapshot = parsed.context_snapshot_ref
+      ? await new AgentContextSnapshotRepository(db).get(parsed.context_snapshot_ref.snapshot_id)
+      : undefined;
+    if (parsed.context_snapshot_ref && !snapshot) {
+      throw ApplicationFailure.nonRetryable(`Pi context snapshot not found: ${parsed.context_snapshot_ref.snapshot_id}`, 'NOT_FOUND');
+    }
+
+    const piRuntime = createPiRuntime(executionPlan.model_policy);
+    const heartbeatLoop = startHeartbeatLoop('runPiSegmentActivity', {
       agent_run_id: parsed.agent_run_id,
       segment_index: parsed.segment_index,
-      stable_step_key: `${parsed.agent_run_id}:${parsed.segment_index}`,
-      segment_status: stepStatusForSegment(segmentResult),
-      decision_summary: decisionSummaryForSegment(segmentResult),
-      proposed_tool_calls: segmentResult.status === 'tool_requested' ? segmentResult.proposed_tool_calls : [],
-      tool_result_refs: [],
-      authoritative_tool_result_refs: [],
-      human_task_ids: [],
-      context_snapshot_before: parsed.context_snapshot_ref,
-      context_snapshot_after: snapshotRef,
-      handoff_refs: [],
-      context_snapshot_ref: snapshotRef,
-      usage: segmentResult.usage,
-      ...(segmentResult.status === 'failed' || segmentResult.status === 'stopped_by_budget' || segmentResult.status === 'cancelled'
-        ? {
-            error_code: segmentResult.error_code,
-            error_message: segmentResult.error_message,
-          }
-        : {}),
     });
-    return segmentResult;
-  } finally {
-    piRuntime.cleanup?.();
-  }
+    try {
+      const abortSignal = currentActivityAbortSignal();
+      const adapterInput: Parameters<typeof runPiAgentSegment>[0] = {
+        executionPlan,
+        model: piRuntime.model,
+        streamFn: piRuntime.streamFn,
+        segmentIndex: parsed.segment_index,
+        budgetRemaining: parsed.budget_remaining,
+        maxContextBytes: parsed.budget_remaining.max_context_bytes,
+      };
+      if (abortSignal) {
+        adapterInput.abortSignal = abortSignal;
+      }
+      if (snapshot?.messages) {
+        adapterInput.contextMessages = snapshot.messages;
+      }
+      if (parsed.initial_user_input) {
+        adapterInput.initialUserInput = parsed.initial_user_input;
+      }
+      heartbeatActivity({ activity: 'runPiSegmentActivity', phase: 'pi_agent_start', segment_index: parsed.segment_index });
+      const adapterResult = await runPiAgentSegment(adapterInput);
+      throwIfActivityCancelled('runPiSegmentActivity cancelled after Pi segment');
+      heartbeatActivity({ activity: 'runPiSegmentActivity', phase: 'persist_context', segment_index: parsed.segment_index });
+      const snapshotInput: Parameters<AgentContextSnapshotRepository['create']>[0] = {
+        agentRunId: parsed.agent_run_id,
+        schemaVersion: PI_CONTEXT_SCHEMA_VERSION,
+        sanitizedMessages: adapterResult.context.messages,
+      };
+      if (parsed.context_snapshot_ref?.snapshot_id) {
+        snapshotInput.previousSnapshotId = parsed.context_snapshot_ref.snapshot_id;
+      }
+      const snapshotRef = await new AgentContextSnapshotRepository(db).create(snapshotInput);
+      const segmentResult = piSegmentResultSchema.parse({
+        ...adapterResult.segmentResult,
+        context_snapshot_ref: snapshotRef,
+      });
+      await new AgentStepRepository(db).create({
+        agent_run_id: parsed.agent_run_id,
+        segment_index: parsed.segment_index,
+        stable_step_key: `${parsed.agent_run_id}:${parsed.segment_index}`,
+        segment_status: stepStatusForSegment(segmentResult),
+        decision_summary: decisionSummaryForSegment(segmentResult),
+        proposed_tool_calls: segmentResult.status === 'tool_requested' ? segmentResult.proposed_tool_calls : [],
+        tool_result_refs: [],
+        authoritative_tool_result_refs: [],
+        human_task_ids: [],
+        context_snapshot_before: parsed.context_snapshot_ref,
+        context_snapshot_after: snapshotRef,
+        handoff_refs: [],
+        context_snapshot_ref: snapshotRef,
+        usage: segmentResult.usage,
+        ...(segmentResult.status === 'failed' || segmentResult.status === 'stopped_by_budget' || segmentResult.status === 'cancelled'
+          ? {
+              error_code: segmentResult.error_code,
+              error_message: segmentResult.error_message,
+            }
+          : {}),
+      });
+      heartbeatActivity({ activity: 'runPiSegmentActivity', phase: 'completed', segment_index: parsed.segment_index });
+      return segmentResult;
+    } finally {
+      heartbeatLoop.stop();
+      piRuntime.cleanup?.();
+    }
+  });
 }
 
 export async function persistToolResultsToPiContextActivity(
   input: PersistToolResultsActivityInput,
 ): Promise<PiContextSnapshotRef> {
-  const db = getProcessDb();
-  const snapshot = await new AgentContextSnapshotRepository(db).get(input.previous_context_snapshot_ref.snapshot_id);
-  if (!snapshot) {
-    throw new Error(`Pi context snapshot not found: ${input.previous_context_snapshot_ref.snapshot_id}`);
-  }
-  const restoredMessages = restorePiMessages({ schema_version: PI_CONTEXT_SCHEMA_VERSION, messages: snapshot.messages });
-  const replaced = replaceDeferredToolResults(restoredMessages, input.tool_results, {
-    maxBytes: input.max_context_bytes,
-  });
-  return new AgentContextSnapshotRepository(db).create({
-    agentRunId: input.agent_run_id,
-    previousSnapshotId: input.previous_context_snapshot_ref.snapshot_id,
-    schemaVersion: PI_CONTEXT_SCHEMA_VERSION,
-    sanitizedMessages: replaced.messages,
+  return classifyActivityFailure('persistToolResultsToPiContextActivity', async () => {
+    const db = getProcessDb();
+    const snapshot = await new AgentContextSnapshotRepository(db).get(input.previous_context_snapshot_ref.snapshot_id);
+    if (!snapshot) {
+      throw ApplicationFailure.nonRetryable(`Pi context snapshot not found: ${input.previous_context_snapshot_ref.snapshot_id}`, 'NOT_FOUND');
+    }
+    const restoredMessages = restorePiMessages({ schema_version: PI_CONTEXT_SCHEMA_VERSION, messages: snapshot.messages });
+    const replaced = replaceDeferredToolResults(restoredMessages, input.tool_results, {
+      maxBytes: input.max_context_bytes,
+    });
+    return new AgentContextSnapshotRepository(db).create({
+      agentRunId: input.agent_run_id,
+      previousSnapshotId: input.previous_context_snapshot_ref.snapshot_id,
+      schemaVersion: PI_CONTEXT_SCHEMA_VERSION,
+      sanitizedMessages: replaced.messages,
+    });
   });
 }
 
 export async function appendUserInputToPiContextActivity(
   input: AppendUserInputActivityInput,
 ): Promise<PiContextSnapshotRef> {
-  const db = getProcessDb();
-  const snapshot = await new AgentContextSnapshotRepository(db).get(input.previous_context_snapshot_ref.snapshot_id);
-  if (!snapshot) {
-    throw new Error(`Pi context snapshot not found: ${input.previous_context_snapshot_ref.snapshot_id}`);
-  }
-  const restoredMessages = restorePiMessages({ schema_version: PI_CONTEXT_SCHEMA_VERSION, messages: snapshot.messages });
-  const userMessage: UserMessage = {
-    role: 'user',
-    content: [{
-      type: 'text',
-      text: `Human task ${input.human_task_id} response: ${JSON.stringify(input.response)}`,
-    }],
-    timestamp: 0,
-  };
-  const messages = [
-    ...restoredMessages,
-    userMessage,
-  ];
-  const serialized = serializePiContext(messages, { maxBytes: input.max_context_bytes });
-  return new AgentContextSnapshotRepository(db).create({
-    agentRunId: input.agent_run_id,
-    previousSnapshotId: input.previous_context_snapshot_ref.snapshot_id,
-    schemaVersion: PI_CONTEXT_SCHEMA_VERSION,
-    sanitizedMessages: serialized.messages,
+  return classifyActivityFailure('appendUserInputToPiContextActivity', async () => {
+    const db = getProcessDb();
+    const snapshot = await new AgentContextSnapshotRepository(db).get(input.previous_context_snapshot_ref.snapshot_id);
+    if (!snapshot) {
+      throw ApplicationFailure.nonRetryable(`Pi context snapshot not found: ${input.previous_context_snapshot_ref.snapshot_id}`, 'NOT_FOUND');
+    }
+    const restoredMessages = restorePiMessages({ schema_version: PI_CONTEXT_SCHEMA_VERSION, messages: snapshot.messages });
+    const userMessage: UserMessage = {
+      role: 'user',
+      content: [{
+        type: 'text',
+        text: `Human task ${input.human_task_id} response: ${JSON.stringify(input.response)}`,
+      }],
+      timestamp: 0,
+    };
+    const messages = [
+      ...restoredMessages,
+      userMessage,
+    ];
+    const serialized = serializePiContext(messages, { maxBytes: input.max_context_bytes });
+    return new AgentContextSnapshotRepository(db).create({
+      agentRunId: input.agent_run_id,
+      previousSnapshotId: input.previous_context_snapshot_ref.snapshot_id,
+      schemaVersion: PI_CONTEXT_SCHEMA_VERSION,
+      sanitizedMessages: serialized.messages,
+    });
   });
 }
 
 export async function updateAgentStepActivity(input: UpdateAgentStepActivityInput): Promise<AgentStepRecord> {
-  return new AgentStepRepository(getProcessDb()).updateBoundaryResult({
-    stableStepKey: input.stable_step_key,
-    ...(input.segment_status ? { segmentStatus: input.segment_status } : {}),
-    ...(input.decision_summary !== undefined ? { decisionSummary: input.decision_summary } : {}),
-    ...(input.proposed_tool_calls !== undefined ? { proposedToolCalls: input.proposed_tool_calls } : {}),
-    ...(input.tool_result_refs !== undefined ? { toolResultRefs: input.tool_result_refs } : {}),
-    ...(input.authoritative_tool_result_refs !== undefined ? { authoritativeToolResultRefs: input.authoritative_tool_result_refs } : {}),
-    ...(input.human_task_ids !== undefined ? { humanTaskIds: input.human_task_ids } : {}),
-    ...(input.context_snapshot_before !== undefined ? { contextSnapshotBefore: input.context_snapshot_before } : {}),
-    ...(input.context_snapshot_after !== undefined ? { contextSnapshotAfter: input.context_snapshot_after } : {}),
-    ...(input.context_snapshot_ref !== undefined ? { contextSnapshotRef: input.context_snapshot_ref } : {}),
-    ...(input.handoff_refs !== undefined ? { handoffRefs: input.handoff_refs } : {}),
-    ...(input.output_ref !== undefined ? { outputRef: input.output_ref } : {}),
-    ...(input.usage !== undefined ? { usage: input.usage } : {}),
-    ...(input.error_code !== undefined ? { errorCode: input.error_code } : {}),
-    ...(input.error_message !== undefined ? { errorMessage: input.error_message } : {}),
+  return classifyActivityFailure('updateAgentStepActivity', async () =>
+    new AgentStepRepository(getProcessDb()).updateBoundaryResult({
+      stableStepKey: input.stable_step_key,
+      ...(input.segment_status ? { segmentStatus: input.segment_status } : {}),
+      ...(input.decision_summary !== undefined ? { decisionSummary: input.decision_summary } : {}),
+      ...(input.proposed_tool_calls !== undefined ? { proposedToolCalls: input.proposed_tool_calls } : {}),
+      ...(input.tool_result_refs !== undefined ? { toolResultRefs: input.tool_result_refs } : {}),
+      ...(input.authoritative_tool_result_refs !== undefined ? { authoritativeToolResultRefs: input.authoritative_tool_result_refs } : {}),
+      ...(input.human_task_ids !== undefined ? { humanTaskIds: input.human_task_ids } : {}),
+      ...(input.context_snapshot_before !== undefined ? { contextSnapshotBefore: input.context_snapshot_before } : {}),
+      ...(input.context_snapshot_after !== undefined ? { contextSnapshotAfter: input.context_snapshot_after } : {}),
+      ...(input.context_snapshot_ref !== undefined ? { contextSnapshotRef: input.context_snapshot_ref } : {}),
+      ...(input.handoff_refs !== undefined ? { handoffRefs: input.handoff_refs } : {}),
+      ...(input.output_ref !== undefined ? { outputRef: input.output_ref } : {}),
+      ...(input.usage !== undefined ? { usage: input.usage } : {}),
+      ...(input.error_code !== undefined ? { errorCode: input.error_code } : {}),
+      ...(input.error_message !== undefined ? { errorMessage: input.error_message } : {}),
+    }),
+  );
+}
+
+export async function createHumanTaskActivity(
+  context: ActivityContext,
+  input: CreateHumanTaskActivityInput = {},
+): Promise<HumanTask> {
+  return classifyActivityFailure('createHumanTaskActivity', async () => {
+    const db = getProcessDb();
+    const humanTask = await new HumanTaskRepository(db).create(
+      humanTaskCreateRequestSchema.parse({
+        tenant_id: context.tenant_id,
+        user_id: context.user_id,
+        task_run_id: context.task_run_id,
+        workflow_id: context.workflow_id,
+        kind: input.kind ?? 'approval',
+        tool_call_id: input.tool_call_id,
+        tool_name: input.tool_name,
+        assignee: input.assignee,
+        candidate_groups: input.candidate_groups ?? [],
+        payload: input.payload ?? {},
+        requested_schema: input.requested_schema,
+        request_id: context.request_id,
+      }),
+    );
+    await new TaskRunRepository(db).updateStatus(context.task_run_id, { status: 'waiting_human' });
+    await new AuditEventRepository(db).append({
+      tenant_id: context.tenant_id,
+      actor_id: context.user_id,
+      action: 'human_task.create',
+      target_type: 'human_task',
+      target_id: humanTask.human_task_id,
+      result: 'pending',
+      reason: input.kind === 'user_input' ? 'agent_user_input_required' : 'l3_tool_confirmation_required',
+      trace_id: context.request_id,
+      payload: {
+        task_run_id: context.task_run_id,
+        workflow_id: context.workflow_id,
+        tool_call_id: input.tool_call_id,
+        tool_name: input.tool_name,
+      },
+    });
+    return humanTask;
   });
 }
 
@@ -411,10 +502,12 @@ export async function invokeToolActivity(
   args: Record<string, unknown>,
   identity?: AgentToolExecutionIdentity,
 ): Promise<ToolInvokeResponse> {
-  const config = loadConfig();
-  const client = createToolGatewayClient(config);
-  return client.invoke(
-    toolInvokeRequestSchema.parse({
+  return classifyActivityFailure('invokeToolActivity', async () => {
+    throwIfActivityCancelled('invokeToolActivity cancelled before Tool Gateway invoke');
+    heartbeatActivity({ activity: 'invokeToolActivity', phase: 'before_request', tool_name: tool.tool_name });
+    const config = loadConfig();
+    const client = createToolGatewayClient(config);
+    const result = await client.invoke(toolInvokeRequestSchema.parse({
       tool_name: tool.tool_name,
       tool_version: tool.tool_version,
       tool_sha256: tool.tool_sha256,
@@ -425,8 +518,10 @@ export async function invokeToolActivity(
       idempotency_key: identity ? buildAgentToolIdempotencyKey(identity) : `${context.task_run_id}:${tool.tool_name}`,
       risk_level: tool.risk_level,
       request_id: context.request_id,
-    }),
-  );
+    }));
+    heartbeatActivity({ activity: 'invokeToolActivity', phase: 'after_request', tool_name: tool.tool_name, status: result.status });
+    return result;
+  });
 }
 
 export async function previewToolActivity(
@@ -435,10 +530,12 @@ export async function previewToolActivity(
   args: Record<string, unknown>,
   identity?: AgentToolExecutionIdentity,
 ): Promise<ToolPreviewResponse> {
-  const config = loadConfig();
-  const client = createToolGatewayClient(config);
-  return client.preview(
-    toolPreviewRequestSchema.parse({
+  return classifyActivityFailure('previewToolActivity', async () => {
+    throwIfActivityCancelled('previewToolActivity cancelled before Tool Gateway preview');
+    heartbeatActivity({ activity: 'previewToolActivity', phase: 'before_request', tool_name: tool.tool_name });
+    const config = loadConfig();
+    const client = createToolGatewayClient(config);
+    const result = await client.preview(toolPreviewRequestSchema.parse({
       tool_name: tool.tool_name,
       tool_version: tool.tool_version,
       tool_sha256: tool.tool_sha256,
@@ -449,8 +546,10 @@ export async function previewToolActivity(
       idempotency_key: identity ? buildAgentToolIdempotencyKey(identity) : `${context.task_run_id}:${tool.tool_name}:preview`,
       risk_level: tool.risk_level,
       request_id: context.request_id,
-    }),
-  );
+    }));
+    heartbeatActivity({ activity: 'previewToolActivity', phase: 'after_request', tool_name: tool.tool_name, status: result.status });
+    return result;
+  });
 }
 
 export async function commitToolActivity(
@@ -460,10 +559,12 @@ export async function commitToolActivity(
   args: Record<string, unknown>,
   identity?: AgentToolExecutionIdentity,
 ): Promise<ToolCommitResponse> {
-  const config = loadConfig();
-  const client = createToolGatewayClient(config);
-  return client.commit(
-    toolCommitRequestSchema.parse({
+  return classifyActivityFailure('commitToolActivity', async () => {
+    throwIfActivityCancelled('commitToolActivity cancelled before Tool Gateway commit');
+    heartbeatActivity({ activity: 'commitToolActivity', phase: 'before_request', tool_name: tool.tool_name, tool_call_id: toolCallId });
+    const config = loadConfig();
+    const client = createToolGatewayClient(config);
+    const result = await client.commit(toolCommitRequestSchema.parse({
       tool_call_id: toolCallId,
       tool_name: tool.tool_name,
       tool_version: tool.tool_version,
@@ -474,49 +575,10 @@ export async function commitToolActivity(
       arguments: args,
       idempotency_key: identity ? buildAgentToolIdempotencyKey(identity) : `${context.task_run_id}:${tool.tool_name}:commit:${toolCallId}`,
       request_id: context.request_id,
-    }),
-  );
-}
-
-export async function createHumanTaskActivity(
-  context: ActivityContext,
-  input: CreateHumanTaskActivityInput = {},
-): Promise<HumanTask> {
-  const db = getProcessDb();
-  const humanTask = await new HumanTaskRepository(db).create(
-    humanTaskCreateRequestSchema.parse({
-      tenant_id: context.tenant_id,
-      user_id: context.user_id,
-      task_run_id: context.task_run_id,
-      workflow_id: context.workflow_id,
-      kind: input.kind ?? 'approval',
-      tool_call_id: input.tool_call_id,
-      tool_name: input.tool_name,
-      assignee: input.assignee,
-      candidate_groups: input.candidate_groups ?? [],
-      payload: input.payload ?? {},
-      requested_schema: input.requested_schema,
-      request_id: context.request_id,
-    }),
-  );
-  await new TaskRunRepository(db).updateStatus(context.task_run_id, { status: 'waiting_human' });
-  await new AuditEventRepository(db).append({
-    tenant_id: context.tenant_id,
-    actor_id: context.user_id,
-    action: 'human_task.create',
-    target_type: 'human_task',
-    target_id: humanTask.human_task_id,
-    result: 'pending',
-    reason: input.kind === 'user_input' ? 'agent_user_input_required' : 'l3_tool_confirmation_required',
-    trace_id: context.request_id,
-    payload: {
-      task_run_id: context.task_run_id,
-      workflow_id: context.workflow_id,
-      tool_call_id: input.tool_call_id,
-      tool_name: input.tool_name,
-    },
+    }));
+    heartbeatActivity({ activity: 'commitToolActivity', phase: 'after_request', tool_name: tool.tool_name, tool_call_id: toolCallId, status: result.status });
+    return result;
   });
-  return humanTask;
 }
 
 export async function loadFlowSpecActivity(flowSpec: FlowSpec): Promise<FlowSpec> {
@@ -526,15 +588,17 @@ export async function loadFlowSpecActivity(flowSpec: FlowSpec): Promise<FlowSpec
 export async function updateTaskRunStatusActivity(
   input: UpdateTaskRunStatusActivityInput,
 ): Promise<void> {
-  const db = getProcessDb();
-  const updated = await new TaskRunRepository(db).updateStatus(input.task_run_id, {
-    status: input.status,
-    ...(input.error_code ? { errorCode: input.error_code } : {}),
-    ...(input.error_message ? { errorMessage: input.error_message } : {}),
+  return classifyActivityFailure('updateTaskRunStatusActivity', async () => {
+    const db = getProcessDb();
+    const updated = await new TaskRunRepository(db).updateStatus(input.task_run_id, {
+      status: input.status,
+      ...(input.error_code ? { errorCode: input.error_code } : {}),
+      ...(input.error_message ? { errorMessage: input.error_message } : {}),
+    });
+    if (!updated) {
+      throw ApplicationFailure.nonRetryable(`TaskRun not found for status update: ${input.task_run_id}`, 'NOT_FOUND');
+    }
   });
-  if (!updated) {
-    throw new Error(`TaskRun not found for status update: ${input.task_run_id}`);
-  }
 }
 
 export async function loadFlowSpecByRefActivity(flowSnapshotRef: string): Promise<FlowSpec> {
@@ -557,12 +621,14 @@ export async function loadFlowSpecByRefActivity(flowSnapshotRef: string): Promis
 }
 
 export async function loadExecutionPlanByRefActivity(executionPlanRef: string): Promise<FlowExecutionPlan> {
-  const db = getProcessDb();
-  const plan = await new FlowExecutionPlanRepository(db).getByRef(executionPlanRef);
-  if (!plan) {
-    throw new Error(`FlowExecutionPlan not found: ${executionPlanRef}`);
-  }
-  return flowExecutionPlanSchema.parse(plan);
+  return classifyActivityFailure('loadExecutionPlanByRefActivity', async () => {
+    const db = getProcessDb();
+    const plan = await new FlowExecutionPlanRepository(db).getByRef(executionPlanRef);
+    if (!plan) {
+      throw ApplicationFailure.nonRetryable(`FlowExecutionPlan not found: ${executionPlanRef}`, 'NOT_FOUND');
+    }
+    return flowExecutionPlanSchema.parse(plan);
+  });
 }
 
 export async function loadPiRuntimeConfigActivity(): Promise<PiRuntimeConfigActivityResult> {
@@ -691,4 +757,84 @@ function buildAgentToolIdempotencyKey(identity: AgentToolExecutionIdentity): str
 
 function sanitizeKeySegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9_.-]/gu, '-');
+}
+
+async function classifyActivityFailure<T>(
+  activityName: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (error instanceof ApplicationFailure || error instanceof CancelledFailure) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : `${activityName} failed`;
+    const code = classifyErrorCode(message);
+    if (code && NON_RETRYABLE_ERROR_CODES.has(code)) {
+      throw ApplicationFailure.nonRetryable(message, code);
+    }
+    throw ApplicationFailure.retryable(message, activityName);
+  }
+}
+
+function classifyErrorCode(message: string): string | undefined {
+  if (/validation|invalid|schema|parse/iu.test(message)) {
+    return 'VALIDATION_FAILED';
+  }
+  if (/unauthorized|forbidden|auth|permission/iu.test(message)) {
+    return 'AUTH_FAILED';
+  }
+  if (/not found|unknown|missing/iu.test(message)) {
+    return 'NOT_FOUND';
+  }
+  if (/policy|denied|rejected/iu.test(message)) {
+    return 'POLICY_DENIED';
+  }
+  return undefined;
+}
+
+function heartbeatActivity(details: Record<string, unknown>): void {
+  try {
+    Context.current().heartbeat(details);
+  } catch {
+    // Activity functions are also invoked directly by unit tests; heartbeat only exists inside Temporal.
+  }
+}
+
+function currentActivityAbortSignal(): AbortSignal | undefined {
+  try {
+    return Context.current().cancellationSignal;
+  } catch {
+    return undefined;
+  }
+}
+
+function throwIfActivityCancelled(message: string): void {
+  const signal = currentActivityAbortSignal();
+  if (signal?.aborted) {
+    throw new CancelledFailure(message, [signal.reason]);
+  }
+}
+
+function startHeartbeatLoop(activity: string, details: Record<string, unknown>): { stop(): void } {
+  let stopped = false;
+  const tick = () => {
+    if (stopped) {
+      return;
+    }
+    heartbeatActivity({
+      ...details,
+      activity,
+      phase: 'running',
+    });
+  };
+  tick();
+  const interval = setInterval(tick, 5_000);
+  return {
+    stop() {
+      stopped = true;
+      clearInterval(interval);
+    },
+  };
 }

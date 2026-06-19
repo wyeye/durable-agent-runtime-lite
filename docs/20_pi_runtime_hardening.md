@@ -158,7 +158,29 @@ On child success, a safe authoritative handoff result is written into the Pi
 context and the next Pi segment continues. On child failure, the agent fails
 with an explicit handoff error.
 
-## Smoke Scripts
+## Activity Retry, Heartbeat, And Cancellation
+
+`piDurableAgentWorkflow` uses separate Activity option groups instead of one
+generic timeout. Registry reads, DB writes, Pi segment execution, tool invoke /
+preview, and tool commit have independent retry and non-retryable error lists.
+
+Long-running external boundaries heartbeat:
+
+- `runPiSegmentActivity`
+- `invokeToolActivity`
+- `previewToolActivity`
+- `commitToolActivity`
+
+Workflow cancellation waits for Activity cancellation completion for Pi segment
+and tool boundary Activities. `runPiSegmentActivity` passes Temporal Activity
+cancellation into the Pi adapter as an `AbortSignal`; a pre-aborted signal is
+reported as `AGENT_CANCELLED` instead of a generic Pi failure.
+
+Tool invoke / preview / commit retain deterministic agent idempotency keys, so
+Activity retry, worker restart, and workflow replay re-enter the same Tool
+Gateway idempotency path instead of creating unrelated side effects.
+
+## Crash Recovery Smoke
 
 The root scripts use real Pi Agent Core and deterministic/model-gateway streams:
 
@@ -168,12 +190,49 @@ corepack pnpm smoke:pi-l3-e2e
 corepack pnpm smoke:pi-user-input-e2e
 corepack pnpm smoke:pi-handoff-e2e
 corepack pnpm smoke:pi-restart-resume-e2e
+corepack pnpm smoke:pi-worker-crash-resume-e2e
 corepack pnpm smoke:pi-model-gateway-e2e
 ```
 
 They require the Docker stack and database to be initialized first. The
-`restart_resume` script exercises the same persisted context recovery path, but
-the operational stop/start of the worker is still a manual Docker step.
+legacy `restart_resume` script exercises the persisted context recovery path.
+The `pi-worker-crash-resume` smoke performs real Docker `SIGKILL` of
+`runtime-worker`, sends Human Task responses while the worker is down, restarts
+the same compose service, and verifies the original Temporal workflow resumes.
+
+The crash smoke covers:
+
+- waiting-user recovery through `/v1/human-tasks/:id/respond`;
+- L3 preview / approval / commit recovery through `/v1/human-tasks/:id/approve`;
+- stable `workflow_id`, `workflow_run_id`, and `agent_run_id`;
+- no duplicate user-input or approval Human Task rows;
+- no duplicate `AgentStep.stable_step_key` rows;
+- context snapshot chain continuity;
+- one task-scoped `human_task.respond` or `tool.commit` audit event;
+- exactly one commit idempotency record for the approved L3 tool call.
+
+It can write a machine-readable result file for Temporal history export:
+
+```bash
+PI_CRASH_RESULT_FILE=artifacts/pi-worker-crash-resume/result.json \
+  corepack pnpm smoke:pi-worker-crash-resume-e2e
+```
+
+## Temporal Replay Gate
+
+Temporal replay fixtures must come from real Temporal history. The exporter
+uses `WorkflowHandle.fetchHistory()` and refuses to write secret-like payloads:
+
+```bash
+TEMPORAL_REPLAY_SMOKE_RESULT_FILE=artifacts/pi-worker-crash-resume/result.json \
+  corepack pnpm temporal:export-replay-fixtures
+corepack pnpm test:temporal-replay
+```
+
+`tests/temporal-replay/replay.test.ts` only replays
+`tests/temporal-replay/histories/*.history.json` referenced by
+`manifest.json`. Empty fixture directories are reported as a skipped replay
+suite; they are not fake histories.
 
 ## Current Limits
 

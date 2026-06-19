@@ -34,6 +34,32 @@ describe('PiAgentAdapter', () => {
     }
   });
 
+  it('returns cancelled when an AbortSignal is already aborted before the Pi turn starts', async () => {
+    const runtime = createDeterministicPiStream('readonly_tool');
+    const controller = new AbortController();
+    controller.abort('test cancellation');
+
+    try {
+      const result = await runPiAgentSegment({
+        executionPlan: plan('deterministic:readonly_tool'),
+        model: runtime.model,
+        streamFn: runtime.streamFn,
+        initialUserInput: 'find context',
+        segmentIndex: 0,
+        budgetRemaining: plan('deterministic:readonly_tool').budget,
+        maxContextBytes: 262_144,
+        abortSignal: controller.signal,
+      });
+
+      expect(result.segmentResult).toMatchObject({
+        status: 'cancelled',
+        error_code: 'AGENT_CANCELLED',
+      });
+    } finally {
+      runtime.unregister();
+    }
+  });
+
   it('sanitizes hidden reasoning and replaces deferred tool result idempotently', () => {
     const context = serializePiContext([
       {

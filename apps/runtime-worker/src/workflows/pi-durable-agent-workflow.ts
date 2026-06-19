@@ -1,4 +1,6 @@
 import {
+  ActivityCancellationType,
+  type ActivityOptions,
   condition,
   continueAsNew,
   defineSignal,
@@ -45,22 +47,7 @@ import type { configDrivenWorkflow } from './config-driven-workflow.js';
 const humanTaskDecisionSignal = defineSignal<[HumanTaskDecisionSignalInput]>(WORKFLOW_SIGNALS.humanTaskDecision);
 const userInputResponseSignal = defineSignal<[UserInputResponseSignalInput]>(WORKFLOW_SIGNALS.userInputResponse);
 
-const {
-  createAgentRunActivity,
-  loadAgentExecutionPlanByRefActivity,
-  loadExecutionPlanByRefActivity,
-  runPiSegmentActivity,
-  updateAgentRunActivity,
-  updateTaskRunStatusActivity,
-  updateAgentStepActivity,
-  invokeToolActivity,
-  previewToolActivity,
-  commitToolActivity,
-  createHumanTaskActivity,
-  persistToolResultsToPiContextActivity,
-  appendUserInputToPiContextActivity,
-  loadPiRuntimeConfigActivity,
-} = proxyActivities<{
+type PiActivities = {
   createAgentRunActivity(input: CreateAgentRunActivityInput): Promise<AgentRunRecord>;
   loadAgentExecutionPlanByRefActivity(executionPlanRef: string, tenantId?: string): Promise<AgentExecutionPlan>;
   loadExecutionPlanByRefActivity(executionPlanRef: string): Promise<FlowExecutionPlan>;
@@ -100,9 +87,144 @@ const {
   createHumanTaskActivity(context: ActivityContext, input?: CreateHumanTaskActivityInput): Promise<HumanTask>;
   persistToolResultsToPiContextActivity(input: PersistToolResultsActivityInput): Promise<PiContextSnapshotRef>;
   appendUserInputToPiContextActivity(input: AppendUserInputActivityInput): Promise<PiContextSnapshotRef>;
-}>({
-  startToCloseTimeout: '6 minutes',
-});
+};
+
+export const PI_ACTIVITY_OPTIONS = {
+  read: {
+    startToCloseTimeout: '30 seconds',
+    scheduleToCloseTimeout: '2 minutes',
+    retry: {
+      maximumAttempts: 3,
+      initialInterval: '1 second',
+      maximumInterval: '10 seconds',
+      nonRetryableErrorTypes: [
+        'VALIDATION_FAILED',
+        'AUTH_FAILED',
+        'POLICY_DENIED',
+        'NOT_FOUND',
+      ],
+    },
+  },
+  piSegment: {
+    startToCloseTimeout: '2 minutes',
+    scheduleToCloseTimeout: '6 minutes',
+    heartbeatTimeout: '15 seconds',
+    cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
+    retry: {
+      maximumAttempts: 3,
+      initialInterval: '2 seconds',
+      maximumInterval: '30 seconds',
+      nonRetryableErrorTypes: [
+        'VALIDATION_FAILED',
+        'AUTH_FAILED',
+        'POLICY_DENIED',
+        'PI_SEGMENT_NON_RETRYABLE',
+      ],
+    },
+  },
+  dbWrite: {
+    startToCloseTimeout: '30 seconds',
+    scheduleToCloseTimeout: '2 minutes',
+    retry: {
+      maximumAttempts: 4,
+      initialInterval: '1 second',
+      maximumInterval: '10 seconds',
+      nonRetryableErrorTypes: [
+        'VALIDATION_FAILED',
+        'AUTH_FAILED',
+        'POLICY_DENIED',
+        'NOT_FOUND',
+      ],
+    },
+  },
+  toolInvoke: {
+    startToCloseTimeout: '45 seconds',
+    scheduleToCloseTimeout: '3 minutes',
+    heartbeatTimeout: '15 seconds',
+    cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
+    retry: {
+      maximumAttempts: 3,
+      initialInterval: '1 second',
+      maximumInterval: '15 seconds',
+      nonRetryableErrorTypes: [
+        'VALIDATION_FAILED',
+        'AUTH_FAILED',
+        'POLICY_DENIED',
+        'TOOL_ARGUMENT_VALIDATION_FAILED',
+        'TOOL_POLICY_DENIED',
+        'TOOL_HASH_MISMATCH',
+        'TOOL_RISK_MISMATCH',
+      ],
+    },
+  },
+  toolCommit: {
+    startToCloseTimeout: '45 seconds',
+    scheduleToCloseTimeout: '2 minutes',
+    heartbeatTimeout: '15 seconds',
+    cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
+    retry: {
+      maximumAttempts: 2,
+      initialInterval: '2 seconds',
+      maximumInterval: '10 seconds',
+      nonRetryableErrorTypes: [
+        'VALIDATION_FAILED',
+        'AUTH_FAILED',
+        'POLICY_DENIED',
+        'TOOL_ARGUMENT_VALIDATION_FAILED',
+        'TOOL_POLICY_DENIED',
+        'TOOL_HASH_MISMATCH',
+        'TOOL_RISK_MISMATCH',
+        'HUMAN_CONFIRMATION_REQUIRED',
+        'IDEMPOTENCY_CONFLICT',
+      ],
+    },
+  },
+} satisfies Record<string, ActivityOptions>;
+
+const readActivities = proxyActivities<Pick<PiActivities,
+  'loadAgentExecutionPlanByRefActivity'
+  | 'loadExecutionPlanByRefActivity'
+  | 'loadPiRuntimeConfigActivity'
+>>(PI_ACTIVITY_OPTIONS.read);
+
+const dbActivities = proxyActivities<Pick<PiActivities,
+  'createAgentRunActivity'
+  | 'updateAgentRunActivity'
+  | 'updateTaskRunStatusActivity'
+  | 'updateAgentStepActivity'
+  | 'createHumanTaskActivity'
+  | 'persistToolResultsToPiContextActivity'
+  | 'appendUserInputToPiContextActivity'
+>>(PI_ACTIVITY_OPTIONS.dbWrite);
+
+const piActivities = proxyActivities<Pick<PiActivities, 'runPiSegmentActivity'>>(PI_ACTIVITY_OPTIONS.piSegment);
+
+const toolInvokeActivities = proxyActivities<Pick<PiActivities,
+  'invokeToolActivity'
+  | 'previewToolActivity'
+>>(PI_ACTIVITY_OPTIONS.toolInvoke);
+
+const toolCommitActivities = proxyActivities<Pick<PiActivities, 'commitToolActivity'>>(PI_ACTIVITY_OPTIONS.toolCommit);
+
+const {
+  loadAgentExecutionPlanByRefActivity,
+  loadExecutionPlanByRefActivity,
+  loadPiRuntimeConfigActivity,
+} = readActivities;
+
+const {
+  createAgentRunActivity,
+  updateAgentRunActivity,
+  updateTaskRunStatusActivity,
+  updateAgentStepActivity,
+  createHumanTaskActivity,
+  persistToolResultsToPiContextActivity,
+  appendUserInputToPiContextActivity,
+} = dbActivities;
+
+const { runPiSegmentActivity } = piActivities;
+const { invokeToolActivity, previewToolActivity } = toolInvokeActivities;
+const { commitToolActivity } = toolCommitActivities;
 
 export async function piDurableAgentWorkflow(
   input: PiDurableAgentWorkflowInput,

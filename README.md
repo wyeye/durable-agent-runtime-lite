@@ -141,10 +141,27 @@ corepack pnpm smoke:pi-l3-e2e
 corepack pnpm smoke:pi-user-input-e2e
 corepack pnpm smoke:pi-handoff-e2e
 corepack pnpm smoke:pi-restart-resume-e2e
+corepack pnpm smoke:pi-worker-crash-resume-e2e
 corepack pnpm smoke:pi-model-gateway-e2e
 ```
 
 这些 smoke 通过 `/v1/agent-tasks` 使用真实 Pi Agent Core。deterministic 模式只替换模型流，不替换 Pi 内循环；model-gateway smoke 使用 `devtools/mock-server /v1/generate` 返回结构化 tool call。
+
+`smoke:pi-worker-crash-resume-e2e` 会真实 `SIGKILL` compose 里的
+`runtime-worker`，在 worker 停止期间通过 runtime-api 写入 waiting-user /
+L3 approval Human Task 信号，随后重启 worker 并断言同一个 Temporal
+workflow 恢复完成，且没有重复 Human Task、AgentStep、审计事件或 commit
+幂等记录。
+
+Temporal replay 门禁使用真实导出的 history：
+
+```bash
+PI_CRASH_RESULT_FILE=artifacts/pi-worker-crash-resume/result.json \
+  corepack pnpm smoke:pi-worker-crash-resume-e2e
+TEMPORAL_REPLAY_SMOKE_RESULT_FILE=artifacts/pi-worker-crash-resume/result.json \
+  corepack pnpm temporal:export-replay-fixtures
+corepack pnpm test:temporal-replay
+```
 
 ## MVP smoke path
 

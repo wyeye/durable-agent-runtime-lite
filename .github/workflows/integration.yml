@@ -1,0 +1,80 @@
+name: Integration
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 18 * * *"
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker-pi-crash-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      DATABASE_URL: postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime
+      RUNTIME_API_URL: http://localhost:3000
+      RUNTIME_WORKER_URL: http://localhost:3300
+      TEMPORAL_ADDRESS: localhost:7233
+      TEMPORAL_NAMESPACE: default
+      PI_AGENT_MODE: deterministic
+      PI_CRASH_RESULT_FILE: artifacts/pi-worker-crash-resume/result.json
+      TEMPORAL_REPLAY_SMOKE_RESULT_FILE: artifacts/pi-worker-crash-resume/result.json
+      TEMPORAL_REPLAY_FIXTURE_DIR: tests/temporal-replay/histories
+      COMPOSE_PARALLEL_LIMIT: 1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace
+        run: pnpm build
+
+      - name: Start Docker stack
+        run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up --build -d
+
+      - name: Run migrations against Docker DB
+        run: pnpm db:migrate
+
+      - name: Run real worker crash recovery smoke
+        run: pnpm smoke:pi-worker-crash-resume-e2e
+
+      - name: Export real Temporal histories
+        run: pnpm temporal:export-replay-fixtures
+
+      - name: Replay exported histories
+        run: pnpm test:temporal-replay
+
+      - name: Docker diagnostics on failure
+        if: failure()
+        run: |
+          mkdir -p artifacts/docker
+          docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml ps > artifacts/docker/ps.txt
+          docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml logs --no-color --tail=300 > artifacts/docker/logs.txt
+
+      - name: Upload integration artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-crash-replay-artifacts
+          path: |
+            artifacts/
+            tests/temporal-replay/histories/
+          retention-days: 7
+
+      - name: Stop Docker stack
+        if: always()
+        run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml down -v

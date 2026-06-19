@@ -1,0 +1,35 @@
+{
+  "generated_at": "2026-06-19T03:41:25.312Z",
+  "temporal_address": "localhost:7233",
+  "temporal_namespace": "default",
+  "histories": [
+    {
+      "name": "pi-waiting-user-task",
+      "workflow_id": "task-default-task_7c122dfb77de498d956880d8a74e7ebf",
+      "run_id": "127ad0c1-09fd-4868-bf46-a482a1e9b61f",
+      "file": "pi-waiting-user-task.history.json",
+      "event_count": 26
+    },
+    {
+      "name": "pi-waiting-user-agent",
+      "workflow_id": "task-default-task_7c122dfb77de498d956880d8a74e7ebf-agent-generic",
+      "run_id": "e8ffc6dd-f8fe-4381-be6d-8bb6cb7519b4",
+      "file": "pi-waiting-user-agent.history.json",
+      "event_count": 125
+    },
+    {
+      "name": "pi-l3-tool-task",
+      "workflow_id": "task-default-task_937c92e79fb34db5b5957db87eb282fd",
+      "run_id": "e7d826e1-af85-4694-a2c7-a93a9226d2a0",
+      "file": "pi-l3-tool-task.history.json",
+      "event_count": 26
+    },
+    {
+      "name": "pi-l3-tool-agent",
+      "workflow_id": "task-default-task_937c92e79fb34db5b5957db87eb282fd-agent-generic",
+      "run_id": "bf1e1e86-7168-4eb3-8856-ac34e8032577",
+      "file": "pi-l3-tool-agent.history.json",
+      "event_count": 143
+    }
+  ]
+}

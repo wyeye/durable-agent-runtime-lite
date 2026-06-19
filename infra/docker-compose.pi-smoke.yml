@@ -15,6 +15,7 @@ services:
       - "${MOCK_SERVER_HOST_PORT:-4100}:4100"
 
   runtime-worker:
+    restart: "no"
     depends_on:
       mock-server:
         condition: service_started

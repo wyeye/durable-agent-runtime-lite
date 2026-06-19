@@ -135,6 +135,7 @@ corepack pnpm smoke:pi-l3-e2e
 corepack pnpm smoke:pi-user-input-e2e
 corepack pnpm smoke:pi-handoff-e2e
 corepack pnpm smoke:pi-restart-resume-e2e
+corepack pnpm smoke:pi-worker-crash-resume-e2e
 corepack pnpm smoke:pi-model-gateway-e2e
 ```
 
@@ -143,6 +144,24 @@ The model-gateway smoke uses `PI_SMOKE_MODE=model_gateway` and
 other Pi smokes use deterministic Pi-compatible streams, but still exercise real
 Pi Agent Core, Temporal workflow supervision, Tool Gateway, DB state, Human Task
 signals, and context snapshot recovery.
+
+`smoke:pi-worker-crash-resume-e2e` is the real crash recovery gate. It kills the
+compose `runtime-worker` service with `SIGKILL`, verifies `/readyz` is no longer
+available, sends waiting-user and L3 approval signals through `runtime-api`
+while the worker is down, restarts `runtime-worker`, and verifies the original
+Temporal workflow resumes without duplicate Human Tasks, AgentSteps, audit
+events, or Tool Gateway commit idempotency records.
+
+For replay fixture export, write the crash smoke result to a file and export
+Temporal histories from the actual workflow IDs:
+
+```bash
+PI_CRASH_RESULT_FILE=artifacts/pi-worker-crash-resume/result.json \
+  corepack pnpm smoke:pi-worker-crash-resume-e2e
+TEMPORAL_REPLAY_SMOKE_RESULT_FILE=artifacts/pi-worker-crash-resume/result.json \
+  corepack pnpm temporal:export-replay-fixtures
+corepack pnpm test:temporal-replay
+```
 
 ## Control-plane single container
 

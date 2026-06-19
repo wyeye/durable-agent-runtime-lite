@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated for AR-1.2 partial: runtime-api production auth and tool-gateway service identity guardrails.
+Last updated for AR-1.2B: real worker crash recovery smoke, Activity retry/heartbeat/cancellation hardening, and Temporal replay gate with exported real histories.
 
 ## Completed Platform Capabilities
 
@@ -45,6 +45,12 @@ Last updated for AR-1.2 partial: runtime-api production auth and tool-gateway se
 39. runtime-api tenant/user mismatch checks for body/query identity fields and no default tenant fallback on protected routes.
 40. tool-gateway service-token identity checks for runtime-worker and control-plane callers.
 41. runtime-worker Tool Gateway client and control-plane BFF inject service identity headers.
+42. Real Docker `SIGKILL` Pi worker crash recovery smoke for waiting-user and L3 approval/commit paths.
+43. Pi Activity retry, heartbeat, cancellation, and non-retryable error option groups.
+44. Pi adapter pre-aborted `AbortSignal` handling maps cancellation to `AGENT_CANCELLED`.
+45. Temporal history export script using real `WorkflowHandle.fetchHistory()`.
+46. Temporal replay test gate for exported histories under `tests/temporal-replay/histories`.
+47. GitHub Actions integration workflow for Docker crash smoke, history export, and replay.
 
 ## Completed In AR-0
 
@@ -161,6 +167,7 @@ Service tokens are read from environment variables and are not baked into images
 - `docs/19_pi_segmented_agent_runtime.md`
 - `docs/20_pi_runtime_hardening.md`
 - `docs/21_model_gateway_contract.md`
+- `docs/13_docker_deployment.md`
 - `apps/control-plane/docs/API.md`
 - `apps/control-plane/docs/DEV_PLAN.md`
 - `apps/control-plane/docs/DEV_SPEC.md`
@@ -190,7 +197,10 @@ corepack pnpm smoke:pi-l3-e2e
 corepack pnpm smoke:pi-user-input-e2e
 corepack pnpm smoke:pi-handoff-e2e
 corepack pnpm smoke:pi-restart-resume-e2e
+corepack pnpm smoke:pi-worker-crash-resume-e2e
 corepack pnpm smoke:pi-model-gateway-e2e
+corepack pnpm temporal:export-replay-fixtures
+corepack pnpm test:temporal-replay
 ```
 
 ## Not Completed Yet
@@ -201,18 +211,16 @@ This stage intentionally does not implement:
 2. Live production model-gateway smoke with real credentials.
 3. Real business system adapters.
 4. Rich `agent.*` audit event taxonomy beyond the current persisted AgentRun/AgentStep, HumanTask, ToolCall and Audit records.
-5. Automated Docker worker stop/start inside `smoke:pi-restart-resume-e2e`; the script validates the same context snapshot resume path, while operational restart remains a manual compose step.
-6. Enterprise SSO.
-7. Random gray traffic splitting.
-8. Any fifth production app or production container.
-9. TenantRuntimePolicy tables, snapshots, resolver, and policy enforcement.
-10. Temporal Workflow replay fixture suite and upgrade compatibility gate.
-11. Full OpenTelemetry trace/metric instrumentation across all four apps.
-12. GitHub Actions Docker integration workflow.
+5. Enterprise SSO.
+6. Random gray traffic splitting.
+7. Any fifth production app or production container.
+8. TenantRuntimePolicy tables, snapshots, resolver, and policy enforcement.
+9. Full OpenTelemetry trace/metric instrumentation across all four apps.
+10. Replay fixture rotation/versioning policy beyond the current AR-1.2B crash-smoke histories.
 
 ## Suggested Next Batch
 
-1. Run full Docker Pi smoke suite in CI workflow_dispatch/nightly with actual container startup.
+1. Add a rotation policy for replay histories after workflow-shape changes and Temporal SDK upgrades.
 2. Add richer `agent.*` audit events and log assertions.
 3. Improve UI ergonomics around AgentRun/AgentStep inspection and context refs.
 4. Add evaluation/test-set operations for Route and Flow releases.

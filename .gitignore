@@ -3,6 +3,7 @@ dist/
 .env
 .env.local
 coverage/
+artifacts/
 .DS_Store
 *.log
 .codegraph/

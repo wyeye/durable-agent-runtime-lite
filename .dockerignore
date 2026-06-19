@@ -35,4 +35,5 @@ yarn-error.log*
 
 # local artifacts
 docker_deployment_templates*
+artifacts
 *.zip
