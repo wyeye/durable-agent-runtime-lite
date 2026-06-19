@@ -22,6 +22,7 @@ import {
   createDb,
   HumanTaskRepository,
   IdempotencyRecordRepository,
+  TenantRuntimePolicySnapshotRepository,
   ToolCallLogRepository,
   type Database,
 } from '@dar/db';
@@ -50,7 +51,7 @@ function failure(error: unknown): StandardErrorResponse {
   return {
     success: false,
     data: null,
-    error: { code: 'INTERNAL_ERROR', message: error instanceof Error ? error.message : '服务处理失败' },
+    error: { code: 'INTERNAL_ERROR', message: '服务处理失败' },
   };
 }
 
@@ -74,8 +75,24 @@ function runtimeFailure(error: RuntimeError): StandardErrorResponse {
   };
 }
 
-function deniedStatusCode(result: ToolInvokeResponse): number {
-  return result.error?.code === 'TOOL_NOT_FOUND' ? 404 : 400;
+function deniedStatusCode(result: ToolInvokeResponse | ToolPreviewResponse | ToolCommitResponse): number {
+  const code = result.error?.code;
+  if (code === 'TOOL_NOT_FOUND' || code === 'TOOL_CALL_NOT_FOUND') {
+    return 404;
+  }
+  if (code === 'TENANT_POLICY_HASH_MISMATCH' || code === 'EXECUTION_PLAN_HASH_MISMATCH') {
+    return 409;
+  }
+  if (
+    code === 'TOOL_DENIED_BY_TENANT_POLICY'
+    || code === 'TENANT_RUNTIME_POLICY_NOT_FOUND'
+    || code === 'TENANT_POLICY_SNAPSHOT_CONTEXT_MISSING'
+    || code === 'TENANT_POLICY_SNAPSHOT_STORE_UNAVAILABLE'
+    || code === 'TENANT_POLICY_SNAPSHOT_TENANT_MISMATCH'
+  ) {
+    return 403;
+  }
+  return 400;
 }
 
 function deniedError(result: ToolInvokeResponse | ToolPreviewResponse | ToolCommitResponse): RuntimeError {
@@ -205,7 +222,7 @@ export function buildServer(toolService = new ToolService(), config: RuntimeConf
       authorize(request, 'tool:preview');
       const result = await toolService.preview(toolName, request.body);
       if (result.status === 'denied') {
-        reply.code(deniedStatusCode(result as unknown as ToolInvokeResponse));
+        reply.code(deniedStatusCode(result));
         return runtimeFailure(deniedError(result));
       }
       return success(result);
@@ -225,7 +242,7 @@ export function buildServer(toolService = new ToolService(), config: RuntimeConf
       authorize(request, 'tool:commit');
       const result = await toolService.commit(toolName, request.body);
       if (result.status === 'denied' || result.status === 'failed') {
-        reply.code(result.error?.code === 'TOOL_NOT_FOUND' || result.error?.code === 'TOOL_CALL_NOT_FOUND' ? 404 : 400);
+        reply.code(deniedStatusCode(result));
         return runtimeFailure(deniedError(result));
       }
       return success(result);
@@ -330,6 +347,9 @@ export function createToolGatewayService(config: RuntimeConfig = loadConfig()): 
   if (isProductionRuntime(config) && config.TOOL_GATEWAY_AUTH_MODE !== 'service_token') {
     throw new Error('TOOL_GATEWAY_AUTH_MODE=service_token is required in production');
   }
+  if (isProductionRuntime(config) && config.TENANT_RUNTIME_POLICY_MODE !== 'required') {
+    throw new Error('TENANT_RUNTIME_POLICY_MODE=required is required in production');
+  }
   if (
     isProductionRuntime(config)
     && (!config.TOOL_GATEWAY_RUNTIME_WORKER_TOKEN || !config.TOOL_GATEWAY_CONTROL_PLANE_TOKEN)
@@ -346,6 +366,8 @@ export function createToolGatewayService(config: RuntimeConfig = loadConfig()): 
         idempotencyRepository: new IdempotencyRecordRepository(db),
         toolCallLogStore: new ToolCallLogRepository(db),
         humanTaskStore: new DbHumanTaskLookupStore(new HumanTaskRepository(db)),
+        tenantPolicySnapshotStore: new TenantRuntimePolicySnapshotRepository(db),
+        tenantPolicyMode: config.TENANT_RUNTIME_POLICY_MODE,
       }),
       close: async () => closeDb(db),
     };

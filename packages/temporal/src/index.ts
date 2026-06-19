@@ -21,6 +21,9 @@ export interface ConfigDrivenWorkflowInput {
   flow_snapshot_ref?: string;
   execution_plan_ref: string;
   flow_sha256?: string;
+  tenant_policy_snapshot_ref?: string;
+  tenant_policy_hash?: string;
+  tenant_admission_id?: string;
   request_id: string;
   trace_id?: string;
   input_ref?: string;
@@ -39,6 +42,9 @@ export interface GenericAgentWorkflowInput {
   allowed_tools?: string[];
   max_steps?: number;
   max_tokens?: number;
+  tenant_policy_snapshot_ref?: string;
+  tenant_policy_hash?: string;
+  tenant_admission_id?: string;
   request_id: string;
   trace_id?: string;
   input_ref?: string;
@@ -61,6 +67,9 @@ export interface PiDurableAgentWorkflowInput {
   started_at_ms?: number;
   continue_as_new_segment_threshold?: number;
   handoff_chain?: string[];
+  tenant_policy_snapshot_ref?: string;
+  tenant_policy_hash?: string;
+  tenant_admission_id?: string;
   request_id: string;
   trace_id?: string;
 }

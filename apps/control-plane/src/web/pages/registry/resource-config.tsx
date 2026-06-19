@@ -138,6 +138,42 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
     }),
     renderSummary: renderPromptSummary,
   },
+  tenant_runtime_policy: {
+    type: 'tenant_runtime_policy',
+    plural: 'tenant-runtime-policies',
+    idLabel: 'tenant_id',
+    title: 'Tenant Runtime Policy',
+    description: '管理租户运行时 Tool、Model、Handoff、Budget 和并发上限策略。',
+    getIdFromSpec: (spec) => readStringField(spec, 'tenant_id'),
+    makeDraftTemplate: () => ({
+      tenant_id: 'tenant_id_here',
+      version: 1,
+      status: 'draft',
+      allowed_tools: [],
+      denied_tools: [],
+      allowed_models: [],
+      denied_models: [],
+      allowed_handoffs: [],
+      denied_handoffs: [],
+      budget_cap: {
+        max_segments: 10,
+        max_model_turns: 20,
+        max_tool_calls: 10,
+        max_input_tokens: 8000,
+        max_output_tokens: 4000,
+        max_total_tokens: 12000,
+        max_duration_ms: 120000,
+        max_handoffs: 1,
+        max_context_bytes: 262144,
+      },
+      max_concurrent_agent_runs: 1,
+    }),
+    renderSummary: renderTenantRuntimePolicySummary,
+    renderListExtra: (record) => {
+      const spec = asRecord(record.spec);
+      return <Tag>{readNumber(spec.max_concurrent_agent_runs) ?? 0} concurrent</Tag>;
+    },
+  },
 };
 
 function renderFlowSummary(record: RegistryRecord) {
@@ -246,6 +282,37 @@ function renderPromptSummary(record: RegistryRecord) {
       <Alert style={{ marginTop: 12 }} type="info" showIcon message="模板变量格式" description="变量应使用合法标识符，Prompt 内容中的疑似密钥会由 validate 检查并展示 warning/error。" />
       <Typography.Title level={5}>content</Typography.Title>
       <pre className="cp-json-pre">{content}</pre>
+    </>
+  );
+}
+
+function renderTenantRuntimePolicySummary(record: RegistryRecord) {
+  const spec = asRecord(record.spec);
+  const budget = asRecord(spec.budget_cap);
+  const allowedTools = Array.isArray(spec.allowed_tools) ? spec.allowed_tools.length : 0;
+  const deniedTools = Array.isArray(spec.denied_tools) ? spec.denied_tools.length : 0;
+  const allowedModels = Array.isArray(spec.allowed_models) ? spec.allowed_models.length : 0;
+  return (
+    <>
+      <Descriptions bordered size="small" column={2}>
+        <Descriptions.Item label="tenant_id">{readString(spec.tenant_id) ?? record.resource_id}</Descriptions.Item>
+        <Descriptions.Item label="version">{readNumber(spec.version) ?? record.version}</Descriptions.Item>
+        <Descriptions.Item label="max_concurrent_agent_runs">{readNumber(spec.max_concurrent_agent_runs) ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="allowed_tools">{allowedTools}</Descriptions.Item>
+        <Descriptions.Item label="denied_tools">{deniedTools}</Descriptions.Item>
+        <Descriptions.Item label="allowed_models">{allowedModels}</Descriptions.Item>
+        <Descriptions.Item label="max_tool_calls">{readNumber(budget.max_tool_calls) ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="max_total_tokens">{readNumber(budget.max_total_tokens) ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="max_handoffs">{readNumber(budget.max_handoffs) ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="max_context_bytes">{readNumber(budget.max_context_bytes) ?? '-'}</Descriptions.Item>
+      </Descriptions>
+      <Alert
+        style={{ marginTop: 12 }}
+        type="info"
+        showIcon
+        message="Policy snapshot"
+        description="Runtime 启动时会将发布策略与执行计划解析为不可变 snapshot，Tool Gateway 最终按 snapshot 校验工具调用。"
+      />
     </>
   );
 }

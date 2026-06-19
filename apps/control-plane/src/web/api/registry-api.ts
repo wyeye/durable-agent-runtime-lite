@@ -9,11 +9,12 @@ import type {
   RegistryValidationResult,
   RouteSpec,
   SpecStatus,
+  TenantRuntimePolicy,
   ToolManifest,
 } from '@dar/contracts';
 import type { ApiClient } from './client.js';
 
-export type RegistrySpec = FlowSpec | RouteSpec | ToolManifest | AgentSpec | PromptDefinition;
+export type RegistrySpec = FlowSpec | RouteSpec | ToolManifest | AgentSpec | PromptDefinition | TenantRuntimePolicy;
 
 export interface RegistryRecord<TSpec extends RegistrySpec = RegistrySpec> {
   tenant_id: string;
@@ -74,6 +75,7 @@ const resourcePaths: Record<RegistryResourceType, string> = {
   tool: 'tools',
   agent: 'agents',
   prompt: 'prompts',
+  tenant_runtime_policy: 'tenant-runtime-policies',
 };
 
 export function listResources(

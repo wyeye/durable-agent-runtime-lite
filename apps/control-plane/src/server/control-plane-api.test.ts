@@ -16,6 +16,7 @@ import type {
   RegistryValidationResult,
   StandardSuccessResponse,
   TaskRun,
+  TenantRuntimePolicy,
   ToolCallLog,
 } from '@dar/contracts';
 import { loadConfig } from '@dar/config';
@@ -47,6 +48,21 @@ const flowSpec: FlowSpec = {
   status: 'draft',
   runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker' },
   steps: [{ id: 'start', type: 'activity', activity: 'noop' }],
+};
+
+const tenantPolicySpec: TenantRuntimePolicy = {
+  tenant_id: 'tenant_1',
+  version: 1,
+  status: 'draft',
+  allowed_tools: [],
+  denied_tools: [],
+  allowed_models: [],
+  denied_models: [],
+  allowed_handoffs: [],
+  denied_handoffs: [],
+  budget_cap: {},
+  max_concurrent_agent_runs: 1,
+  revision: 1,
 };
 
 describe('control-plane API', () => {
@@ -142,6 +158,33 @@ describe('control-plane API', () => {
     });
     expect(rollback.statusCode).toBe(200);
     expect(rollback.json().data.action).toBe('rollback');
+
+    await close();
+  });
+
+  it('routes tenant runtime policy lifecycle through the registry resource API', async () => {
+    const service = new FakeRegistryApi();
+    const { app, close } = await testApp({ registryService: service });
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tenant-runtime-policies',
+      headers: authHeaders,
+      payload: { spec: tenantPolicySpec },
+    });
+    expect(create.statusCode).toBe(200);
+    expect(service.lastResourceType).toBe('tenant_runtime_policy');
+    expect(service.lastSpec).toMatchObject({ tenant_id: 'tenant_1' });
+
+    const publish = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tenant-runtime-policies/tenant_1/versions/1/publish',
+      headers: adminHeaders,
+      payload: { release_note: 'publish tenant policy' },
+    });
+    expect(publish.statusCode).toBe(200);
+    expect(service.lastResourceType).toBe('tenant_runtime_policy');
+    expect(publish.json().data.resource_type).toBe('tenant_runtime_policy');
 
     await close();
   });
@@ -279,6 +322,8 @@ function validationResult(canPublish = true): RegistryValidationResult {
 
 class FakeRegistryApi implements RegistryApi {
   lastActor?: ActorOptions;
+  lastResourceType?: RegistryResourceType;
+  lastSpec?: unknown;
   conflict = false;
   validationCanPublish = true;
 
@@ -294,35 +339,42 @@ class FakeRegistryApi implements RegistryApi {
     return record();
   }
 
-  async createDraft(_resourceType: RegistryResourceType, _spec: unknown, actor: ActorOptions) {
+  async createDraft(resourceType: RegistryResourceType, spec: unknown, actor: ActorOptions) {
     this.lastActor = actor;
-    return record();
+    this.lastResourceType = resourceType;
+    this.lastSpec = spec;
+    return resourceType === 'tenant_runtime_policy' ? tenantPolicyRecord() : record();
   }
 
-  async updateDraft() {
+  async updateDraft(resourceType: RegistryResourceType) {
+    this.lastResourceType = resourceType;
     if (this.conflict) {
       throw new ControlPlaneHttpError(409, 'REGISTRY_OPTIMISTIC_LOCK_CONFLICT', 'Registry resource revision conflict');
     }
-    return record({ revision: 2 });
+    return resourceType === 'tenant_runtime_policy' ? tenantPolicyRecord({ revision: 2 }) : record({ revision: 2 });
   }
 
-  async cloneVersion() {
-    return record({ version: 2 });
+  async cloneVersion(resourceType: RegistryResourceType) {
+    this.lastResourceType = resourceType;
+    return resourceType === 'tenant_runtime_policy' ? tenantPolicyRecord({ version: 2 }) : record({ version: 2 });
   }
 
-  async validate() {
+  async validate(resourceType: RegistryResourceType) {
+    this.lastResourceType = resourceType;
     return validationResult(this.validationCanPublish);
   }
 
-  async publish() {
+  async publish(resourceType: RegistryResourceType) {
+    this.lastResourceType = resourceType;
     if (!this.validationCanPublish) {
       throw new Error('Registry validation failed');
     }
-    return release('publish');
+    return release('publish', resourceType);
   }
 
-  async gray() {
-    return release('gray');
+  async gray(resourceType: RegistryResourceType) {
+    this.lastResourceType = resourceType;
+    return release('gray', resourceType);
   }
 
   async deprecate() {
@@ -460,6 +512,7 @@ class FakeToolGatewayClient {
 }
 
 type TestRegistryRecord = RegistryResourceRecord<FlowSpec> & { status: SpecStatus };
+type TestTenantPolicyRecord = RegistryResourceRecord<TenantRuntimePolicy> & { status: SpecStatus };
 
 function record(overrides: Partial<TestRegistryRecord> = {}): TestRegistryRecord {
   return {
@@ -470,6 +523,23 @@ function record(overrides: Partial<TestRegistryRecord> = {}): TestRegistryRecord
     status: 'draft' as const,
     spec: flowSpec,
     sha256: 'sha',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    revision: 1,
+    gray_policy: { tenant_allowlist: [], user_allowlist: [] },
+    ...overrides,
+  };
+}
+
+function tenantPolicyRecord(overrides: Partial<TestTenantPolicyRecord> = {}): TestTenantPolicyRecord {
+  return {
+    tenant_id: 'tenant_1',
+    resource_type: 'tenant_runtime_policy' as const,
+    resource_id: 'tenant_1',
+    version: 1,
+    status: 'draft' as const,
+    spec: tenantPolicySpec,
+    sha256: 'sha_policy',
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     revision: 1,

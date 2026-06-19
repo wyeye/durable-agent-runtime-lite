@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AuditEvent, HumanTask, IdempotencyRecord, ToolCallLog, ToolManifest } from '@dar/contracts';
+import type { AuditEvent, HumanTask, IdempotencyRecord, TenantRuntimePolicySnapshot, ToolCallLog, ToolManifest } from '@dar/contracts';
 import type { RuntimeConfig } from '@dar/config';
 import { buildServiceIdentityHeaders } from '@dar/security';
 import { buildServer, createToolGatewayService } from '../src/index.js';
@@ -88,6 +88,16 @@ class FakeIdempotencyRepository {
       return { decision: 'conflict' as const, record };
     }
     return { decision: 'replay' as const, record };
+  }
+}
+
+class FakeTenantPolicySnapshotStore {
+  constructor(private readonly snapshots: TenantRuntimePolicySnapshot[]) {}
+
+  async getByRef(snapshotRef: string, options: { tenantId?: string } = {}): Promise<TenantRuntimePolicySnapshot | undefined> {
+    return this.snapshots.find((snapshot) =>
+      snapshot.snapshot_ref === snapshotRef && (!options.tenantId || snapshot.tenant_id === options.tenantId),
+    );
   }
 }
 
@@ -589,6 +599,79 @@ describe('tool-gateway invoke', () => {
       toolName: 'knowledge.search',
       tenantId: 'tenant_1',
       toolVersion: '1.0.0',
+    });
+    await server.close();
+  });
+
+  it('denies tool invocation when the immutable tenant policy snapshot does not allow the tool', async () => {
+    const snapshot: TenantRuntimePolicySnapshot = {
+      snapshot_id: 'tenant_policy_snapshot_test',
+      snapshot_ref: 'tenant-policy-snapshot:tenant_policy_snapshot_test',
+      tenant_id: 'tenant_1',
+      source_policy_version: 1,
+      source_policy_hash: 'a'.repeat(64),
+      execution_plan_ref: 'agent-plan:tenant_1:test',
+      execution_plan_hash: 'b'.repeat(64),
+      execution_plan_type: 'agent',
+      resolved_allowed_tools: [{
+        tool_name: 'other.tool',
+        versions: ['1.0.0'],
+        allowed_operations: ['invoke'],
+        max_risk_level: 'L1',
+      }],
+      resolved_denied_tools: [],
+      resolved_allowed_models: [],
+      resolved_allowed_handoffs: [],
+      resolved_budget: {
+        max_segments: 1,
+        max_model_turns: 1,
+        max_tool_calls: 1,
+        max_input_tokens: 100,
+        max_output_tokens: 100,
+        max_total_tokens: 200,
+        max_duration_ms: 1000,
+        max_handoffs: 0,
+        max_context_bytes: 4096,
+      },
+      max_concurrent_agent_runs: 1,
+      snapshot_hash: 'c'.repeat(64),
+      created_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    };
+    const auditStore = new FakeAuditStore();
+    const toolCallLogStore = new InMemoryToolCallLogStore();
+    const server = buildServer(new ToolService({
+      auditStore,
+      toolCallLogStore,
+      tenantPolicySnapshotStore: new FakeTenantPolicySnapshotStore([snapshot]),
+      tenantPolicyMode: 'required',
+    }));
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/knowledge.search/invoke',
+      payload: {
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_policy_denied' },
+        arguments: { query: 'hello' },
+        idempotency_key: 'task_policy_denied:knowledge.search',
+        tenant_policy_snapshot_ref: snapshot.snapshot_ref,
+        tenant_policy_hash: snapshot.snapshot_hash,
+        execution_plan_ref: snapshot.execution_plan_ref,
+        execution_plan_hash: snapshot.execution_plan_hash,
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({
+      success: false,
+      error: { code: 'TOOL_DENIED_BY_TENANT_POLICY' },
+    });
+    expect(auditStore.events[0]?.payload).toMatchObject({
+      tenant_policy_snapshot_ref: snapshot.snapshot_ref,
+      execution_plan_ref: snapshot.execution_plan_ref,
+      policy_decision_code: 'TOOL_DENIED_BY_TENANT_POLICY',
     });
     await server.close();
   });

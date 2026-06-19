@@ -48,6 +48,7 @@ import {
   HumanTaskRepository,
   parseDbFlowSnapshotRef,
   TaskRunRepository,
+  TenantAgentAdmissionRepository,
 } from '@dar/db';
 import { createDeterministicPiStream, type DeterministicPiScenario } from '../agent/deterministic-pi-stream.js';
 import { createModelGatewayModel, createModelGatewayPiStream } from '../agent/model-gateway-pi-stream.js';
@@ -123,6 +124,11 @@ export interface ActivityContext {
   task_run_id: string;
   workflow_id: string;
   request_id: string;
+  execution_plan_ref?: string;
+  execution_plan_hash?: string;
+  tenant_policy_snapshot_ref?: string;
+  tenant_policy_hash?: string;
+  tenant_admission_id?: string;
 }
 
 export interface CreateHumanTaskActivityInput {
@@ -248,7 +254,13 @@ export async function createAgentRunActivity(input: CreateAgentRunActivityInput)
       ...(input.parent_workflow_id ? { parentWorkflowId: input.parent_workflow_id } : {}),
       executionMode: input.execution_mode ?? 'mediated_tool_call',
       executionPlan,
+      ...(input.tenant_policy_snapshot_ref ? { tenantPolicySnapshotRef: input.tenant_policy_snapshot_ref } : {}),
+      ...(input.tenant_policy_hash ? { tenantPolicyHash: input.tenant_policy_hash } : {}),
+      ...(input.tenant_admission_id ? { tenantAdmissionId: input.tenant_admission_id } : {}),
     });
+    if (input.tenant_admission_id) {
+      await new TenantAgentAdmissionRepository(db).attachAgentRun(input.tenant_admission_id, agentRun.agent_run_id);
+    }
     await new AgentRunRepository(db).update(agentRun.agent_run_id, { status: 'running' });
     return agentRun;
   });
@@ -513,12 +525,16 @@ export async function invokeToolActivity(
       tool_sha256: tool.tool_sha256,
       tenant_id: context.tenant_id,
       user_context: { user_id: context.user_id },
-      task_context: { task_run_id: context.task_run_id, workflow_id: context.workflow_id },
-      arguments: args,
-      idempotency_key: identity ? buildAgentToolIdempotencyKey(identity) : `${context.task_run_id}:${tool.tool_name}`,
-      risk_level: tool.risk_level,
-      request_id: context.request_id,
-    }));
+	      task_context: { task_run_id: context.task_run_id, workflow_id: context.workflow_id },
+	      arguments: args,
+	      idempotency_key: identity ? buildAgentToolIdempotencyKey(identity) : `${context.task_run_id}:${tool.tool_name}`,
+	      risk_level: tool.risk_level,
+	      ...(context.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: context.tenant_policy_snapshot_ref } : {}),
+	      ...(context.tenant_policy_hash ? { tenant_policy_hash: context.tenant_policy_hash } : {}),
+	      ...(context.execution_plan_ref ? { execution_plan_ref: context.execution_plan_ref } : {}),
+	      ...(context.execution_plan_hash ? { execution_plan_hash: context.execution_plan_hash } : {}),
+	      request_id: context.request_id,
+	    }));
     heartbeatActivity({ activity: 'invokeToolActivity', phase: 'after_request', tool_name: tool.tool_name, status: result.status });
     return result;
   });
@@ -542,11 +558,15 @@ export async function previewToolActivity(
       tenant_id: context.tenant_id,
       user_context: { user_id: context.user_id },
       task_context: { task_run_id: context.task_run_id, workflow_id: context.workflow_id },
-      arguments: args,
-      idempotency_key: identity ? buildAgentToolIdempotencyKey(identity) : `${context.task_run_id}:${tool.tool_name}:preview`,
-      risk_level: tool.risk_level,
-      request_id: context.request_id,
-    }));
+	      arguments: args,
+	      idempotency_key: identity ? buildAgentToolIdempotencyKey(identity) : `${context.task_run_id}:${tool.tool_name}:preview`,
+	      risk_level: tool.risk_level,
+	      ...(context.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: context.tenant_policy_snapshot_ref } : {}),
+	      ...(context.tenant_policy_hash ? { tenant_policy_hash: context.tenant_policy_hash } : {}),
+	      ...(context.execution_plan_ref ? { execution_plan_ref: context.execution_plan_ref } : {}),
+	      ...(context.execution_plan_hash ? { execution_plan_hash: context.execution_plan_hash } : {}),
+	      request_id: context.request_id,
+	    }));
     heartbeatActivity({ activity: 'previewToolActivity', phase: 'after_request', tool_name: tool.tool_name, status: result.status });
     return result;
   });
@@ -572,10 +592,14 @@ export async function commitToolActivity(
       tenant_id: context.tenant_id,
       user_context: { user_id: context.user_id },
       task_context: { task_run_id: context.task_run_id, workflow_id: context.workflow_id },
-      arguments: args,
-      idempotency_key: identity ? buildAgentToolIdempotencyKey(identity) : `${context.task_run_id}:${tool.tool_name}:commit:${toolCallId}`,
-      request_id: context.request_id,
-    }));
+	      arguments: args,
+	      idempotency_key: identity ? buildAgentToolIdempotencyKey(identity) : `${context.task_run_id}:${tool.tool_name}:commit:${toolCallId}`,
+	      ...(context.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: context.tenant_policy_snapshot_ref } : {}),
+	      ...(context.tenant_policy_hash ? { tenant_policy_hash: context.tenant_policy_hash } : {}),
+	      ...(context.execution_plan_ref ? { execution_plan_ref: context.execution_plan_ref } : {}),
+	      ...(context.execution_plan_hash ? { execution_plan_hash: context.execution_plan_hash } : {}),
+	      request_id: context.request_id,
+	    }));
     heartbeatActivity({ activity: 'commitToolActivity', phase: 'after_request', tool_name: tool.tool_name, tool_call_id: toolCallId, status: result.status });
     return result;
   });
@@ -597,6 +621,12 @@ export async function updateTaskRunStatusActivity(
     });
     if (!updated) {
       throw ApplicationFailure.nonRetryable(`TaskRun not found for status update: ${input.task_run_id}`, 'NOT_FOUND');
+    }
+    if (input.tenant_admission_id && (input.status === 'completed' || input.status === 'failed')) {
+      await new TenantAgentAdmissionRepository(db).release(
+        input.tenant_admission_id,
+        input.status === 'completed' ? 'workflow_completed' : 'workflow_failed',
+      );
     }
   });
 }

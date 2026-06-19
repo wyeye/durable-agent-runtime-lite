@@ -10,6 +10,7 @@ import type {
   ToolCallLog,
   ToolManifest,
 } from '@dar/contracts';
+import { tenantRuntimePolicySchema } from '@dar/contracts';
 import {
   agentExecutionPlanContentHash,
   AgentContextSnapshotRepository,
@@ -28,6 +29,9 @@ import {
   RouteConfigRepository,
   stableStringify,
   TaskRunRepository,
+  TenantAgentAdmissionRepository,
+  TenantRuntimePolicySnapshotRepository,
+  hashTenantRuntimePolicy,
   ToolCallLogRepository,
   ToolManifestRepository,
 } from '../src/index.js';
@@ -260,6 +264,42 @@ describe('db repositories', () => {
     });
 
     await expect(new FlowExecutionPlanRepository(db as never).getByRef(plan.execution_plan_ref, { tenantId: 'tenant_1' })).resolves.toEqual(plan);
+  });
+
+  it('validates tenant runtime policy schema, stable hash, snapshots, and admission stores', async () => {
+    const policy = tenantRuntimePolicySchema.parse({
+      tenant_id: 'tenant_policy_test',
+      version: 1,
+      status: 'draft',
+      allowed_tools: [{
+        tool_name: 'knowledge.search',
+        versions: ['1.0.0'],
+        allowed_operations: ['invoke', 'preview', 'commit'],
+        max_risk_level: 'L1',
+      }],
+      denied_tools: [{
+        tool_name: 'record.write.mock',
+        allowed_operations: ['invoke', 'preview', 'commit'],
+        reason_code: 'DENY_WRITE',
+      }],
+      allowed_models: [{ model_id: 'deterministic:readonly_tool' }],
+      denied_models: [{ model_id: 'deterministic:l3_tool', reason_code: 'DENY_L3_MODEL' }],
+      allowed_handoffs: [{ flow_id: 'sample_flow', versions: [1] }],
+      denied_handoffs: [],
+      budget_cap: { max_segments: 2, max_tool_calls: 1, max_total_tokens: 1000 },
+      max_concurrent_agent_runs: 1,
+    });
+    expect(hashTenantRuntimePolicy(policy)).toBe(hashTenantRuntimePolicy({ ...policy, updated_by: 'ignored' }));
+
+    const snapshotRepo = new TenantRuntimePolicySnapshotRepository(new FakeDb({
+      tenant_runtime_policy_snapshot: [],
+    }) as never);
+    await expect(snapshotRepo.verifyHash('missing', 'a'.repeat(64), { tenantId: policy.tenant_id })).resolves.toBe(false);
+
+    const admissionRepo = new TenantAgentAdmissionRepository(new FakeDb({
+      tenant_agent_admission: [],
+    }) as never);
+    await expect(admissionRepo.getActiveCount(policy.tenant_id)).resolves.toBe(0);
   });
 
   it('stores and verifies AgentExecutionPlan by immutable ref without adapter secrets', async () => {

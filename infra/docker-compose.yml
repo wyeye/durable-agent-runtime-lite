@@ -73,6 +73,8 @@ services:
       VALKEY_URL: redis://valkey:6379
       TOOL_GATEWAY_REGISTRY_SOURCE: db
       TOOL_GATEWAY_AUTH_MODE: service_token
+      TENANT_RUNTIME_POLICY_MODE: required
+      TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED: "false"
       TOOL_GATEWAY_RUNTIME_WORKER_TOKEN: ${TOOL_GATEWAY_RUNTIME_WORKER_TOKEN:-dev-only-runtime-worker-token}
       TOOL_GATEWAY_CONTROL_PLANE_TOKEN: ${TOOL_GATEWAY_CONTROL_PLANE_TOKEN:-dev-only-control-plane-token}
       LOG_LEVEL: info
@@ -140,6 +142,7 @@ services:
       RUNTIME_API_ROUTE_SOURCE: db
       RUNTIME_API_WORKFLOW_STARTER: temporal
       RUNTIME_API_AUTH_MODE: header
+      TENANT_RUNTIME_POLICY_MODE: required
       LOG_LEVEL: info
     ports:
       - "${RUNTIME_API_HOST_PORT:-3000}:3000"

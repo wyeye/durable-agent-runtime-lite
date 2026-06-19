@@ -57,6 +57,9 @@ export async function configDrivenWorkflow(input: ConfigDrivenWorkflowArgs): Pro
     task_run_id: input.task_run_id,
     workflow_id: input.workflow_id ?? `task-${input.tenant_id}-${input.task_run_id}`,
     request_id: input.request_id,
+    ...(input.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: input.tenant_policy_snapshot_ref } : {}),
+    ...(input.tenant_policy_hash ? { tenant_policy_hash: input.tenant_policy_hash } : {}),
+    ...(input.tenant_admission_id ? { tenant_admission_id: input.tenant_admission_id } : {}),
   };
 
   await updateTaskRunStatusActivity({ ...context, status: 'running' });
@@ -72,13 +75,18 @@ export async function configDrivenWorkflow(input: ConfigDrivenWorkflowArgs): Pro
     if (input.flow_sha256 && executionPlan.flow_sha256 !== input.flow_sha256) {
       throw new Error(`FlowExecutionPlan flow hash mismatch: ${input.execution_plan_ref}`);
     }
+    const executionContext = {
+      ...context,
+      execution_plan_ref: executionPlan.execution_plan_ref,
+      execution_plan_hash: executionPlan.execution_plan_hash,
+    };
 
-    const result = await executeFlowSpec(executionPlan, context, input.input ?? {}, {
+    const result = await executeFlowSpec(executionPlan, executionContext, input.input ?? {}, {
       normalizeInput,
       invokeTool: invokeToolActivity,
       previewTool: previewToolActivity,
       commitTool: commitToolActivity,
-      runAgent: async (_context, plannedAgent, agentInput) => runAgentChildWorkflow(context, plannedAgent, agentInput),
+      runAgent: async (_context, plannedAgent, agentInput) => runAgentChildWorkflow(executionContext, plannedAgent, agentInput),
       createHumanTask: createHumanTaskActivity,
       waitForHumanTaskDecision: async (_context, humanTaskId) => {
         await condition(() => decisions.has(humanTaskId));
@@ -133,6 +141,11 @@ async function runAgentChildWorkflow(
     task_run_id: string;
     workflow_id: string;
     request_id: string;
+    execution_plan_ref?: string;
+    execution_plan_hash?: string;
+    tenant_policy_snapshot_ref?: string;
+    tenant_policy_hash?: string;
+    tenant_admission_id?: string;
   },
   plannedAgent: FlowExecutionPlanAgent,
   input: Record<string, unknown>,
@@ -150,6 +163,9 @@ async function runAgentChildWorkflow(
       agent_execution_plan_ref: plannedAgent.agent_execution_plan_ref,
       execution_mode: 'mediated_tool_call',
       initial_user_input: JSON.stringify(input),
+      ...(context.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: context.tenant_policy_snapshot_ref } : {}),
+      ...(context.tenant_policy_hash ? { tenant_policy_hash: context.tenant_policy_hash } : {}),
+      ...(context.tenant_admission_id ? { tenant_admission_id: context.tenant_admission_id } : {}),
       request_id: context.request_id,
     }],
   });

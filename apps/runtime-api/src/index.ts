@@ -5,6 +5,7 @@ import type { StandardErrorResponse, StandardSuccessResponse } from '@dar/contra
 import { getAppPort, loadConfig } from '@dar/config';
 import { createLogger } from '@dar/logger';
 import { AuthError } from '@dar/security';
+import { TenantRuntimePolicyError } from '@dar/db';
 import { HumanTaskService } from './modules/human-task/human-task-service.js';
 import { createRuntimeApiTaskService, TaskService } from './modules/task/task-service.js';
 import { AgentRunService } from './modules/task/agent-run-service.js';
@@ -44,6 +45,36 @@ function toErrorResponse(error: unknown, traceId?: string): StandardErrorRespons
 
     return response;
   }
+  if (error instanceof AuthError) {
+    const response: StandardErrorResponse = {
+      success: false,
+      data: null,
+      error: {
+        code: error.code,
+        message: error.message,
+        ...(Object.keys(error.details).length > 0 ? { details: error.details } : {}),
+      },
+    };
+    if (traceId) {
+      response.trace_id = traceId;
+    }
+    return response;
+  }
+  if (error instanceof TenantRuntimePolicyError) {
+    const response: StandardErrorResponse = {
+      success: false,
+      data: null,
+      error: {
+        code: error.code,
+        message: error.message,
+        ...(Object.keys(error.details).length > 0 ? { details: error.details } : {}),
+      },
+    };
+    if (traceId) {
+      response.trace_id = traceId;
+    }
+    return response;
+  }
 
   const response: StandardErrorResponse = {
     success: false,
@@ -67,6 +98,9 @@ function errorStatus(error: unknown): number {
   }
   if (error instanceof AuthError) {
     return error.code === 'UNAUTHORIZED' ? 401 : 403;
+  }
+  if (error instanceof TenantRuntimePolicyError) {
+    return error.statusCode;
   }
   return 500;
 }

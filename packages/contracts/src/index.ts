@@ -4,6 +4,23 @@ export const toolRiskLevelSchema = z.enum(['L0', 'L1', 'L2', 'L3', 'L4']);
 export const riskLevelSchema = toolRiskLevelSchema;
 export const toolInvokeModeSchema = z.enum(['preview', 'commit']);
 export const toolPolicyDecisionSchema = z.enum(['allow', 'deny', 'require_human_confirm']);
+export const tenantRuntimePolicyStatusSchema = z.enum([
+  'draft',
+  'validated',
+  'published',
+  'deprecated',
+  'disabled',
+]);
+export const tenantPolicyOperationSchema = z.enum(['invoke', 'preview', 'commit']);
+export const tenantPolicyDecisionValueSchema = z.enum(['allow', 'deny']);
+export const tenantAdmissionStatusSchema = z.enum([
+  'reserved',
+  'active',
+  'released',
+  'rejected',
+  'orphaned',
+  'reconciled',
+]);
 export const specStatusSchema = z.enum([
   'draft',
   'validated',
@@ -16,7 +33,7 @@ export const specStatusTransitionSchema = z.object({
   from: specStatusSchema,
   to: specStatusSchema,
 });
-export const registryResourceTypeSchema = z.enum(['flow', 'route', 'tool', 'agent', 'prompt']);
+export const registryResourceTypeSchema = z.enum(['flow', 'route', 'tool', 'agent', 'prompt', 'tenant_runtime_policy']);
 export const capabilityReleaseActionSchema = z.enum(['publish', 'gray', 'rollback', 'disable', 'deprecate']);
 export const flowStepTypeSchema = z.enum(['activity', 'tool', 'agent', 'human_task', 'condition']);
 export const piResultStatusSchema = z.enum([
@@ -108,12 +125,168 @@ export const runtimeErrorSchema = z.object({
   details: jsonObjectSchema.optional(),
 });
 
+export const tenantPolicyToolRuleSchema = z.object({
+  tool_name: z.string().min(1),
+  versions: z.array(z.string().min(1)).optional(),
+  allowed_operations: z.array(tenantPolicyOperationSchema).min(1),
+  max_risk_level: toolRiskLevelSchema.optional(),
+  reason_code: z.string().min(1).optional(),
+});
+
+export const tenantPolicyModelRuleSchema = z.object({
+  model_id: z.string().min(1),
+  provider: z.string().min(1).optional(),
+  reason_code: z.string().min(1).optional(),
+});
+
+export const tenantPolicyHandoffRuleSchema = z.object({
+  flow_id: z.string().min(1),
+  versions: z.array(z.number().int().positive()).optional(),
+  execution_plan_refs: z.array(z.string().min(1)).optional(),
+  reason_code: z.string().min(1).optional(),
+});
+
+export const tenantRuntimeBudgetCapSchema = z.object({
+  max_segments: z.number().int().positive().optional(),
+  max_model_turns: z.number().int().positive().optional(),
+  max_tool_calls: z.number().int().nonnegative().optional(),
+  max_handoffs: z.number().int().nonnegative().optional(),
+  max_input_tokens: z.number().int().nonnegative().optional(),
+  max_output_tokens: z.number().int().nonnegative().optional(),
+  max_total_tokens: z.number().int().positive().optional(),
+  max_duration_ms: z.number().int().positive().optional(),
+  max_context_bytes: z.number().int().positive().optional(),
+  max_cost: z.number().nonnegative().optional(),
+});
+
+export const tenantRuntimePolicySchema = z.object({
+  tenant_id: z.string().min(1),
+  version: z.number().int().positive(),
+  status: tenantRuntimePolicyStatusSchema,
+  allowed_tools: z.array(tenantPolicyToolRuleSchema).default([]),
+  denied_tools: z.array(tenantPolicyToolRuleSchema).default([]),
+  allowed_models: z.array(tenantPolicyModelRuleSchema).default([]),
+  denied_models: z.array(tenantPolicyModelRuleSchema).default([]),
+  allowed_handoffs: z.array(tenantPolicyHandoffRuleSchema).default([]),
+  denied_handoffs: z.array(tenantPolicyHandoffRuleSchema).default([]),
+  budget_cap: tenantRuntimeBudgetCapSchema.default({}),
+  max_concurrent_agent_runs: z.number().int().positive(),
+  revision: z.number().int().positive().default(1),
+  created_by: z.string().min(1).optional(),
+  updated_by: z.string().min(1).optional(),
+  published_by: z.string().min(1).optional(),
+  created_at: z.string().datetime().optional(),
+  updated_at: z.string().datetime().optional(),
+  published_at: z.string().datetime().optional(),
+});
+
+export const tenantRuntimePolicySnapshotSchema = z.object({
+  snapshot_id: z.string().min(1),
+  snapshot_ref: z.string().min(1),
+  tenant_id: z.string().min(1),
+  source_policy_version: z.number().int().positive(),
+  source_policy_hash: z.string().regex(/^[a-f0-9]{64}$/u),
+  execution_plan_ref: z.string().min(1),
+  execution_plan_hash: z.string().regex(/^[a-f0-9]{64}$/u),
+  execution_plan_type: z.enum(['flow', 'agent']),
+  resolved_allowed_tools: z.array(tenantPolicyToolRuleSchema).default([]),
+  resolved_denied_tools: z.array(tenantPolicyToolRuleSchema).default([]),
+  resolved_allowed_models: z.array(tenantPolicyModelRuleSchema).default([]),
+  resolved_allowed_handoffs: z.array(tenantPolicyHandoffRuleSchema).default([]),
+  resolved_budget: z.lazy(() => agentBudgetSchema),
+  max_concurrent_agent_runs: z.number().int().positive(),
+  snapshot_hash: z.string().regex(/^[a-f0-9]{64}$/u),
+  created_at: z.string().datetime(),
+});
+
+export const tenantPolicyDecisionSchema = z.object({
+  decision: tenantPolicyDecisionValueSchema,
+  reason_code: z.string().min(1),
+  reason_summary: z.string().min(1),
+  snapshot_ref: z.string().min(1).optional(),
+  snapshot_hash: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  matched_rules: z.array(jsonObjectSchema).default([]),
+  effective_budget: z.lazy(() => agentBudgetSchema).optional(),
+  effective_allowed_tools: z.array(tenantPolicyToolRuleSchema).default([]),
+  effective_allowed_models: z.array(tenantPolicyModelRuleSchema).default([]),
+  effective_allowed_handoffs: z.array(tenantPolicyHandoffRuleSchema).default([]),
+});
+
+export const tenantAgentAdmissionSchema = z.object({
+  admission_id: z.string().min(1),
+  tenant_id: z.string().min(1),
+  task_run_id: z.string().min(1),
+  agent_run_id: z.string().min(1).optional(),
+  workflow_id: z.string().min(1).optional(),
+  workflow_run_id: z.string().min(1).optional(),
+  policy_snapshot_ref: z.string().min(1),
+  status: tenantAdmissionStatusSchema,
+  acquired_at: z.string().datetime(),
+  activated_at: z.string().datetime().optional(),
+  released_at: z.string().datetime().optional(),
+  updated_at: z.string().datetime(),
+  release_reason: z.string().min(1).optional(),
+  revision: z.number().int().positive().default(1),
+});
+
+export const tenantPolicyCreateDraftRequestSchema = z.object({
+  policy: tenantRuntimePolicySchema.omit({
+    revision: true,
+    created_at: true,
+    updated_at: true,
+    published_at: true,
+  }).extend({
+    status: z.literal('draft').default('draft'),
+  }),
+});
+
+export const tenantPolicyUpdateDraftRequestSchema = z.object({
+  policy: tenantRuntimePolicySchema.partial().omit({
+    tenant_id: true,
+    version: true,
+    revision: true,
+    created_at: true,
+    updated_at: true,
+    published_at: true,
+  }),
+  expected_revision: z.number().int().positive(),
+});
+
+export const tenantPolicyValidateResponseSchema = z.object({
+  validation: registryValidationResultSchema,
+});
+
+export const tenantPolicyPublishRequestSchema = z.object({
+  release_note: z.string().min(1),
+  expected_revision: z.number().int().positive().optional(),
+  metadata_json: jsonObjectSchema.default({}),
+});
+
+export const tenantPolicyRollbackRequestSchema = z.object({
+  target_version: z.number().int().positive(),
+  release_note: z.string().min(1),
+  metadata_json: jsonObjectSchema.default({}),
+});
+
+export const tenantAdmissionResultSchema = z.object({
+  admission: tenantAgentAdmissionSchema,
+  accepted: z.boolean(),
+  reason_code: z.string().min(1).optional(),
+  active_count: z.number().int().nonnegative(),
+  max_concurrent_agent_runs: z.number().int().positive(),
+});
+
 export const paginationRequestSchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   page_size: z.coerce.number().int().positive().max(100).default(20),
   cursor: z.string().min(1).optional(),
   sort_by: z.string().min(1).optional(),
   sort_order: z.enum(['asc', 'desc']).default('desc'),
+});
+
+export const tenantPolicyQuerySchema = paginationRequestSchema.extend({
+  tenant_id: z.string().min(1).optional(),
+  status: tenantRuntimePolicyStatusSchema.optional(),
 });
 
 export const paginatedResponseSchema = <TItem extends z.ZodType>(itemSchema: TItem) =>
@@ -493,6 +666,9 @@ export const taskRunSchema = z.object({
   flow_version: z.number().int().positive().optional(),
   workflow_id: z.string().optional(),
   execution_plan_ref: z.string().optional(),
+  tenant_policy_snapshot_ref: z.string().min(1).optional(),
+  tenant_policy_hash: sha256Schema.optional(),
+  tenant_admission_id: z.string().min(1).optional(),
   status: taskRunStatusSchema,
   error_code: z.string().min(1).optional(),
   error_message: z.string().min(1).optional(),
@@ -510,6 +686,10 @@ export const toolInvokeRequestSchema = z.object({
   arguments: jsonObjectSchema.default({}),
   idempotency_key: z.string().min(1),
   risk_level: riskLevelSchema.optional(),
+  tenant_policy_snapshot_ref: z.string().min(1).optional(),
+  tenant_policy_hash: sha256Schema.optional(),
+  execution_plan_ref: z.string().min(1).optional(),
+  execution_plan_hash: sha256Schema.optional(),
   request_id: z.string().min(1).optional(),
 });
 
@@ -543,6 +723,10 @@ export const toolPreviewRequestSchema = z.object({
   arguments: jsonObjectSchema.default({}),
   idempotency_key: z.string().min(1),
   risk_level: toolRiskLevelSchema.optional(),
+  tenant_policy_snapshot_ref: z.string().min(1).optional(),
+  tenant_policy_hash: sha256Schema.optional(),
+  execution_plan_ref: z.string().min(1).optional(),
+  execution_plan_hash: sha256Schema.optional(),
   request_id: z.string().min(1).optional(),
 });
 
@@ -569,6 +753,10 @@ export const toolCommitRequestSchema = z.object({
   task_context: jsonObjectSchema.default({}),
   arguments: jsonObjectSchema.default({}),
   idempotency_key: z.string().min(1),
+  tenant_policy_snapshot_ref: z.string().min(1).optional(),
+  tenant_policy_hash: sha256Schema.optional(),
+  execution_plan_ref: z.string().min(1).optional(),
+  execution_plan_hash: sha256Schema.optional(),
   request_id: z.string().min(1).optional(),
 });
 
@@ -740,6 +928,8 @@ export const toolCallLogSchema = z.object({
   adapter_type: z.string().optional(),
   preview_json: z.unknown().optional(),
   result_json: z.unknown().optional(),
+  tenant_policy_snapshot_ref: z.string().min(1).optional(),
+  policy_decision_code: z.string().min(1).optional(),
   created_at: z.string().datetime().optional(),
   updated_at: z.string().datetime().optional(),
 });
@@ -788,6 +978,9 @@ export const workflowStartRequestSchema = z.object({
   flow_spec_snapshot: flowSpecSchema.optional(),
   agent_id: z.string().optional(),
   execution_mode: agentExecutionModeSchema.optional(),
+  tenant_policy_snapshot_ref: z.string().min(1).optional(),
+  tenant_policy_hash: sha256Schema.optional(),
+  tenant_admission_id: z.string().min(1).optional(),
   input: taskInputSchema.default({ payload: {} }),
   request_id: z.string().min(1),
   trace_id: z.string().optional(),
@@ -810,6 +1003,9 @@ export const runTaskResponseSchema = z.object({
   flow_id: z.string().min(1).optional(),
   flow_version: z.number().int().positive().optional(),
   agent_id: z.string().min(1).optional(),
+  tenant_policy_snapshot_ref: z.string().min(1).optional(),
+  tenant_policy_hash: sha256Schema.optional(),
+  tenant_admission_id: z.string().min(1).optional(),
 });
 
 export const taskRunQuerySchema = paginationRequestSchema.extend({
@@ -996,6 +1192,8 @@ export const piSegmentRequestSchema = z.object({
   segment_index: z.number().int().nonnegative(),
   budget_remaining: agentBudgetSchema,
   request_context: requestContextSchema,
+  tenant_policy_snapshot_ref: z.string().min(1).optional(),
+  tenant_policy_hash: sha256Schema.optional(),
 });
 
 export const userInputBoundaryRequestSchema = z.object({
@@ -1126,6 +1324,10 @@ export const agentRunRecordSchema = z.object({
   prompt_version: z.number().int().positive(),
   model: z.string().min(1),
   execution_mode: agentExecutionModeSchema,
+  tenant_policy_snapshot_ref: z.string().min(1).optional(),
+  tenant_policy_version: z.number().int().positive().optional(),
+  tenant_policy_hash: sha256Schema.optional(),
+  tenant_admission_id: z.string().min(1).optional(),
   status: agentRunStatusSchema,
   current_segment_index: z.number().int().nonnegative().default(0),
   model_turn_count: z.number().int().nonnegative().default(0),
@@ -1168,6 +1370,25 @@ export type ToolRiskLevel = z.infer<typeof toolRiskLevelSchema>;
 export type RiskLevel = ToolRiskLevel;
 export type ToolInvokeMode = z.infer<typeof toolInvokeModeSchema>;
 export type ToolPolicyDecision = z.infer<typeof toolPolicyDecisionSchema>;
+export type TenantRuntimePolicyStatus = z.infer<typeof tenantRuntimePolicyStatusSchema>;
+export type TenantPolicyOperation = z.infer<typeof tenantPolicyOperationSchema>;
+export type TenantPolicyDecisionValue = z.infer<typeof tenantPolicyDecisionValueSchema>;
+export type TenantAdmissionStatus = z.infer<typeof tenantAdmissionStatusSchema>;
+export type TenantPolicyToolRule = z.infer<typeof tenantPolicyToolRuleSchema>;
+export type TenantPolicyModelRule = z.infer<typeof tenantPolicyModelRuleSchema>;
+export type TenantPolicyHandoffRule = z.infer<typeof tenantPolicyHandoffRuleSchema>;
+export type TenantRuntimeBudgetCap = z.infer<typeof tenantRuntimeBudgetCapSchema>;
+export type TenantRuntimePolicy = z.infer<typeof tenantRuntimePolicySchema>;
+export type TenantRuntimePolicySnapshot = z.infer<typeof tenantRuntimePolicySnapshotSchema>;
+export type TenantPolicyDecision = z.infer<typeof tenantPolicyDecisionSchema>;
+export type TenantAgentAdmission = z.infer<typeof tenantAgentAdmissionSchema>;
+export type TenantPolicyQuery = z.infer<typeof tenantPolicyQuerySchema>;
+export type TenantPolicyCreateDraftRequest = z.infer<typeof tenantPolicyCreateDraftRequestSchema>;
+export type TenantPolicyUpdateDraftRequest = z.infer<typeof tenantPolicyUpdateDraftRequestSchema>;
+export type TenantPolicyValidateResponse = z.infer<typeof tenantPolicyValidateResponseSchema>;
+export type TenantPolicyPublishRequest = z.infer<typeof tenantPolicyPublishRequestSchema>;
+export type TenantPolicyRollbackRequest = z.infer<typeof tenantPolicyRollbackRequestSchema>;
+export type TenantAdmissionResult = z.infer<typeof tenantAdmissionResultSchema>;
 export type AgentExecutionMode = z.infer<typeof agentExecutionModeSchema>;
 export type AgentRunStatus = z.infer<typeof agentRunStatusSchema>;
 export type AgentStepStatus = z.infer<typeof agentStepStatusSchema>;

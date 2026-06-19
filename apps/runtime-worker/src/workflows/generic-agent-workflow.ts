@@ -25,6 +25,9 @@ export async function genericAgentWorkflow(input: GenericAgentWorkflowInput): Pr
     task_run_id: input.task_run_id,
     workflow_id: input.workflow_id ?? `task-${input.tenant_id}-${input.task_run_id}`,
     request_id: input.request_id,
+    ...(input.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: input.tenant_policy_snapshot_ref } : {}),
+    ...(input.tenant_policy_hash ? { tenant_policy_hash: input.tenant_policy_hash } : {}),
+    ...(input.tenant_admission_id ? { tenant_admission_id: input.tenant_admission_id } : {}),
   };
 
   await updateTaskRunStatusActivity({ ...context, status: 'running' });
@@ -43,6 +46,9 @@ export async function genericAgentWorkflow(input: GenericAgentWorkflowInput): Pr
         agent_execution_plan_ref: input.agent_execution_plan_ref,
         execution_mode: 'mediated_tool_call',
         initial_user_input: typeof input.input === 'string' ? input.input : JSON.stringify(input.input ?? {}),
+        ...(input.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: input.tenant_policy_snapshot_ref } : {}),
+        ...(input.tenant_policy_hash ? { tenant_policy_hash: input.tenant_policy_hash } : {}),
+        ...(input.tenant_admission_id ? { tenant_admission_id: input.tenant_admission_id } : {}),
         request_id: input.request_id,
         ...(input.trace_id ? { trace_id: input.trace_id } : {}),
       }],

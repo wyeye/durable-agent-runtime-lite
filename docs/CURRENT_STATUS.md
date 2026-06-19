@@ -146,6 +146,7 @@ Production requires:
 CONTROL_PLANE_AUTH_MODE=header
 RUNTIME_API_AUTH_MODE=header
 TOOL_GATEWAY_AUTH_MODE=service_token
+TENANT_RUNTIME_POLICY_MODE=required
 ```
 
 `disabled` auth mode is allowed only in development/test. Production never silently uses a default administrator, default runtime user, default tenant, or anonymous Tool Gateway caller.
@@ -157,6 +158,8 @@ Tool Gateway service identities:
 - `runtime-api` has no Tool Gateway service identity and must not call Tool Gateway.
 
 Service tokens are read from environment variables and are not baked into images. Docker Compose uses clearly marked local dev-only placeholder values so local smoke paths can exercise the service-auth flow.
+
+Tenant runtime policy is represented by `tenant_runtime_policy`, immutable `tenant_runtime_policy_snapshot`, and `tenant_agent_admission`. `runtime-api` resolves a policy snapshot before starting DB-backed workflows and stores the snapshot/admission identity on `task_run`; `runtime-worker` forwards that identity to Tool Gateway calls; `tool-gateway` independently loads the immutable snapshot and denies tool calls whose tool/version/operation or execution plan hash does not match. Development and test may keep `TENANT_RUNTIME_POLICY_MODE=optional`; production startup paths require `required`.
 
 ## Primary Docs
 

@@ -72,6 +72,9 @@ export interface TaskRunTable {
   flow_version: number | null;
   workflow_id: string | null;
   execution_plan_ref: string | null;
+  tenant_policy_snapshot_ref: string | null;
+  tenant_policy_hash: string | null;
+  tenant_admission_id: string | null;
   status: string;
   error_code: string | null;
   error_message: string | null;
@@ -140,6 +143,8 @@ export interface ToolCallLogTable {
   mode: string | null;
   preview_json: Json | null;
   result_json: Json | null;
+  tenant_policy_snapshot_ref: string | null;
+  policy_decision_code: string | null;
   created_at: Timestamp;
   updated_at: Timestamp;
 }
@@ -170,6 +175,60 @@ export interface CapabilityReleaseTable {
   release_note: string | null;
   metadata_json: Json;
   created_at: Timestamp;
+}
+
+export interface TenantRuntimePolicyTable {
+  id: Generated<number>;
+  tenant_id: string;
+  version: number;
+  status: string;
+  allowed_tools_json: Json;
+  denied_tools_json: Json;
+  allowed_models_json: Json;
+  denied_models_json: Json;
+  allowed_handoffs_json: Json;
+  denied_handoffs_json: Json;
+  budget_cap_json: Json;
+  max_concurrent_agent_runs: number;
+  revision: number;
+  created_by: string | null;
+  updated_by: string | null;
+  published_by: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  published_at: Timestamp | null;
+}
+
+export interface TenantRuntimePolicySnapshotTable {
+  snapshot_id: string;
+  snapshot_ref: string;
+  tenant_id: string;
+  source_policy_version: number;
+  source_policy_hash: string;
+  execution_plan_ref: string;
+  execution_plan_hash: string;
+  execution_plan_type: string;
+  policy_json: Json;
+  resolved_policy_json: Json;
+  snapshot_hash: string;
+  created_at: Timestamp;
+}
+
+export interface TenantAgentAdmissionTable {
+  admission_id: string;
+  tenant_id: string;
+  task_run_id: string;
+  agent_run_id: string | null;
+  workflow_id: string | null;
+  workflow_run_id: string | null;
+  policy_snapshot_ref: string;
+  status: string;
+  acquired_at: Timestamp;
+  activated_at: Timestamp | null;
+  released_at: Timestamp | null;
+  updated_at: Timestamp;
+  release_reason: string | null;
+  revision: number;
 }
 
 export interface FlowExecutionPlanTable {
@@ -221,6 +280,10 @@ export interface AgentRunTable {
   prompt_version: number;
   model: string;
   execution_mode: string;
+  tenant_policy_snapshot_ref: string | null;
+  tenant_policy_version: number | null;
+  tenant_policy_hash: string | null;
+  tenant_admission_id: string | null;
   status: string;
   current_segment_index: number;
   model_turn_count: number;
@@ -286,6 +349,9 @@ export interface Database {
   tool_call_log: ToolCallLogTable;
   idempotency_record: IdempotencyRecordTable;
   capability_release: CapabilityReleaseTable;
+  tenant_runtime_policy: TenantRuntimePolicyTable;
+  tenant_runtime_policy_snapshot: TenantRuntimePolicySnapshotTable;
+  tenant_agent_admission: TenantAgentAdmissionTable;
   flow_execution_plan: FlowExecutionPlanTable;
   agent_execution_plan: AgentExecutionPlanTable;
   agent_run: AgentRunTable;
@@ -352,3 +418,4 @@ export class InMemoryRepository<TRecord extends { id: string }> implements Repos
 export { sql };
 export * from './repositories.js';
 export * from './registry.js';
+export * from './tenant-policy.js';

@@ -21,14 +21,17 @@ import {
   type ToolPolicyDecision,
   type ToolPreviewRequest,
   type ToolPreviewResponse,
+  type TenantRuntimePolicySnapshot,
 } from '@dar/contracts';
 import { maskSensitiveFields } from '@dar/security';
 import {
   HumanTaskRepository,
   IdempotencyRecordRepository,
+  TenantRuntimePolicyError,
   type ListAuditEventsOptions,
   type ListToolCallLogsOptions,
   type ToolCallLogCreateInput,
+  assertSnapshotAllowsTool,
 } from '@dar/db';
 import { InMemoryAuditStore, type AuditStore } from './audit.js';
 import { invokeMockAdapter } from './mock-adapter.js';
@@ -50,6 +53,10 @@ export interface ToolCallLogStore {
   list(options?: ListToolCallLogsOptions): Promise<ToolCallLog[]>;
 }
 
+export interface TenantPolicySnapshotLookupStore {
+  getByRef(snapshotRef: string, options?: { tenantId?: string }): Promise<TenantRuntimePolicySnapshot | undefined>;
+}
+
 export interface ToolCallLogUpdateInput {
   status?: ToolCallLog['status'];
   policy_decision?: ToolPolicyDecision;
@@ -59,6 +66,8 @@ export interface ToolCallLogUpdateInput {
   error_code?: string;
   preview_json?: unknown;
   result_json?: unknown;
+  tenant_policy_snapshot_ref?: string;
+  policy_decision_code?: string;
 }
 
 export interface ToolServiceOptions {
@@ -67,6 +76,8 @@ export interface ToolServiceOptions {
   idempotencyRepository?: IdempotencyRecordRepository;
   toolCallLogStore?: ToolCallLogStore;
   humanTaskStore?: HumanTaskLookupStore;
+  tenantPolicySnapshotStore?: TenantPolicySnapshotLookupStore;
+  tenantPolicyMode?: 'required' | 'optional';
 }
 
 export class InMemoryToolCallLogStore implements ToolCallLogStore {
@@ -169,6 +180,8 @@ export class ToolService {
   private readonly idempotencyRepository: IdempotencyRecordRepository | undefined;
   private readonly toolCallLogStore: ToolCallLogStore;
   private readonly humanTaskStore: HumanTaskLookupStore;
+  private readonly tenantPolicySnapshotStore: TenantPolicySnapshotLookupStore | undefined;
+  private readonly tenantPolicyMode: 'required' | 'optional';
   private readonly idempotency = new Map<
     string,
     { requestHash: string; response: ToolInvokeResponse | ToolCommitResponse }
@@ -180,6 +193,8 @@ export class ToolService {
     this.idempotencyRepository = options.idempotencyRepository;
     this.toolCallLogStore = options.toolCallLogStore ?? new InMemoryToolCallLogStore();
     this.humanTaskStore = options.humanTaskStore ?? new InMemoryHumanTaskLookupStore();
+    this.tenantPolicySnapshotStore = options.tenantPolicySnapshotStore;
+    this.tenantPolicyMode = options.tenantPolicyMode ?? 'optional';
   }
 
   async listTools(tenantId?: string): Promise<ToolManifest[]> {
@@ -249,6 +264,20 @@ export class ToolService {
     }
 
     const { manifest } = manifestResult;
+    const tenantPolicy = await this.enforceTenantPolicy(request, manifest, 'preview');
+    if (tenantPolicy.decision === 'deny') {
+      return toolPreviewResponseSchema.parse({
+        tool_call_id: `tool_call_${randomUUID()}`,
+        tool_name: request.tool_name,
+        tool_version: request.tool_version,
+        mode: 'preview',
+        status: 'denied',
+        policy: tenantPolicy.policy,
+        error: tenantPolicy.policy.error,
+        audit_event_id: (await this.auditDenied(request, 'tool.preview', tenantPolicy.reasonCode, tenantPolicy.message)).event_id,
+        idempotency_key: request.idempotency_key,
+      });
+    }
     const policy = evaluatePolicy(manifest, 'preview');
     const inputHash = hashJson(request.arguments);
     const preview = buildPreviewPlan(request, manifest);
@@ -269,6 +298,8 @@ export class ToolService {
       input_hash: inputHash,
       adapter_type: manifest.adapter.type,
       preview_json: preview,
+      ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
+      policy_decision_code: policy.reason,
       ...(policy.error?.code ? { error_code: policy.error.code } : {}),
     });
 
@@ -289,6 +320,8 @@ export class ToolService {
         task_run_id: taskRunId,
         input_hash: inputHash,
         policy_decision: policy.decision,
+        ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
+        policy_decision_code: policy.reason,
       },
     });
 
@@ -325,6 +358,10 @@ export class ToolService {
     }
 
     const { manifest } = manifestResult;
+    const tenantPolicy = await this.enforceTenantPolicy(request, manifest, 'commit');
+    if (tenantPolicy.decision === 'deny') {
+      return this.auditAndReturnCommitDenied(request, tenantPolicy.reasonCode, tenantPolicy.message);
+    }
     const policy = evaluatePolicy(manifest, 'commit');
     if (policy.decision === 'deny') {
       return this.auditAndReturnCommitDenied(
@@ -355,6 +392,7 @@ export class ToolService {
           status: 'denied',
           mode: 'commit',
           error_code: 'HUMAN_CONFIRMATION_REQUIRED',
+          policy_decision_code: 'HUMAN_CONFIRMATION_REQUIRED',
         });
         return this.auditAndReturnCommitDenied(
           request,
@@ -374,6 +412,8 @@ export class ToolService {
       duration_ms: durationMs,
       output_hash: outputHash,
       result_json: result,
+      ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
+      policy_decision_code: policy.reason,
     });
     if (!updated) {
       return this.auditAndReturnCommitDenied(request, 'TOOL_CALL_NOT_FOUND', 'tool_call_id 不存在');
@@ -395,6 +435,8 @@ export class ToolService {
         task_run_id: taskRunId,
         output_hash: outputHash,
         policy_decision: policy.decision,
+        ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
+        policy_decision_code: policy.reason,
       },
     });
 
@@ -432,6 +474,15 @@ export class ToolService {
     }
 
     const { manifest } = manifestResult;
+    const tenantPolicy = await this.enforceTenantPolicy(request, manifest, 'invoke');
+    if (tenantPolicy.decision === 'deny') {
+      return this.auditAndReturnDenied(
+        request,
+        tenantPolicy.reasonCode,
+        tenantPolicy.message,
+        tenantPolicy.policy,
+      );
+    }
     const policy = evaluatePolicy(manifest, 'commit');
     if (policy.decision === 'deny') {
       return this.auditAndReturnDenied(
@@ -457,6 +508,8 @@ export class ToolService {
           risk_level: manifest.risk_level,
           task_run_id: getTaskRunId(request.task_context),
           policy_decision: policy.decision,
+          ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
+          policy_decision_code: policy.reason,
         },
       });
       return toolInvokeResponseSchema.parse({
@@ -488,6 +541,8 @@ export class ToolService {
         input_hash: hashJson(request.arguments),
         output_hash: hashJson(result),
         policy_decision: policy.decision,
+        ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
+        policy_decision_code: policy.reason,
       },
     });
 
@@ -552,6 +607,82 @@ export class ToolService {
     return { manifest };
   }
 
+  private async enforceTenantPolicy(
+    request: ToolInvokeRequest | ToolPreviewRequest | ToolCommitRequest,
+    manifest: ToolManifest,
+    operation: 'invoke' | 'preview' | 'commit',
+  ): Promise<{ decision: 'allow' } | { decision: 'deny'; reasonCode: string; message: string; policy: PolicyEvaluationResult }> {
+    if (!request.tenant_policy_snapshot_ref) {
+      if (this.tenantPolicyMode === 'required') {
+        return tenantPolicyDenied(manifest.risk_level, 'TENANT_RUNTIME_POLICY_NOT_FOUND', 'Tenant policy snapshot is required');
+      }
+      return { decision: 'allow' };
+    }
+    if (!request.tenant_policy_hash || !request.execution_plan_ref || !request.execution_plan_hash) {
+      return tenantPolicyDenied(manifest.risk_level, 'TENANT_POLICY_SNAPSHOT_CONTEXT_MISSING', 'Tenant policy snapshot hash and execution plan identity are required');
+    }
+    if (!this.tenantPolicySnapshotStore) {
+      return tenantPolicyDenied(manifest.risk_level, 'TENANT_POLICY_SNAPSHOT_STORE_UNAVAILABLE', 'Tenant policy snapshot store is unavailable');
+    }
+
+    const snapshot = await this.tenantPolicySnapshotStore.getByRef(request.tenant_policy_snapshot_ref, {
+      tenantId: request.tenant_id,
+    });
+    if (!snapshot) {
+      return tenantPolicyDenied(manifest.risk_level, 'TENANT_RUNTIME_POLICY_NOT_FOUND', 'Tenant policy snapshot not found');
+    }
+
+    try {
+      assertSnapshotAllowsTool({
+        snapshot,
+        tenantId: request.tenant_id,
+        snapshotHash: request.tenant_policy_hash,
+        executionPlanRef: request.execution_plan_ref,
+        executionPlanHash: request.execution_plan_hash,
+        toolName: request.tool_name,
+        toolVersion: request.tool_version,
+        operation,
+        riskLevel: manifest.risk_level,
+      });
+      return { decision: 'allow' };
+    } catch (error) {
+      if (error instanceof TenantRuntimePolicyError) {
+        return tenantPolicyDenied(manifest.risk_level, error.code, error.message);
+      }
+      return tenantPolicyDenied(manifest.risk_level, 'TOOL_DENIED_BY_TENANT_POLICY', 'Tool denied by tenant policy');
+    }
+  }
+
+  private async auditDenied(
+    request: ToolInvokeRequest | ToolPreviewRequest | ToolCommitRequest,
+    action: 'tool.invoke' | 'tool.preview' | 'tool.commit',
+    code: string,
+    message: string,
+  ) {
+    return this.auditStore.append({
+      tenant_id: request.tenant_id,
+      actor_id: getUserId(request.user_context),
+      action,
+      target_type: 'tool',
+      target_id: request.tool_name,
+      result: 'denied',
+      reason: code,
+      trace_id: request.request_id,
+      payload: {
+        tool_name: request.tool_name,
+        tool_version: request.tool_version,
+        ...(request.tool_sha256 ? { tool_sha256: request.tool_sha256 } : {}),
+        task_run_id: getTaskRunId(request.task_context),
+        ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
+        ...(request.tenant_policy_hash ? { tenant_policy_hash: request.tenant_policy_hash } : {}),
+        ...(request.execution_plan_ref ? { execution_plan_ref: request.execution_plan_ref } : {}),
+        ...(request.execution_plan_hash ? { execution_plan_hash: request.execution_plan_hash } : {}),
+        policy_decision_code: code,
+        message,
+      },
+    });
+  }
+
   private async auditAndReturnDenied(
     request: ToolInvokeRequest | ToolPreviewRequest | ToolCommitRequest,
     code: string,
@@ -572,6 +703,11 @@ export class ToolService {
         tool_version: request.tool_version,
         ...(request.tool_sha256 ? { tool_sha256: request.tool_sha256 } : {}),
         task_run_id: getTaskRunId(request.task_context),
+        ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
+        ...(request.tenant_policy_hash ? { tenant_policy_hash: request.tenant_policy_hash } : {}),
+        ...(request.execution_plan_ref ? { execution_plan_ref: request.execution_plan_ref } : {}),
+        ...(request.execution_plan_hash ? { execution_plan_hash: request.execution_plan_hash } : {}),
+        policy_decision_code: code,
       },
     });
 
@@ -606,6 +742,11 @@ export class ToolService {
         tool_version: request.tool_version,
         ...(request.tool_sha256 ? { tool_sha256: request.tool_sha256 } : {}),
         task_run_id: getTaskRunId(request.task_context),
+        ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
+        ...(request.tenant_policy_hash ? { tenant_policy_hash: request.tenant_policy_hash } : {}),
+        ...(request.execution_plan_ref ? { execution_plan_ref: request.execution_plan_ref } : {}),
+        ...(request.execution_plan_hash ? { execution_plan_hash: request.execution_plan_hash } : {}),
+        policy_decision_code: code,
       },
     });
 
@@ -754,6 +895,19 @@ function deniedPolicy(
     reason: code,
     requires_human_confirm: false,
     error: { code, message },
+  };
+}
+
+function tenantPolicyDenied(
+  riskLevel: PolicyEvaluationResult['risk_level'],
+  code: string,
+  message: string,
+): { decision: 'deny'; reasonCode: string; message: string; policy: PolicyEvaluationResult } {
+  return {
+    decision: 'deny',
+    reasonCode: code,
+    message,
+    policy: deniedPolicy(riskLevel, code, message),
   };
 }
 

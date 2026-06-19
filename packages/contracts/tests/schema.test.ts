@@ -49,6 +49,10 @@ import {
   piSegmentResultSchema,
   proposedToolCallSchema,
   resolvedAgentPlanSchema,
+  tenantAgentAdmissionSchema,
+  tenantPolicyDecisionSchema,
+  tenantRuntimePolicySchema,
+  tenantRuntimePolicySnapshotSchema,
   workflowStartRequestSchema,
 } from '../src/index.js';
 
@@ -449,6 +453,79 @@ describe('contracts schemas', () => {
       response_idempotency_key: 'response_1',
       response: { answer: 'yes' },
     }).response).toEqual({ answer: 'yes' });
+  });
+
+  it('validates tenant runtime policy DTOs', () => {
+    const hash = 'a'.repeat(64);
+    const policy = tenantRuntimePolicySchema.parse({
+      tenant_id: 'tenant_1',
+      version: 1,
+      status: 'draft',
+      allowed_tools: [{
+        tool_name: 'knowledge.search',
+        versions: ['1.0.0'],
+        allowed_operations: ['invoke'],
+        max_risk_level: 'L1',
+      }],
+      denied_tools: [{
+        tool_name: 'record.write.mock',
+        allowed_operations: ['preview', 'commit'],
+        reason_code: 'DENY_WRITE',
+      }],
+      allowed_models: [{ model_id: 'deterministic:readonly_tool' }],
+      denied_models: [{ model_id: 'deterministic:l3_tool' }],
+      allowed_handoffs: [{ flow_id: 'sample_flow', versions: [1], execution_plan_refs: ['db://flow-execution-plan/plan_1'] }],
+      denied_handoffs: [],
+      budget_cap: { max_segments: 2, max_tool_calls: 1, max_total_tokens: 1000 },
+      max_concurrent_agent_runs: 1,
+    });
+    expect(policy.allowed_tools[0]?.allowed_operations).toEqual(['invoke']);
+    expect(() => tenantRuntimePolicySchema.parse({ ...policy, max_concurrent_agent_runs: 0 })).toThrow();
+    expect(() => tenantRuntimePolicySchema.parse({ ...policy, budget_cap: { max_segments: 0 } })).toThrow();
+
+    expect(tenantRuntimePolicySnapshotSchema.parse({
+      snapshot_id: 'snapshot_1',
+      snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
+      tenant_id: 'tenant_1',
+      source_policy_version: 1,
+      source_policy_hash: hash,
+      execution_plan_ref: 'db://agent-execution-plan/agent_plan_1',
+      execution_plan_hash: hash,
+      execution_plan_type: 'agent',
+      resolved_allowed_tools: policy.allowed_tools,
+      resolved_denied_tools: policy.denied_tools,
+      resolved_allowed_models: policy.allowed_models,
+      resolved_allowed_handoffs: policy.allowed_handoffs,
+      resolved_budget: {
+        max_segments: 2,
+        max_model_turns: 2,
+        max_tool_calls: 1,
+        max_total_tokens: 1000,
+        max_duration_ms: 300000,
+        max_handoffs: 1,
+        max_context_bytes: 262144,
+      },
+      max_concurrent_agent_runs: 1,
+      snapshot_hash: hash,
+      created_at: '2025-01-01T00:00:00.000Z',
+    }).tenant_id).toBe('tenant_1');
+
+    expect(tenantPolicyDecisionSchema.parse({
+      decision: 'deny',
+      reason_code: 'TOOL_DENIED_BY_TENANT_POLICY',
+      reason_summary: 'denied',
+      matched_rules: [],
+    }).decision).toBe('deny');
+
+    expect(tenantAgentAdmissionSchema.parse({
+      admission_id: 'admission_1',
+      tenant_id: 'tenant_1',
+      task_run_id: 'task_1',
+      policy_snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
+      status: 'reserved',
+      acquired_at: '2025-01-01T00:00:00.000Z',
+      updated_at: '2025-01-01T00:00:00.000Z',
+    }).status).toBe('reserved');
   });
 
   it('validates control-plane management API DTOs', () => {

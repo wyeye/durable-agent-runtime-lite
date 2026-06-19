@@ -21,6 +21,7 @@
     "format": "prettier --write .",
     "db:migrate": "tsx db/migrate.ts",
     "seed:examples": "tsx scripts/seed-examples.ts",
+    "admission:reconcile": "tsx scripts/reconcile-tenant-agent-admissions.ts",
     "smoke:db-registry": "tsx scripts/smoke-db-registry.ts",
     "smoke:temporal-db-e2e": "tsx scripts/smoke-temporal-db-e2e.ts",
     "smoke:control-plane-api-e2e": "tsx scripts/smoke-control-plane-api-e2e.ts",

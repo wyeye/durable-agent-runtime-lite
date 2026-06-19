@@ -252,8 +252,16 @@ export async function piDurableAgentWorkflow(
     task_run_id: input.task_run_id,
     workflow_id: input.workflow_id ?? currentWorkflowId,
     request_id: input.request_id,
+    ...(input.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: input.tenant_policy_snapshot_ref } : {}),
+    ...(input.tenant_policy_hash ? { tenant_policy_hash: input.tenant_policy_hash } : {}),
+    ...(input.tenant_admission_id ? { tenant_admission_id: input.tenant_admission_id } : {}),
   };
   const executionPlan = await loadAgentExecutionPlanByRefActivity(input.agent_execution_plan_ref, input.tenant_id);
+  const executionContext: ActivityContext = {
+    ...context,
+    execution_plan_ref: executionPlan.execution_plan_ref,
+    execution_plan_hash: executionPlan.execution_plan_hash,
+  };
   const runtimeConfig = await loadPiRuntimeConfigActivity();
   const continueAsNewSegmentThreshold = input.continue_as_new_segment_threshold
     ?? runtimeConfig.max_segments_before_continue_as_new;
@@ -285,7 +293,7 @@ export async function piDurableAgentWorkflow(
     ledger = { ...ledger, elapsed_duration_ms: elapsedMs(startedAtMs) };
     const exhaustedBeforeSegment = budgetExceededForLedger(executionPlan.budget, ledger);
     if (exhaustedBeforeSegment) {
-      return await budgetExceeded(agentRun.agent_run_id, exhaustedBeforeSegment.code, exhaustedBeforeSegment.message, contextSnapshotRef, ledger, context);
+      return await budgetExceeded(agentRun.agent_run_id, exhaustedBeforeSegment.code, exhaustedBeforeSegment.message, contextSnapshotRef, ledger, executionContext);
     }
     const remainingBeforeSegment = remainingBudget(executionPlan.budget, ledger);
 
@@ -297,7 +305,7 @@ export async function piDurableAgentWorkflow(
       resume_reason: segmentIndex === 0 ? 'initial_prompt' : 'durable_boundary_resolved',
       segment_index: segmentIndex,
       budget_remaining: remainingBeforeSegment,
-      request_context: context,
+      request_context: executionContext,
     });
 
     const beforeSnapshotRef = contextSnapshotRef;
@@ -322,7 +330,7 @@ export async function piDurableAgentWorkflow(
 
     const postSegmentBudget = budgetExceededForLedger(executionPlan.budget, ledger);
     if (postSegmentBudget && segment.status !== 'completed') {
-      return await budgetExceeded(agentRun.agent_run_id, postSegmentBudget.code, postSegmentBudget.message, contextSnapshotRef, ledger, context);
+        return await budgetExceeded(agentRun.agent_run_id, postSegmentBudget.code, postSegmentBudget.message, contextSnapshotRef, ledger, executionContext);
     }
 
     if (segment.status === 'completed') {
@@ -332,7 +340,7 @@ export async function piDurableAgentWorkflow(
         completed: true,
         usage: usageFromLedger(ledger),
       });
-      await updateTaskRunStatusActivity({ ...context, status: 'completed' });
+      await updateTaskRunStatusActivity({ ...executionContext, status: 'completed' });
       await updateAgentStepActivity({
         stable_step_key: stableStepKey(agentRun.agent_run_id, segmentIndex),
         segment_status: 'completed',
@@ -350,7 +358,7 @@ export async function piDurableAgentWorkflow(
     if (segment.status === 'tool_requested') {
       await updateAgentRunActivity({ agent_run_id: agentRun.agent_run_id, status: 'waiting_tool' });
       const toolOutcome = await executeProposedTools({
-        context,
+        context: executionContext,
         executionPlan,
         agentRunId: agentRun.agent_run_id,
         segmentIndex,
@@ -367,7 +375,7 @@ export async function piDurableAgentWorkflow(
         previous_context_snapshot_ref: segment.context_snapshot_ref,
         tool_results: toolOutcome.results,
         max_context_bytes: executionPlan.budget.max_context_bytes,
-        request_context: context,
+        request_context: executionContext,
       });
       contextSnapshotRef = afterToolSnapshotRef;
       ledger = { ...ledger, context_bytes: afterToolSnapshotRef.byte_size };
@@ -388,12 +396,12 @@ export async function piDurableAgentWorkflow(
         usage: usageFromLedger(ledger),
       });
       segmentIndex += 1;
-      await maybeContinueAsNew(input, context, agentRun.agent_run_id, contextSnapshotRef, ledger, segmentIndex, continueAsNewSegmentThreshold, startedAtMs);
+      await maybeContinueAsNew(input, executionContext, agentRun.agent_run_id, contextSnapshotRef, ledger, segmentIndex, continueAsNewSegmentThreshold, startedAtMs);
       continue;
     }
 
     if (segment.status === 'user_input_required') {
-      const humanTask = await createHumanTaskActivity(context, {
+      const humanTask = await createHumanTaskActivity(executionContext, {
         kind: 'user_input',
         payload: {
           agent_run_id: agentRun.agent_run_id,
@@ -421,7 +429,7 @@ export async function piDurableAgentWorkflow(
         response: response.response,
         responded_by: response.responded_by,
         max_context_bytes: executionPlan.budget.max_context_bytes,
-        request_context: context,
+        request_context: executionContext,
       });
       contextSnapshotRef = afterUserSnapshotRef;
       ledger = { ...ledger, context_bytes: afterUserSnapshotRef.byte_size };
@@ -434,7 +442,7 @@ export async function piDurableAgentWorkflow(
       });
       await updateAgentRunActivity({ agent_run_id: agentRun.agent_run_id, status: 'running' });
       segmentIndex += 1;
-      await maybeContinueAsNew(input, context, agentRun.agent_run_id, contextSnapshotRef, ledger, segmentIndex, continueAsNewSegmentThreshold, startedAtMs);
+      await maybeContinueAsNew(input, executionContext, agentRun.agent_run_id, contextSnapshotRef, ledger, segmentIndex, continueAsNewSegmentThreshold, startedAtMs);
       continue;
     }
 
@@ -442,15 +450,15 @@ export async function piDurableAgentWorkflow(
       const beforeHandoffLedger = ledger;
       ledger = { ...ledger, handoff_count: ledger.handoff_count + 1 };
       if (beforeHandoffLedger.handoff_count >= executionPlan.budget.max_handoffs) {
-        return await budgetExceeded(agentRun.agent_run_id, 'AGENT_HANDOFF_BUDGET_EXCEEDED', 'Handoff budget exceeded', contextSnapshotRef, ledger, context);
+        return await budgetExceeded(agentRun.agent_run_id, 'AGENT_HANDOFF_BUDGET_EXCEEDED', 'Handoff budget exceeded', contextSnapshotRef, ledger, executionContext);
       }
       if (!executionPlan.allowed_handoffs.includes(segment.target_execution_plan_ref)) {
-        return await failAgentRun(agentRun.agent_run_id, 'HANDOFF_DENIED', `Unauthorized handoff target: ${segment.target_execution_plan_ref}`, contextSnapshotRef, usageFromLedger(ledger), context);
+        return await failAgentRun(agentRun.agent_run_id, 'HANDOFF_DENIED', `Unauthorized handoff target: ${segment.target_execution_plan_ref}`, contextSnapshotRef, usageFromLedger(ledger), executionContext);
       }
 
       await updateAgentRunActivity({ agent_run_id: agentRun.agent_run_id, status: 'handing_off', handoff_count: ledger.handoff_count });
       const handoff = await executeWorkflowHandoff({
-        context,
+        context: executionContext,
         agentRunId: agentRun.agent_run_id,
         segmentIndex,
         handoffIndex: ledger.handoff_count,
@@ -473,7 +481,7 @@ export async function piDurableAgentWorkflow(
           handoff.error_message ?? 'Workflow handoff failed',
           contextSnapshotRef,
           usageFromLedger(ledger),
-          context,
+          executionContext,
         );
       }
       const handoffResult = handoffToolResult(segment, handoff);
@@ -482,7 +490,7 @@ export async function piDurableAgentWorkflow(
         previous_context_snapshot_ref: segment.context_snapshot_ref,
         tool_results: [handoffResult],
         max_context_bytes: executionPlan.budget.max_context_bytes,
-        request_context: context,
+        request_context: executionContext,
       });
       contextSnapshotRef = afterHandoffSnapshotRef;
       ledger = { ...ledger, context_bytes: afterHandoffSnapshotRef.byte_size };
@@ -496,7 +504,7 @@ export async function piDurableAgentWorkflow(
       segmentIndex += 1;
       await maybeContinueAsNew(
         input,
-        context,
+        executionContext,
         agentRun.agent_run_id,
         contextSnapshotRef,
         ledger,
@@ -512,11 +520,11 @@ export async function piDurableAgentWorkflow(
     }
 
     if (segment.status === 'stopped_by_budget') {
-      return await budgetExceeded(agentRun.agent_run_id, segment.error_code, segment.error_message, contextSnapshotRef, ledger, context);
+      return await budgetExceeded(agentRun.agent_run_id, segment.error_code, segment.error_message, contextSnapshotRef, ledger, executionContext);
     }
 
     if (segment.status === 'failed' || segment.status === 'cancelled') {
-      return await failAgentRun(agentRun.agent_run_id, segment.error_code, segment.error_message, contextSnapshotRef, usageFromLedger(ledger), context);
+      return await failAgentRun(agentRun.agent_run_id, segment.error_code, segment.error_message, contextSnapshotRef, usageFromLedger(ledger), executionContext);
     }
   }
 
@@ -526,7 +534,7 @@ export async function piDurableAgentWorkflow(
     'Pi durable agent workflow exceeded max segment budget',
     contextSnapshotRef,
     ledger,
-    context,
+    executionContext,
   );
 }
 
@@ -770,6 +778,9 @@ async function maybeContinueAsNew(
     started_at_ms: startedAtMs,
     continue_as_new_segment_threshold: maxSegmentsBeforeContinueAsNew,
     ...(handoffChain ? { handoff_chain: handoffChain } : {}),
+    ...(originalInput.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: originalInput.tenant_policy_snapshot_ref } : {}),
+    ...(originalInput.tenant_policy_hash ? { tenant_policy_hash: originalInput.tenant_policy_hash } : {}),
+    ...(originalInput.tenant_admission_id ? { tenant_admission_id: originalInput.tenant_admission_id } : {}),
     request_id: context.request_id,
     ...(originalInput.trace_id ? { trace_id: originalInput.trace_id } : {}),
   });

@@ -11,9 +11,11 @@ import {
   type RouterPreviewResponse,
   type TaskRun,
   type WorkflowStartRequest,
+  type TenantRuntimePolicySnapshot,
 } from '@dar/contracts';
 import {
   AuditEventRepository,
+  AgentExecutionPlanRepository,
   AgentRunRepository,
   AgentStepRepository,
   buildDbFlowSnapshotRef,
@@ -21,6 +23,9 @@ import {
   createDb,
   FlowExecutionPlanRepository,
   HumanTaskRepository,
+  TenantAgentAdmissionRepository,
+  TenantRuntimePolicyResolver,
+  TenantRuntimePolicyError,
   TaskRunRepository,
   ToolCallLogRepository,
   type Database,
@@ -51,6 +56,10 @@ export interface TaskServiceOptions {
   allowMockRouteFallback?: boolean;
   buildFlowSnapshotRef?: (flowId: string, version: number) => string;
   executionPlanResolver?: ExecutionPlanResolver;
+  agentExecutionPlanResolver?: AgentExecutionPlanResolver;
+  tenantPolicyResolver?: RuntimeTenantPolicyResolver;
+  admissionRepository?: TenantAgentAdmissionRepository;
+  tenantPolicyMode?: 'required' | 'optional';
 }
 
 export interface ExecutionPlanResolver {
@@ -59,7 +68,27 @@ export interface ExecutionPlanResolver {
     userId: string;
     flowId: string;
     flowVersion: number;
-  }): Promise<{ executionPlanRef: string; flowSha256: string } | undefined>;
+  }): Promise<{ executionPlanRef: string; executionPlanHash: string; flowSha256: string; hasAgentSteps: boolean } | undefined>;
+}
+
+export interface AgentExecutionPlanResolver {
+  resolve(input: {
+    tenantId: string;
+    userId: string;
+    executionPlanRef: string;
+  }): Promise<{ executionPlanRef: string; executionPlanHash: string } | undefined>;
+}
+
+export interface RuntimeTenantPolicyResolver {
+  resolve(input: {
+    tenant_id: string;
+    user_id: string;
+    execution_plan_ref: string;
+    execution_plan_hash?: string;
+    execution_plan_type: 'flow' | 'agent';
+    request_id?: string;
+    mode?: 'required' | 'optional';
+  }): Promise<{ snapshot: TenantRuntimePolicySnapshot }>;
 }
 
 export class TaskService {
@@ -69,6 +98,10 @@ export class TaskService {
   private readonly allowMockRouteFallback: boolean;
   private readonly buildFlowSnapshotRef: (flowId: string, version: number) => string;
   private readonly executionPlanResolver: ExecutionPlanResolver | undefined;
+  private readonly agentExecutionPlanResolver: AgentExecutionPlanResolver | undefined;
+  private readonly tenantPolicyResolver: RuntimeTenantPolicyResolver | undefined;
+  private readonly admissionRepository: TenantAgentAdmissionRepository | undefined;
+  private readonly tenantPolicyMode: 'required' | 'optional';
 
   constructor(options: TaskServiceOptions = {}) {
     this.routeSource = options.routeSource ?? new MemoryRouteSpecSource(options.routes);
@@ -79,6 +112,10 @@ export class TaskService {
       options.buildFlowSnapshotRef ??
       (this.allowMockRouteFallback ? buildLocalFlowSnapshotRef : buildDbFlowSnapshotRef);
     this.executionPlanResolver = options.executionPlanResolver;
+    this.agentExecutionPlanResolver = options.agentExecutionPlanResolver;
+    this.tenantPolicyResolver = options.tenantPolicyResolver;
+    this.admissionRepository = options.admissionRepository;
+    this.tenantPolicyMode = options.tenantPolicyMode ?? 'optional';
   }
 
   async preview(input: unknown): Promise<RouterPreviewResponse> {
@@ -105,6 +142,23 @@ export class TaskService {
     const decision = routeResult.route_decision;
     const executionPlan = decision.decision === 'matched'
       ? await this.resolveExecutionPlan(normalized.tenant_id, normalized.user_id, decision.flow_id, decision.flow_version)
+      : undefined;
+    const policySnapshot = executionPlan
+      ? await this.resolveTenantPolicySnapshot({
+          tenantId: normalized.tenant_id,
+          userId: normalized.user_id,
+          executionPlanRef: executionPlan.executionPlanRef,
+          executionPlanHash: executionPlan.executionPlanHash,
+          executionPlanType: 'flow',
+          requestId: normalized.request_id,
+        })
+      : undefined;
+    const admission = executionPlan?.hasAgentSteps && policySnapshot
+      ? await this.reserveAdmission({
+          tenantId: normalized.tenant_id,
+          taskRunId,
+          policySnapshot,
+        })
       : undefined;
 
     if (decision.decision !== 'matched' && !this.allowMockRouteFallback) {
@@ -147,6 +201,9 @@ export class TaskService {
           ...(!executionPlan ? { flow_snapshot_ref: this.buildFlowSnapshotRef(decision.flow_id, decision.flow_version) } : {}),
           execution_plan_ref: executionPlan?.executionPlanRef,
           flow_sha256: executionPlan?.flowSha256,
+          tenant_policy_snapshot_ref: policySnapshot?.snapshot_ref,
+          tenant_policy_hash: policySnapshot?.snapshot_hash,
+          tenant_admission_id: admission?.admission_id,
           input: normalized.input,
           request_id: normalized.request_id,
           trace_id: normalized.trace_id,
@@ -171,6 +228,9 @@ export class TaskService {
       flow_id: decision.decision === 'matched' ? decision.flow_id : undefined,
       flow_version: decision.decision === 'matched' ? decision.flow_version : undefined,
       agent_id: decision.decision === 'agent_fallback' ? decision.agent_id : undefined,
+      tenant_policy_snapshot_ref: policySnapshot?.snapshot_ref,
+      tenant_policy_hash: policySnapshot?.snapshot_hash,
+      tenant_admission_id: admission?.admission_id,
     });
 
     await this.taskStore.create({
@@ -184,22 +244,39 @@ export class TaskService {
         workflow_id: workflowId,
         status: queuedResponse.status,
         execution_plan_ref: executionPlan?.executionPlanRef,
+        tenant_policy_snapshot_ref: policySnapshot?.snapshot_ref,
+        tenant_policy_hash: policySnapshot?.snapshot_hash,
+        tenant_admission_id: admission?.admission_id,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }),
       input: normalized.input,
       routeResult,
       ...(executionPlan?.executionPlanRef ? { executionPlanRef: executionPlan.executionPlanRef } : {}),
+      ...(policySnapshot ? {
+        tenantPolicySnapshotRef: policySnapshot.snapshot_ref,
+        tenantPolicyHash: policySnapshot.snapshot_hash,
+      } : {}),
+      ...(admission ? { tenantAdmissionId: admission.admission_id } : {}),
     });
 
     try {
       const workflowStart = await this.workflowStarter.start(workflowRequest);
       await this.taskStore.updateWorkflowStart(taskRunId, workflowStart);
+      if (admission) {
+        await this.admissionRepository?.activate(admission.admission_id, {
+          workflowId,
+          ...(workflowStart.run_id ? { workflowRunId: workflowStart.run_id } : {}),
+        });
+      }
       return runTaskResponseSchema.parse({
         ...queuedResponse,
         workflow_start: workflowStart,
       });
     } catch (error) {
+      if (admission) {
+        await this.admissionRepository?.release(admission.admission_id, 'workflow_start_failed');
+      }
       await this.taskStore.updateStatus(taskRunId, {
         status: 'failed_to_start',
         errorCode: 'WORKFLOW_START_FAILED',
@@ -229,6 +306,20 @@ export class TaskService {
     }
     const taskRunId = createTaskRunId();
     const workflowId = buildTaskWorkflowId(parsed.tenant_id, taskRunId);
+    const agentPlan = await this.resolveAgentExecutionPlan(parsed.tenant_id, parsed.user_id, parsed.agent_execution_plan_ref);
+    const policySnapshot = await this.resolveTenantPolicySnapshot({
+      tenantId: parsed.tenant_id,
+      userId: parsed.user_id,
+      executionPlanRef: agentPlan.executionPlanRef,
+      executionPlanHash: agentPlan.executionPlanHash,
+      executionPlanType: 'agent',
+      requestId: parsed.request_id,
+    });
+    const admission = await this.reserveAdmission({
+      tenantId: parsed.tenant_id,
+      taskRunId,
+      ...(policySnapshot ? { policySnapshot } : {}),
+    });
     const workflowRequest: WorkflowStartRequest = {
       tenant_id: parsed.tenant_id,
       user_id: parsed.user_id,
@@ -236,6 +327,11 @@ export class TaskService {
       workflow_type: 'GenericAgentWorkflow',
       workflow_id: workflowId,
       agent_execution_plan_ref: parsed.agent_execution_plan_ref,
+      ...(policySnapshot ? {
+        tenant_policy_snapshot_ref: policySnapshot.snapshot_ref,
+        tenant_policy_hash: policySnapshot.snapshot_hash,
+      } : {}),
+      ...(admission ? { tenant_admission_id: admission.admission_id } : {}),
       input: parsed.input,
       request_id: parsed.request_id,
       ...(parsed.trace_id ? { trace_id: parsed.trace_id } : {}),
@@ -253,6 +349,9 @@ export class TaskService {
       status: 'queued',
       route_decision: routeDecision,
       agent_id: parsed.agent_execution_plan_ref,
+      tenant_policy_snapshot_ref: policySnapshot?.snapshot_ref,
+      tenant_policy_hash: policySnapshot?.snapshot_hash,
+      tenant_admission_id: admission?.admission_id,
     });
 
     await this.taskStore.create({
@@ -264,19 +363,36 @@ export class TaskService {
         workflow_id: workflowId,
         status: 'queued',
         execution_plan_ref: parsed.agent_execution_plan_ref,
+        tenant_policy_snapshot_ref: policySnapshot?.snapshot_ref,
+        tenant_policy_hash: policySnapshot?.snapshot_hash,
+        tenant_admission_id: admission?.admission_id,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }),
       input: parsed.input,
       routeResult: { route_decision: routeDecision, candidates: [] },
       executionPlanRef: parsed.agent_execution_plan_ref,
+      ...(policySnapshot ? {
+        tenantPolicySnapshotRef: policySnapshot.snapshot_ref,
+        tenantPolicyHash: policySnapshot.snapshot_hash,
+      } : {}),
+      ...(admission ? { tenantAdmissionId: admission.admission_id } : {}),
     });
 
     try {
       const workflowStart = await this.workflowStarter.start(workflowRequest);
       await this.taskStore.updateWorkflowStart(taskRunId, workflowStart);
+      if (admission) {
+        await this.admissionRepository?.activate(admission.admission_id, {
+          workflowId,
+          ...(workflowStart.run_id ? { workflowRunId: workflowStart.run_id } : {}),
+        });
+      }
       return runTaskResponseSchema.parse({ ...queuedResponse, workflow_start: workflowStart });
     } catch (error) {
+      if (admission) {
+        await this.admissionRepository?.release(admission.admission_id, 'workflow_start_failed');
+      }
       await this.taskStore.updateStatus(taskRunId, {
         status: 'failed_to_start',
         errorCode: 'WORKFLOW_START_FAILED',
@@ -291,7 +407,7 @@ export class TaskService {
     userId: string,
     flowId: string,
     flowVersion: number,
-  ): Promise<{ executionPlanRef: string; flowSha256: string } | undefined> {
+  ): Promise<{ executionPlanRef: string; executionPlanHash: string; flowSha256: string; hasAgentSteps: boolean } | undefined> {
     if (!this.executionPlanResolver) {
       if (this.allowMockRouteFallback) {
         return undefined;
@@ -304,6 +420,84 @@ export class TaskService {
       throw new Error(`FlowExecutionPlan not found for ${flowId}@${flowVersion}`);
     }
     return plan;
+  }
+
+  private async resolveAgentExecutionPlan(
+    tenantId: string,
+    userId: string,
+    executionPlanRef: string,
+  ): Promise<{ executionPlanRef: string; executionPlanHash: string }> {
+    if (!this.agentExecutionPlanResolver) {
+      if (this.allowMockRouteFallback) {
+        return { executionPlanRef, executionPlanHash: '0'.repeat(64) };
+      }
+      throw new Error(`AgentExecutionPlan resolver is not configured for ${executionPlanRef}`);
+    }
+    const plan = await this.agentExecutionPlanResolver.resolve({ tenantId, userId, executionPlanRef });
+    if (!plan) {
+      throw new Error(`AgentExecutionPlan not found: ${executionPlanRef}`);
+    }
+    return plan;
+  }
+
+  private async resolveTenantPolicySnapshot(input: {
+    tenantId: string;
+    userId: string;
+    executionPlanRef: string;
+    executionPlanHash: string;
+    executionPlanType: 'flow' | 'agent';
+    requestId: string;
+  }): Promise<TenantRuntimePolicySnapshot | undefined> {
+    if (!this.tenantPolicyResolver) {
+      if (this.tenantPolicyMode === 'required') {
+        throw new TenantRuntimePolicyError('TENANT_RUNTIME_POLICY_NOT_FOUND', 'Tenant runtime policy resolver is not configured', 403);
+      }
+      return undefined;
+    }
+    const result = await this.tenantPolicyResolver.resolve({
+      tenant_id: input.tenantId,
+      user_id: input.userId,
+      execution_plan_ref: input.executionPlanRef,
+      execution_plan_hash: input.executionPlanHash,
+      execution_plan_type: input.executionPlanType,
+      request_id: input.requestId,
+      mode: this.tenantPolicyMode,
+    });
+    return result.snapshot;
+  }
+
+  private async reserveAdmission(input: {
+    tenantId: string;
+    taskRunId: string;
+    policySnapshot?: TenantRuntimePolicySnapshot;
+  }) {
+    if (!input.policySnapshot) {
+      if (this.tenantPolicyMode === 'required') {
+        throw new TenantRuntimePolicyError('TENANT_RUNTIME_POLICY_NOT_FOUND', 'Tenant runtime policy snapshot is required for admission', 403);
+      }
+      return undefined;
+    }
+    if (!this.admissionRepository) {
+      if (this.tenantPolicyMode === 'required') {
+        throw new TenantRuntimePolicyError('TENANT_AGENT_ADMISSION_UNAVAILABLE', 'Tenant admission repository is required', 503);
+      }
+      return undefined;
+    }
+    const result = await this.admissionRepository.reserve({
+      tenantId: input.tenantId,
+      taskRunId: input.taskRunId,
+      policySnapshotRef: input.policySnapshot.snapshot_ref,
+      maxConcurrentAgentRuns: input.policySnapshot.max_concurrent_agent_runs,
+    });
+    if (!result.accepted || !result.admission) {
+      throw new TenantRuntimePolicyError(
+        'TENANT_AGENT_CONCURRENCY_EXCEEDED',
+        'Tenant agent concurrency limit exceeded',
+        429,
+        { active_count: result.activeCount, max_concurrent_agent_runs: input.policySnapshot.max_concurrent_agent_runs },
+      );
+    }
+    return result.admission;
   }
 
   async get(taskRunId: string): Promise<TaskRun | undefined> {
@@ -422,6 +616,10 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
         taskStore: new DbTaskRunStore(new TaskRunRepository(db)),
         workflowStarter: createWorkflowStarter(config),
         executionPlanResolver: new DbExecutionPlanResolver(db),
+        agentExecutionPlanResolver: new DbAgentExecutionPlanResolver(db),
+        tenantPolicyResolver: new TenantRuntimePolicyResolver(db),
+        admissionRepository: new TenantAgentAdmissionRepository(db),
+        tenantPolicyMode: config.TENANT_RUNTIME_POLICY_MODE,
         allowMockRouteFallback: false,
         buildFlowSnapshotRef: buildDbFlowSnapshotRef,
       }),
@@ -464,11 +662,36 @@ export class DbExecutionPlanResolver implements ExecutionPlanResolver {
     userId: string;
     flowId: string;
     flowVersion: number;
-  }): Promise<{ executionPlanRef: string; flowSha256: string } | undefined> {
+  }): Promise<{ executionPlanRef: string; executionPlanHash: string; flowSha256: string; hasAgentSteps: boolean } | undefined> {
     void input.userId;
     const plan = await this.repository.getLatestForFlow(input.flowId, input.flowVersion, { tenantId: input.tenantId });
     return plan
-      ? { executionPlanRef: plan.execution_plan_ref, flowSha256: plan.flow_sha256 }
+      ? {
+          executionPlanRef: plan.execution_plan_ref,
+          executionPlanHash: plan.execution_plan_hash,
+          flowSha256: plan.flow_sha256,
+          hasAgentSteps: plan.agents.length > 0,
+        }
+      : undefined;
+  }
+}
+
+export class DbAgentExecutionPlanResolver implements AgentExecutionPlanResolver {
+  private readonly repository: AgentExecutionPlanRepository;
+
+  constructor(db: Kysely<Database>) {
+    this.repository = new AgentExecutionPlanRepository(db);
+  }
+
+  async resolve(input: {
+    tenantId: string;
+    userId: string;
+    executionPlanRef: string;
+  }): Promise<{ executionPlanRef: string; executionPlanHash: string } | undefined> {
+    void input.userId;
+    const plan = await this.repository.getByRef(input.executionPlanRef, { tenantId: input.tenantId });
+    return plan
+      ? { executionPlanRef: plan.execution_plan_ref, executionPlanHash: plan.execution_plan_hash }
       : undefined;
   }
 }

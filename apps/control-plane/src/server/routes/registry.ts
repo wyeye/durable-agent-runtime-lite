@@ -46,6 +46,12 @@ export async function registryRoutes(server: FastifyInstance, options: { service
     idParam: 'promptId',
     service: options.service,
   });
+  await registerRegistryResourceRoutes(server, {
+    resourceType: 'tenant_runtime_policy',
+    plural: 'tenant-runtime-policies',
+    idParam: 'tenantId',
+    service: options.service,
+  });
 
   server.post('/api/v1/releases/flow-route', {
     schema: { body: jsonSchema(flowRoutePublishSchema) },
