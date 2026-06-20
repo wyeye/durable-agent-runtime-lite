@@ -12,6 +12,7 @@ import {
   AuditEventRepository,
   FlowDefinitionRepository,
   FlowExecutionPlanRepository,
+  ModelPolicyRepository,
   RouteConfigRepository,
   TaskRunRepository,
   TenantAgentAdmissionRepository,
@@ -22,6 +23,7 @@ import {
   closeDb,
   createDb,
   hashJson,
+  hashModelPolicy,
   hashTenantRuntimePolicy,
   sql,
   upsertAgentSpec,
@@ -295,6 +297,13 @@ async function seedFlowAgentFixtures(db: Db, agentScenario: 'readonly_tool' | 'n
   const promptId = `tenant_deep_prompt_${agentScenario}`;
   const agentId = `tenant_deep_agent_${agentScenario}`;
   const flowId = `tenant_deep_flow_${agentScenario}`;
+  const modelPolicy = `deterministic:${agentScenario}`;
+  const publishedModelPolicy = await seedModelPolicy(
+    db,
+    `tenant_deep_model_${agentScenario}`,
+    modelPolicy,
+  );
+  const modelPolicyHash = hashModelPolicy(publishedModelPolicy);
   await upsertPromptDefinition(db, {
     prompt_id: promptId,
     version: 1,
@@ -307,7 +316,12 @@ async function seedFlowAgentFixtures(db: Db, agentScenario: 'readonly_tool' | 'n
     agent_id: agentId,
     version: 1,
     prompt_ref: `${promptId}@1`,
-    model_policy: `deterministic:${agentScenario}`,
+    model_policy: modelPolicy,
+    model_policy_ref: {
+      model_policy_id: publishedModelPolicy.model_policy_id,
+      model_policy_version: publishedModelPolicy.version,
+      model_policy_hash: modelPolicyHash,
+    },
     allowed_tools: ['knowledge.search@1.0.0'],
     allowed_handoffs: [],
     max_steps: 4,
@@ -355,6 +369,9 @@ async function seedHandoffAgentPlan(db: Db): Promise<string> {
   await ensurePolicyAllowsHandoff(db, tenantId);
   const promptId = 'tenant_deep_handoff_prompt';
   const agentId = 'tenant_deep_handoff_agent';
+  const modelPolicy = 'deterministic:handoff';
+  const publishedModelPolicy = await seedModelPolicy(db, 'tenant_deep_model_handoff', modelPolicy);
+  const modelPolicyHash = hashModelPolicy(publishedModelPolicy);
   await upsertPromptDefinition(db, {
     prompt_id: promptId,
     version: 1,
@@ -367,7 +384,12 @@ async function seedHandoffAgentPlan(db: Db): Promise<string> {
     agent_id: agentId,
     version: 1,
     prompt_ref: `${promptId}@1`,
-    model_policy: 'deterministic:handoff',
+    model_policy: modelPolicy,
+    model_policy_ref: {
+      model_policy_id: publishedModelPolicy.model_policy_id,
+      model_policy_version: publishedModelPolicy.version,
+      model_policy_hash: modelPolicyHash,
+    },
     allowed_tools: ['knowledge.search@1.0.0'],
     allowed_handoffs: ['db://flow-execution-plan/plan_handoff'],
     max_steps: 4,
@@ -382,6 +404,69 @@ async function seedHandoffAgentPlan(db: Db): Promise<string> {
     operatorId: 'tenant-deep-smoke',
   });
   return plan.execution_plan_ref;
+}
+
+async function seedModelPolicy(db: Db, modelPolicyId: string, displayPolicy: string) {
+  const repository = new ModelPolicyRepository(db);
+  const existing = await repository.getByIdAndVersion(modelPolicyId, 1, { tenantId });
+  if (existing?.status === 'published' || existing?.status === 'gray') {
+    return existing;
+  }
+  if (existing) {
+    throw new Error(
+      `ModelPolicy ${modelPolicyId}@1 already exists with non-executable status ${existing.status}`,
+    );
+  }
+  await repository.createDraft(
+    {
+      model_policy_id: modelPolicyId,
+      version: 1,
+      status: 'draft',
+      protocol: 'dar_generate',
+      targets: [
+        {
+          target_id: `${modelPolicyId}_primary`,
+          gateway_profile: 'local-mock',
+          model_id: displayPolicy,
+          priority: 0,
+          enabled: true,
+          capabilities: ['text', 'tools', 'usage'],
+        },
+      ],
+      retry_policy: {
+        max_attempts_per_target: 1,
+        retryable_status_codes: [429, 500, 502, 503, 504],
+        retry_on_timeout: true,
+        retry_on_network_error: true,
+        backoff_ms: 10,
+        max_backoff_ms: 50,
+      },
+      fallback_policy: {
+        enabled: false,
+        ordered_target_ids: [],
+        eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
+        stop_on_auth_error: true,
+        stop_on_validation_error: true,
+        stop_on_policy_denial: true,
+      },
+      request_policy: {
+        temperature: 0,
+        top_p: 1,
+        max_output_tokens: 1000,
+        initial_tool_choice_mode: 'auto',
+        after_tool_result_tool_choice_mode: 'auto',
+        response_format: 'text',
+        allow_parallel_tool_calls: false,
+      },
+      revision: 1,
+    },
+    { tenantId, operatorId: 'tenant-deep-smoke' },
+  );
+  return repository.publish(modelPolicyId, 1, {
+    tenantId,
+    operatorId: 'tenant-deep-smoke',
+    releaseNote: `tenant deep smoke ${displayPolicy}`,
+  });
 }
 
 async function ensurePolicyAllowsHandoff(db: Db, tenantIdValue: string): Promise<void> {

@@ -6,6 +6,7 @@ import { tenantRuntimePolicySchema } from '@dar/contracts';
 import {
   AgentExecutionPlanRepository,
   AgentRunRepository,
+  ModelPolicyRepository,
   TaskRunRepository,
   TenantAgentAdmissionRepository,
   TenantRuntimePolicyRepository,
@@ -13,6 +14,7 @@ import {
   ToolManifestRepository,
   closeDb,
   createDb,
+  hashModelPolicy,
   upsertAgentSpec,
   upsertPromptDefinition,
 } from '@dar/db';
@@ -136,6 +138,12 @@ async function seedAgentPlan(db: ReturnType<typeof createDb>, scenarioValue: str
   const promptId = `tenant_policy_prompt_${scenarioValue}`;
   const agentId = `tenant_policy_agent_${scenarioValue}`;
   const modelPolicy = scenarioValue === 'concurrency' ? 'deterministic:need_user' : 'deterministic:readonly_tool';
+  const publishedModelPolicy = await seedModelPolicy(
+    db,
+    `tenant_policy_model_${scenarioValue}`,
+    modelPolicy,
+  );
+  const modelPolicyHash = hashModelPolicy(publishedModelPolicy);
   await seedTools(db);
   await upsertPromptDefinition(db, {
     prompt_id: promptId,
@@ -150,6 +158,11 @@ async function seedAgentPlan(db: ReturnType<typeof createDb>, scenarioValue: str
     version: 1,
     prompt_ref: `${promptId}@1`,
     model_policy: modelPolicy,
+    model_policy_ref: {
+      model_policy_id: publishedModelPolicy.model_policy_id,
+      model_policy_version: publishedModelPolicy.version,
+      model_policy_hash: modelPolicyHash,
+    },
     allowed_tools: ['knowledge.search@1.0.0', 'record.write.mock@1.0.0'],
     allowed_handoffs: [],
     max_steps: 4,
@@ -164,6 +177,73 @@ async function seedAgentPlan(db: ReturnType<typeof createDb>, scenarioValue: str
     operatorId: 'tenant-policy-smoke',
   });
   return plan.execution_plan_ref;
+}
+
+async function seedModelPolicy(
+  db: ReturnType<typeof createDb>,
+  modelPolicyId: string,
+  displayPolicy: string,
+) {
+  const repository = new ModelPolicyRepository(db);
+  const existing = await repository.getByIdAndVersion(modelPolicyId, 1, { tenantId });
+  if (existing?.status === 'published' || existing?.status === 'gray') {
+    return existing;
+  }
+  if (existing) {
+    throw new Error(
+      `ModelPolicy ${modelPolicyId}@1 already exists with non-executable status ${existing.status}`,
+    );
+  }
+  await repository.createDraft(
+    {
+      model_policy_id: modelPolicyId,
+      version: 1,
+      status: 'draft',
+      protocol: 'dar_generate',
+      targets: [
+        {
+          target_id: `${modelPolicyId}_primary`,
+          gateway_profile: 'local-mock',
+          model_id: displayPolicy,
+          priority: 0,
+          enabled: true,
+          capabilities: ['text', 'tools', 'usage'],
+        },
+      ],
+      retry_policy: {
+        max_attempts_per_target: 1,
+        retryable_status_codes: [429, 500, 502, 503, 504],
+        retry_on_timeout: true,
+        retry_on_network_error: true,
+        backoff_ms: 10,
+        max_backoff_ms: 50,
+      },
+      fallback_policy: {
+        enabled: false,
+        ordered_target_ids: [],
+        eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
+        stop_on_auth_error: true,
+        stop_on_validation_error: true,
+        stop_on_policy_denial: true,
+      },
+      request_policy: {
+        temperature: 0,
+        top_p: 1,
+        max_output_tokens: 1000,
+        initial_tool_choice_mode: 'auto',
+        after_tool_result_tool_choice_mode: 'auto',
+        response_format: 'text',
+        allow_parallel_tool_calls: false,
+      },
+      revision: 1,
+    },
+    { tenantId, operatorId: 'tenant-policy-smoke' },
+  );
+  return repository.publish(modelPolicyId, 1, {
+    tenantId,
+    operatorId: 'tenant-policy-smoke',
+    releaseNote: `tenant policy smoke ${displayPolicy}`,
+  });
 }
 
 async function seedTools(db: ReturnType<typeof createDb>): Promise<void> {

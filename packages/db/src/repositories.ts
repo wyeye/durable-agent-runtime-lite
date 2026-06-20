@@ -1206,13 +1206,10 @@ export class AgentExecutionPlanRepository {
 
   async createForAgent(input: BuildAgentExecutionPlanInput): Promise<AgentExecutionPlan> {
     const plan = await buildAgentExecutionPlan(this.db, input);
-    const existing = await this.getByAgentVersion(plan.agent_id, plan.agent_version, {
+    const existing = await this.findMatchingExistingPlan(plan.agent_id, plan.agent_version, {
       tenantId: plan.tenant_id,
-    });
-    if (
-      existing &&
-      agentExecutionPlanContentHash(existing) === agentExecutionPlanContentHash(plan)
-    ) {
+    }, agentExecutionPlanContentHash(plan));
+    if (existing) {
       return existing;
     }
 
@@ -1248,6 +1245,36 @@ export class AgentExecutionPlanRepository {
       .returningAll()
       .executeTakeFirstOrThrow();
     return mapAgentExecutionPlan(saved);
+  }
+
+  private async findMatchingExistingPlan(
+    agentId: string,
+    version: number,
+    options: RepositoryTenantOptions,
+    expectedContentHash: string,
+  ): Promise<AgentExecutionPlan | undefined> {
+    const rows = await this.db
+      .selectFrom('agent_execution_plan')
+      .selectAll()
+      .where('tenant_id', '=', tenant(options))
+      .where('agent_id', '=', agentId)
+      .where('agent_version', '=', version)
+      .orderBy('generated_at', 'desc')
+      .execute();
+    for (const row of rows) {
+      try {
+        const existing = mapAgentExecutionPlan(row);
+        if (agentExecutionPlanContentHash(existing) === expectedContentHash) {
+          return existing;
+        }
+      } catch (error) {
+        if (isLegacyAgentExecutionPlanModelPolicyParseError(error)) {
+          continue;
+        }
+        throw error;
+      }
+    }
+    return undefined;
   }
 
   async getByRef(
@@ -5176,6 +5203,33 @@ function mapAgentExecutionPlan(row: Selectable<AgentExecutionPlanTable>): AgentE
     throw new Error(`AgentExecutionPlan hash mismatch: ${plan.execution_plan_ref}`);
   }
   return plan;
+}
+
+function isLegacyAgentExecutionPlanModelPolicyParseError(error: unknown): boolean {
+  if (!(error instanceof Error) || error.name !== 'ZodError') {
+    return false;
+  }
+  const issues = (error as { issues?: Array<{ code?: string; path?: unknown[]; message?: string }> })
+    .issues;
+  if (!Array.isArray(issues) || issues.length === 0) {
+    return false;
+  }
+  const legacyMissingPaths = new Set([
+    'model_policy_id',
+    'model_policy_version',
+    'model_policy_hash',
+    'resolved_model_policy',
+    'plan.model_policy_id',
+    'plan.model_policy_version',
+    'plan.model_policy_hash',
+    'plan.resolved_model_policy',
+  ]);
+  return issues.every((issue) =>
+    issue.code === 'invalid_type'
+    && typeof issue.message === 'string'
+    && issue.message.includes('received undefined')
+    && legacyMissingPaths.has((issue.path ?? []).join('.')),
+  );
 }
 
 function mapModelPolicy(row: Selectable<ModelPolicyTable>): ModelPolicy {
