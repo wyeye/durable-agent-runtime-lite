@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
+  AgentExecutionPlan,
+  AgentSpec,
   EvaluationAggregateResult,
   EvaluationCandidateBundle,
   EvaluationCase,
@@ -14,8 +16,14 @@ import type {
   EvaluationRun,
   EvaluationSubjectSnapshot,
   EvaluationSubjectType,
+  ModelPolicy,
+  PromptDefinition,
+  ResolvedAgentPlan,
+  ResolvedModelPolicy,
 } from '@dar/contracts';
 import {
+  agentBudgetSchema,
+  agentExecutionPlanSchema,
   evaluationAggregateResultSchema,
   evaluationCandidateBundleSchema,
   evaluationCaseResultSchema,
@@ -23,10 +31,14 @@ import {
   evaluationComparisonSchema,
   evaluationDatasetSchema,
   evaluationExecutionPlanSchema,
+  evaluationGateThresholdsSchema,
   evaluationGateDecisionSchema,
   evaluationGateOverrideSchema,
   evaluationGatePolicySchema,
   evaluationMetricResultSchema,
+  modelPolicyRefSchema,
+  resolvedAgentPlanSchema,
+  resolvedModelPolicySchema,
   evaluationRunSchema,
   evaluationSubjectSnapshotSchema,
   type EvaluationExecutionPlan,
@@ -50,8 +62,12 @@ import {
   AgentSpecRepository,
   AuditEventRepository,
   hashJson,
+  hashModelPolicy,
+  ModelPolicyRepository,
+  parseAgentOutputSchema,
   PromptDefinitionRepository,
   stableStringify,
+  ToolManifestRepository,
 } from './repositories.js';
 import { TenantRuntimePolicyResolver } from './tenant-policy.js';
 import { withTransaction } from './index.js';
@@ -107,8 +123,16 @@ export interface EvaluationSubjectSnapshotBuildInput {
   primarySubjectType: EvaluationSubjectType;
   primarySubjectId: string;
   primarySubjectVersion: number;
+  primarySubjectHash: string;
   agentId: string;
   agentVersion: number;
+  agentHash?: string;
+  promptId?: string;
+  promptVersion?: number;
+  promptHash?: string;
+  modelPolicyId?: string;
+  modelPolicyVersion?: number;
+  modelPolicyHash?: string;
   userId: string;
   requestId: string;
 }
@@ -829,37 +853,12 @@ export class EvaluationSubjectSnapshotBuilder {
   constructor(private readonly db: Kysely<Database>) {}
 
   async build(input: EvaluationSubjectSnapshotBuildInput): Promise<EvaluationSubjectSnapshot> {
-    const agentPlan = await new AgentExecutionPlanRepository(this.db).createForAgent({
-      agentId: input.agentId,
-      agentVersion: input.agentVersion,
-      tenantId: input.tenantId,
-      operatorId: input.userId,
-    });
-    const agent = await new AgentSpecRepository(this.db).getByIdAndVersion(input.agentId, input.agentVersion, {
-      tenantId: input.tenantId,
-    });
-    if (!agent) {
-      throw new EvaluationRepositoryError('EVALUATION_AGENT_NOT_FOUND', `AgentSpec exact version not found: ${input.agentId}@${input.agentVersion}`);
-    }
-    const prompt = await new PromptDefinitionRepository(this.db).getByIdAndVersion(
-      agentPlan.prompt_id,
-      agentPlan.prompt_version,
-      { tenantId: input.tenantId },
-    );
-    if (!prompt) {
-      throw new EvaluationRepositoryError('EVALUATION_PROMPT_NOT_FOUND', `Prompt exact version not found: ${agentPlan.prompt_id}@${agentPlan.prompt_version}`);
-    }
-    const modelPolicyHash = requiredHash(agentPlan.model_policy_hash, 'EVALUATION_MODEL_POLICY_HASH_REQUIRED');
-    const primaryHash = primarySubjectHash(input.primarySubjectType, input.primarySubjectId, input.primarySubjectVersion, {
-      agentHash: agent.sha256,
-      promptHash: prompt.sha256,
-      modelPolicyHash,
-    });
+    const resolved = await new EvaluationCandidateResolver(this.db).resolve(input);
     const tenantPolicy = await new TenantRuntimePolicyResolver(this.db).resolve({
       tenant_id: input.tenantId,
       user_id: input.userId,
-      execution_plan_ref: agentPlan.execution_plan_ref,
-      execution_plan_hash: agentPlan.execution_plan_hash,
+      execution_plan_ref: resolved.agentExecutionPlan.execution_plan_ref,
+      execution_plan_hash: resolved.agentExecutionPlan.execution_plan_hash,
       execution_plan_type: 'agent',
       request_id: input.requestId,
       mode: 'required',
@@ -868,17 +867,19 @@ export class EvaluationSubjectSnapshotBuilder {
       primary_subject_type: input.primarySubjectType,
       primary_subject_id: input.primarySubjectId,
       primary_subject_version: input.primarySubjectVersion,
-      primary_subject_hash: primaryHash,
-      agent_id: agentPlan.agent_id,
-      agent_version: agentPlan.agent_version,
-      agent_hash: agentPlan.agent_sha256,
-      prompt_id: agentPlan.prompt_id,
-      prompt_version: agentPlan.prompt_version,
-      prompt_hash: agentPlan.prompt_sha256,
-      model_policy_id: requiredString(agentPlan.model_policy_id, 'EVALUATION_MODEL_POLICY_ID_REQUIRED'),
-      model_policy_version: requiredNumber(agentPlan.model_policy_version, 'EVALUATION_MODEL_POLICY_VERSION_REQUIRED'),
-      model_policy_hash: modelPolicyHash,
-      tool_refs: agentPlan.allowed_tools.map((tool) => ({
+      primary_subject_hash: resolved.primarySubjectHash,
+      agent_id: resolved.agentExecutionPlan.agent_id,
+      agent_version: resolved.agentExecutionPlan.agent_version,
+      agent_hash: resolved.agentExecutionPlan.agent_sha256,
+      prompt_id: resolved.agentExecutionPlan.prompt_id,
+      prompt_version: resolved.agentExecutionPlan.prompt_version,
+      prompt_hash: resolved.agentExecutionPlan.prompt_sha256,
+      model_policy_id: resolved.agentExecutionPlan.model_policy_id,
+      model_policy_version: resolved.agentExecutionPlan.model_policy_version,
+      model_policy_hash: resolved.agentExecutionPlan.model_policy_hash,
+      agent_execution_plan_ref: resolved.agentExecutionPlan.execution_plan_ref,
+      agent_execution_plan_hash: resolved.agentExecutionPlan.execution_plan_hash,
+      tool_refs: resolved.agentExecutionPlan.allowed_tools.map((tool) => ({
         tool_name: tool.tool_name,
         tool_version: tool.tool_version,
         tool_sha256: tool.tool_sha256,
@@ -895,7 +896,7 @@ export class EvaluationSubjectSnapshotBuilder {
       primary_subject_type: input.primarySubjectType,
       primary_subject_id: input.primarySubjectId,
       primary_subject_version: input.primarySubjectVersion,
-      primary_subject_hash: primaryHash,
+      primary_subject_hash: resolved.primarySubjectHash,
       candidate_bundle: bundleWithoutEvalPlan,
       candidate_bundle_hash: candidateBundleHash,
       created_at: new Date().toISOString(),
@@ -912,11 +913,19 @@ export class EvaluationExecutionPlanBuilder {
       throw new EvaluationRepositoryError('EVALUATION_DATASET_NOT_FOUND', `EvaluationDataset exact version not found: ${input.datasetId}@${input.datasetVersion}`);
     }
     const datasetHash = requiredHash(dataset.dataset_hash, 'EVALUATION_DATASET_HASH_REQUIRED');
-    const agentPlan = await new AgentExecutionPlanRepository(this.db).createForAgent({
-      agentId: input.subjectSnapshot.candidate_bundle.agent_id,
-      agentVersion: input.subjectSnapshot.candidate_bundle.agent_version,
-      tenantId: input.tenantId,
-      operatorId: 'evaluation-plan-builder',
+    const agentPlan = await new AgentExecutionPlanRepository(this.db).getByRef(
+      input.subjectSnapshot.candidate_bundle.agent_execution_plan_ref,
+      { tenantId: input.tenantId },
+    );
+    if (!agentPlan) {
+      throw new EvaluationRepositoryError(
+        'EVALUATION_AGENT_EXECUTION_PLAN_NOT_FOUND',
+        `AgentExecutionPlan exact ref not found: ${input.subjectSnapshot.candidate_bundle.agent_execution_plan_ref}`,
+      );
+    }
+    assertCandidateFidelity({
+      subjectSnapshot: input.subjectSnapshot,
+      agentExecutionPlan: agentPlan,
     });
     const planId = `eval_plan_${randomUUID()}`;
     const planWithoutHash = {
@@ -929,6 +938,8 @@ export class EvaluationExecutionPlanBuilder {
       dataset_version: dataset.version,
       dataset_hash: datasetHash,
       candidate_bundle_hash: input.subjectSnapshot.candidate_bundle_hash,
+      agent_execution_plan_ref: agentPlan.execution_plan_ref,
+      agent_execution_plan_hash: agentPlan.execution_plan_hash,
       resolved_agent_plan: agentPlan.plan,
       tools: input.subjectSnapshot.candidate_bundle.tool_refs,
       tenant_policy_snapshot_ref: input.subjectSnapshot.candidate_bundle.tenant_policy_snapshot_ref,
@@ -941,6 +952,150 @@ export class EvaluationExecutionPlanBuilder {
       ...planWithoutHash,
       plan_hash: hashJson(planWithoutHash),
     });
+  }
+}
+
+export interface ResolvedEvaluationCandidate {
+  primarySubjectHash: string;
+  agentExecutionPlan: AgentExecutionPlan;
+}
+
+interface CandidateRecords {
+  agent: { spec: AgentSpec; sha256: string };
+  prompt: { spec: PromptDefinition; sha256: string };
+  modelPolicy: ModelPolicy;
+  modelPolicyHash: string;
+}
+
+export class EvaluationCandidateResolver {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async resolve(input: EvaluationSubjectSnapshotBuildInput): Promise<ResolvedEvaluationCandidate> {
+    const records = await this.loadRecords(input);
+    const primaryHash = primarySubjectHash(input.primarySubjectType, input.primarySubjectId, input.primarySubjectVersion, {
+      agentHash: records.agent.sha256,
+      promptHash: records.prompt.sha256,
+      modelPolicyHash: records.modelPolicyHash,
+    });
+    assertHashEquals(input.primarySubjectHash, primaryHash, 'EVALUATION_SUBJECT_HASH_MISMATCH', {
+      subject_type: input.primarySubjectType,
+      subject_id: input.primarySubjectId,
+      subject_version: input.primarySubjectVersion,
+    });
+
+    const allowedTools = await this.resolveAllowedTools(records.agent.spec, input.tenantId);
+    const plan = buildCandidateAgentExecutionPlan({
+      tenantId: input.tenantId,
+      agent: records.agent,
+      prompt: records.prompt,
+      modelPolicy: records.modelPolicy,
+      modelPolicyHash: records.modelPolicyHash,
+      allowedTools,
+    });
+    const savedPlan = await new AgentExecutionPlanRepository(this.db).create(plan);
+    return { primarySubjectHash: primaryHash, agentExecutionPlan: savedPlan };
+  }
+
+  private async loadRecords(input: EvaluationSubjectSnapshotBuildInput): Promise<CandidateRecords> {
+    assertCandidateIdentity(input);
+    const tenantOptions = { tenantId: input.tenantId };
+    const agentRecord = await new AgentSpecRepository(this.db).getByIdAndVersion(
+      input.primarySubjectType === 'agent' ? input.primarySubjectId : input.agentId,
+      input.primarySubjectType === 'agent' ? input.primarySubjectVersion : input.agentVersion,
+      tenantOptions,
+    );
+    if (!agentRecord) {
+      throw new EvaluationRepositoryError('EVALUATION_AGENT_NOT_FOUND', `AgentSpec exact version not found: ${input.agentId}@${input.agentVersion}`);
+    }
+    const expectedAgentHash = input.primarySubjectType === 'agent' ? input.primarySubjectHash : requiredHash(input.agentHash, 'EVALUATION_AGENT_HASH_REQUIRED');
+    assertHashEquals(expectedAgentHash, agentRecord.sha256, 'EVALUATION_AGENT_HASH_MISMATCH', {
+      agent_id: agentRecord.spec.agent_id,
+      agent_version: agentRecord.spec.version,
+    });
+
+    const agentPromptRef = parseExactVersionRef(agentRecord.spec.prompt_ref, 'AgentSpec.prompt_ref');
+    const promptId = input.primarySubjectType === 'prompt' ? input.primarySubjectId : (input.promptId ?? agentPromptRef.id);
+    const promptVersion = input.primarySubjectType === 'prompt' ? input.primarySubjectVersion : (input.promptVersion ?? agentPromptRef.version);
+    const promptRecord = await new PromptDefinitionRepository(this.db).getByIdAndVersion(promptId, promptVersion, tenantOptions);
+    if (!promptRecord) {
+      throw new EvaluationRepositoryError('EVALUATION_PROMPT_NOT_FOUND', `Prompt exact version not found: ${promptId}@${promptVersion}`);
+    }
+    const expectedPromptHash = input.primarySubjectType === 'prompt' ? input.primarySubjectHash : (input.promptHash ?? promptRecord.sha256);
+    assertHashEquals(expectedPromptHash, promptRecord.sha256, 'EVALUATION_PROMPT_HASH_MISMATCH', {
+      prompt_id: promptRecord.spec.prompt_id,
+      prompt_version: promptRecord.spec.version,
+    });
+    if (input.primarySubjectType !== 'prompt' && `${promptRecord.spec.prompt_id}@${promptRecord.spec.version}` !== agentRecord.spec.prompt_ref) {
+      throw new EvaluationRepositoryError('EVALUATION_PROMPT_REF_MISMATCH', 'Context prompt does not match candidate agent prompt_ref', {
+        agent_prompt_ref: agentRecord.spec.prompt_ref,
+        prompt_id: promptRecord.spec.prompt_id,
+        prompt_version: promptRecord.spec.version,
+      });
+    }
+
+    const agentModelPolicyRef = modelPolicyRefSchema.parse(agentRecord.spec.model_policy_ref);
+    const modelPolicyId = input.primarySubjectType === 'model_policy'
+      ? input.primarySubjectId
+      : (input.modelPolicyId ?? agentModelPolicyRef.model_policy_id);
+    const modelPolicyVersion = input.primarySubjectType === 'model_policy'
+      ? input.primarySubjectVersion
+      : (input.modelPolicyVersion ?? agentModelPolicyRef.model_policy_version);
+    const modelPolicy = await new ModelPolicyRepository(this.db).getByIdAndVersion(modelPolicyId, modelPolicyVersion, tenantOptions);
+    if (!modelPolicy) {
+      throw new EvaluationRepositoryError('EVALUATION_MODEL_POLICY_NOT_FOUND', `ModelPolicy exact version not found: ${modelPolicyId}@${modelPolicyVersion}`);
+    }
+    const modelPolicyHash = hashModelPolicy(modelPolicy);
+    const expectedModelPolicyHash = input.primarySubjectType === 'model_policy'
+      ? input.primarySubjectHash
+      : (input.modelPolicyHash ?? agentModelPolicyRef.model_policy_hash);
+    assertHashEquals(requiredHash(expectedModelPolicyHash, 'EVALUATION_MODEL_POLICY_HASH_REQUIRED'), modelPolicyHash, 'EVALUATION_MODEL_POLICY_HASH_MISMATCH', {
+      model_policy_id: modelPolicy.model_policy_id,
+      model_policy_version: modelPolicy.version,
+    });
+    if (input.primarySubjectType !== 'model_policy' && agentModelPolicyRef.model_policy_hash && agentModelPolicyRef.model_policy_hash !== modelPolicyHash) {
+      throw new EvaluationRepositoryError('EVALUATION_MODEL_POLICY_REF_HASH_MISMATCH', 'Agent model_policy_ref hash does not match resolved ModelPolicy', {
+        model_policy_id: agentModelPolicyRef.model_policy_id,
+        model_policy_version: agentModelPolicyRef.model_policy_version,
+      });
+    }
+
+    return {
+      agent: { spec: agentRecord.spec, sha256: agentRecord.sha256 },
+      prompt: { spec: promptRecord.spec, sha256: promptRecord.sha256 },
+      modelPolicy,
+      modelPolicyHash,
+    };
+  }
+
+  private async resolveAllowedTools(agent: AgentSpec, tenantId: string): Promise<AgentExecutionPlan['allowed_tools']> {
+    const repository = new ToolManifestRepository(this.db);
+    const tools: AgentExecutionPlan['allowed_tools'] = [];
+    for (const toolRefValue of agent.allowed_tools) {
+      const toolRef = parseExactToolVersionRef(toolRefValue, 'AgentSpec.allowed_tools');
+      const toolRecord = await repository.getByIdAndVersion(
+        toolRef.name,
+        toolRegistryVersionFromManifestVersion(toolRef.version),
+        { tenantId },
+      );
+      if (!toolRecord) {
+        throw new EvaluationRepositoryError('EVALUATION_TOOL_NOT_FOUND', `ToolManifest exact version not found: ${toolRef.name}@${toolRef.version}`);
+      }
+      if (toolRecord.spec.version !== toolRef.version) {
+        throw new EvaluationRepositoryError('EVALUATION_TOOL_VERSION_MISMATCH', `ToolManifest version mismatch: ${toolRef.name}@${toolRef.version}`);
+      }
+      if (toolRecord.status !== 'published' && toolRecord.status !== 'gray') {
+        throw new EvaluationRepositoryError('EVALUATION_TOOL_NOT_EXECUTABLE', `ToolManifest is not executable: ${toolRef.name}@${toolRef.version}`);
+      }
+      tools.push({
+        tool_name: toolRecord.spec.tool_name,
+        tool_version: toolRecord.spec.version,
+        tool_sha256: toolRecord.sha256,
+        ...(toolRecord.spec.description ? { description: toolRecord.spec.description } : {}),
+        risk_level: toolRecord.spec.risk_level,
+        input_schema: toolRecord.spec.input_schema ?? {},
+      });
+    }
+    return tools;
   }
 }
 
@@ -963,6 +1118,7 @@ export class EvaluationScoringEngine {
     hiddenReasoningLeakCount?: number;
     modelCallCount?: number;
     fallbackCount?: number;
+    systemError?: boolean;
   }): EvaluationCaseResult {
     const metrics: EvaluationMetricResult[] = [];
     const actualStatus = input.actualStatus ?? 'unknown';
@@ -979,11 +1135,20 @@ export class EvaluationScoringEngine {
     const score = hardFailure ? 0 : scored.length > 0
       ? scored.reduce((sum, metric) => sum + (metric.score ?? 0), 0) / scored.length
       : 1;
+    const requiredFailure = metrics.some((metric) => !metric.hard_gate && !metric.passed);
+    const minimumCaseScore = input.evaluationCase.minimum_case_score;
+    const belowMinimumCaseScore = minimumCaseScore !== undefined && score < minimumCaseScore;
+    const systemError = input.systemError === true || input.actualStatus === 'system_error';
+    const status: EvaluationCaseResult['status'] = systemError
+      ? 'system_error'
+      : hardFailure || requiredFailure || belowMinimumCaseScore
+        ? 'failed'
+        : 'passed';
     return evaluationCaseResultSchema.parse({
       evaluation_case_result_id: `eval_case_result_${randomUUID()}`,
       evaluation_run_id: 'pending',
       case_id: input.evaluationCase.case_id,
-      status: hardFailure || score < 1 ? 'failed' : 'passed',
+      status,
       score,
       metric_results: metrics,
       actual_status: actualStatus,
@@ -1014,7 +1179,9 @@ export class EvaluationScoringEngine {
       }
       if (result.status === 'passed') {
         passed += 1;
-      } else {
+      } else if (result.status === 'failed') {
+        failed += 1;
+      } else if (result.status === 'system_error') {
         failed += 1;
       }
       denominator += evaluationCase.weight;
@@ -1558,9 +1725,14 @@ function scoreToolExpectations(
   }
   for (const expected of evaluationCase.expected_tool_calls) {
     const calls = toolCalls.filter((call) => call.tool_name === expected.tool_name);
+    const withinExpectedCount = calls.length >= expected.min_calls && calls.length <= expected.max_calls;
+    const score = withinExpectedCount && expected.max_calls > expected.min_calls
+      ? calls.length / expected.max_calls
+      : undefined;
     addMetric(metrics, 'tool_call_count_match', 'tool', calls.length >= expected.min_calls && calls.length <= expected.max_calls, {
       actual: calls.length,
       expected: { min: expected.min_calls, max: expected.max_calls },
+      ...(score !== undefined ? { score } : {}),
     });
     if (expected.argument_match_mode === 'ignore') {
       continue;
@@ -1658,12 +1830,12 @@ function addMetric(
   metricName: string,
   metricType: EvaluationMetricResult['metric_type'],
   passed: boolean,
-  extra: { actual?: unknown; expected?: unknown; hardGate?: boolean; reason?: string } = {},
+  extra: { actual?: unknown; expected?: unknown; hardGate?: boolean; reason?: string; score?: number } = {},
 ): void {
   metrics.push(evaluationMetricResultSchema.parse({
     metric_name: metricName,
     metric_type: metricType,
-    score: passed ? 1 : 0,
+    score: extra.score ?? (passed ? 1 : 0),
     passed,
     hard_gate: extra.hardGate ?? false,
     ...(extra.actual !== undefined ? { actual: extra.actual } : {}),
@@ -1709,10 +1881,10 @@ function decideGate(
   policy: EvaluationGatePolicy,
   mode: 'disabled' | 'advisory' | 'required',
 ): { status: EvaluationGateDecision['decision']; reasons: string[] } {
-  const thresholds = policy.thresholds;
+  const thresholds = evaluationGateThresholdsSchema.parse(policy.thresholds);
   const reasons: string[] = [];
-  const minimumPassRate = numberThreshold(thresholds.minimum_pass_rate, 0);
-  const minimumWeightedScore = numberThreshold(thresholds.minimum_weighted_score, 0);
+  const minimumPassRate = thresholds.minimum_pass_rate;
+  const minimumWeightedScore = thresholds.minimum_weighted_score;
   if (aggregate.pass_rate < minimumPassRate) {
     reasons.push(`pass_rate ${aggregate.pass_rate} below ${minimumPassRate}`);
   }
@@ -1726,10 +1898,6 @@ function decideGate(
     return { status: 'passed', reasons: ['all gate checks passed'] };
   }
   return { status: mode === 'advisory' ? 'advisory_failed' : 'failed', reasons };
-}
-
-function numberThreshold(value: unknown, fallback: number): number {
-  return typeof value === 'number' ? value : fallback;
 }
 
 function passRate(run: EvaluationRun): number {
@@ -1771,6 +1939,232 @@ function primarySubjectHash(
   });
 }
 
+export function buildCandidateAgentExecutionPlan(input: {
+  tenantId: string;
+  agent: { spec: AgentSpec; sha256: string };
+  prompt: { spec: PromptDefinition; sha256: string };
+  modelPolicy: ModelPolicy;
+  modelPolicyHash: string;
+  allowedTools?: AgentExecutionPlan['allowed_tools'];
+  generatedAt?: string;
+}): AgentExecutionPlan {
+  const resolvedModelPolicy = resolveEvaluationModelPolicy(input.modelPolicy, input.modelPolicyHash);
+  if (input.agent.spec.allowed_tools.length > 0 && !input.allowedTools) {
+    throw new EvaluationRepositoryError(
+      'EVALUATION_TOOL_RESOLUTION_REQUIRED',
+      'Tool manifest resolution requires explicit allowedTools or DB-backed EvaluationCandidateResolver',
+    );
+  }
+  return buildCandidateAgentExecutionPlanFromResolvedTools({
+    ...input,
+    resolvedModelPolicy,
+    allowedTools: input.allowedTools ?? [],
+  });
+}
+
+function buildCandidateAgentExecutionPlanFromResolvedTools(input: {
+  tenantId: string;
+  agent: { spec: AgentSpec; sha256: string };
+  prompt: { spec: PromptDefinition; sha256: string };
+  modelPolicy: ModelPolicy;
+  modelPolicyHash: string;
+  resolvedModelPolicy: ResolvedModelPolicy;
+  allowedTools: AgentExecutionPlan['allowed_tools'];
+  generatedAt?: string;
+}): AgentExecutionPlan {
+  const generatedAt = input.generatedAt ?? new Date().toISOString();
+  const executionPlanId = `agent_plan_${randomUUID()}`;
+  const executionPlanRef = `db://agent-execution-plan/${encodeURIComponent(executionPlanId)}`;
+  const budget = agentBudgetSchema.parse({
+    max_segments: input.agent.spec.max_steps,
+    max_model_turns: input.agent.spec.max_steps,
+    max_tool_calls: input.agent.spec.allowed_tools.length,
+    max_total_tokens: input.agent.spec.max_tokens,
+  });
+  const outputSchema = parseAgentOutputSchema(input.agent.spec.output_schema);
+  const plan: ResolvedAgentPlan = resolvedAgentPlanSchema.parse({
+    agent_id: input.agent.spec.agent_id,
+    agent_version: input.agent.spec.version,
+    agent_sha256: input.agent.sha256,
+    prompt_id: input.prompt.spec.prompt_id,
+    prompt_version: input.prompt.spec.version,
+    prompt_sha256: input.prompt.sha256,
+    system_prompt: input.prompt.spec.content,
+    model_policy: input.agent.spec.model_policy,
+    model_policy_id: input.resolvedModelPolicy.model_policy_id,
+    model_policy_version: input.resolvedModelPolicy.model_policy_version,
+    model_policy_hash: input.resolvedModelPolicy.model_policy_hash,
+    resolved_model_policy: input.resolvedModelPolicy,
+    allowed_tools: input.allowedTools,
+    allowed_handoffs: input.agent.spec.allowed_handoffs,
+    ...(outputSchema ? { output_schema: outputSchema } : {}),
+    budget,
+  });
+  const planWithoutHash = {
+    execution_plan_id: executionPlanId,
+    execution_plan_ref: executionPlanRef,
+    tenant_id: input.tenantId,
+    agent_id: input.agent.spec.agent_id,
+    agent_version: input.agent.spec.version,
+    agent_sha256: input.agent.sha256,
+    prompt_id: input.prompt.spec.prompt_id,
+    prompt_version: input.prompt.spec.version,
+    prompt_sha256: input.prompt.sha256,
+    model_policy: input.agent.spec.model_policy,
+    model_policy_id: input.resolvedModelPolicy.model_policy_id,
+    model_policy_version: input.resolvedModelPolicy.model_policy_version,
+    model_policy_hash: input.resolvedModelPolicy.model_policy_hash,
+    resolved_model_policy: input.resolvedModelPolicy,
+    allowed_tools: input.allowedTools,
+    allowed_handoffs: input.agent.spec.allowed_handoffs,
+    ...(outputSchema ? { output_schema: outputSchema } : {}),
+    budget,
+    plan,
+    generated_at: generatedAt,
+  };
+  return agentExecutionPlanSchema.parse({
+    ...planWithoutHash,
+    execution_plan_hash: hashJson(planWithoutHash),
+  });
+}
+
+function resolveEvaluationModelPolicy(policy: ModelPolicy, modelPolicyHash: string): ResolvedModelPolicy {
+  const resolvedTargets = policy.targets
+    .filter((target) => target.enabled)
+    .sort((left, right) => left.priority === right.priority
+      ? left.target_id.localeCompare(right.target_id)
+      : left.priority - right.priority);
+  if (resolvedTargets.length === 0) {
+    throw new EvaluationRepositoryError(
+      'EVALUATION_MODEL_POLICY_NO_TARGETS',
+      `ModelPolicy has no enabled targets: ${policy.model_policy_id}@${policy.version}`,
+    );
+  }
+  return resolvedModelPolicySchema.parse({
+    model_policy_id: policy.model_policy_id,
+    model_policy_version: policy.version,
+    model_policy_hash: modelPolicyHash,
+    protocol: policy.protocol,
+    resolved_targets: resolvedTargets,
+    retry_policy: policy.retry_policy,
+    fallback_policy: policy.fallback_policy,
+    request_policy: policy.request_policy,
+  });
+}
+
+export function assertCandidateFidelity(input: {
+  subjectSnapshot: EvaluationSubjectSnapshot;
+  agentExecutionPlan: AgentExecutionPlan;
+}): void {
+  const bundle = input.subjectSnapshot.candidate_bundle;
+  const plan = input.agentExecutionPlan;
+  const mismatches: string[] = [];
+  if (input.subjectSnapshot.primary_subject_hash !== bundle.primary_subject_hash) {
+    mismatches.push('subject_snapshot.primary_subject_hash');
+  }
+  if (hashEvaluationCandidateBundle(bundle) !== input.subjectSnapshot.candidate_bundle_hash) {
+    mismatches.push('candidate_bundle_hash');
+  }
+  if (bundle.agent_execution_plan_ref !== plan.execution_plan_ref) {
+    mismatches.push('agent_execution_plan_ref');
+  }
+  if (bundle.agent_execution_plan_hash !== plan.execution_plan_hash) {
+    mismatches.push('agent_execution_plan_hash');
+  }
+  if (bundle.agent_hash !== plan.agent_sha256 || bundle.agent_hash !== plan.plan.agent_sha256) {
+    mismatches.push('agent_hash');
+  }
+  if (bundle.prompt_hash !== plan.prompt_sha256 || bundle.prompt_hash !== plan.plan.prompt_sha256) {
+    mismatches.push('prompt_hash');
+  }
+  if (bundle.model_policy_hash !== plan.model_policy_hash || bundle.model_policy_hash !== plan.plan.model_policy_hash) {
+    mismatches.push('model_policy_hash');
+  }
+  const primaryHash = primarySubjectHash(bundle.primary_subject_type, bundle.primary_subject_id, bundle.primary_subject_version, {
+    agentHash: plan.agent_sha256,
+    promptHash: plan.prompt_sha256,
+    modelPolicyHash: plan.model_policy_hash,
+  });
+  if (primaryHash !== bundle.primary_subject_hash || primaryHash !== input.subjectSnapshot.primary_subject_hash) {
+    mismatches.push('primary_subject_hash');
+  }
+  if (mismatches.length > 0) {
+    throw new EvaluationRepositoryError(
+      'EVALUATION_CANDIDATE_FIDELITY_MISMATCH',
+      `Evaluation candidate fidelity mismatch: ${mismatches.join(', ')}`,
+      { mismatches },
+    );
+  }
+}
+
+function assertCandidateIdentity(input: EvaluationSubjectSnapshotBuildInput): void {
+  if (input.primarySubjectId !== subjectIdForInput(input) || input.primarySubjectVersion !== subjectVersionForInput(input)) {
+    throw new EvaluationRepositoryError('EVALUATION_SUBJECT_IDENTITY_MISMATCH', 'Primary subject identity must match the selected candidate resource', {
+      primary_subject_type: input.primarySubjectType,
+      primary_subject_id: input.primarySubjectId,
+      primary_subject_version: input.primarySubjectVersion,
+    });
+  }
+}
+
+function subjectIdForInput(input: EvaluationSubjectSnapshotBuildInput): string {
+  if (input.primarySubjectType === 'agent') {
+    return input.agentId;
+  }
+  if (input.primarySubjectType === 'prompt') {
+    return requiredString(input.promptId ?? input.primarySubjectId, 'EVALUATION_PROMPT_ID_REQUIRED');
+  }
+  return requiredString(input.modelPolicyId ?? input.primarySubjectId, 'EVALUATION_MODEL_POLICY_ID_REQUIRED');
+}
+
+function subjectVersionForInput(input: EvaluationSubjectSnapshotBuildInput): number {
+  if (input.primarySubjectType === 'agent') {
+    return input.agentVersion;
+  }
+  if (input.primarySubjectType === 'prompt') {
+    return input.promptVersion ?? input.primarySubjectVersion;
+  }
+  return input.modelPolicyVersion ?? input.primarySubjectVersion;
+}
+
+function parseExactVersionRef(ref: string, label: string): { id: string; version: number } {
+  const match = /^(.+)@([1-9]\d*)$/u.exec(ref);
+  if (!match) {
+    throw new EvaluationRepositoryError('EVALUATION_EXACT_REF_REQUIRED', `${label} must use id@version exact ref`, { ref });
+  }
+  return { id: match[1] ?? '', version: Number(match[2]) };
+}
+
+function parseExactToolVersionRef(ref: string, label: string): { name: string; version: string } {
+  const match = /^(.+)@([^@]+)$/u.exec(ref);
+  if (!match) {
+    throw new EvaluationRepositoryError('EVALUATION_EXACT_REF_REQUIRED', `${label} must use tool_name@tool_version exact ref`, { ref });
+  }
+  return { name: match[1] ?? '', version: match[2] ?? '' };
+}
+
+function toolRegistryVersionFromManifestVersion(toolVersion: string): number {
+  const [major] = toolVersion.split('.');
+  const parsed = Number(major);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new EvaluationRepositoryError(
+      'EVALUATION_TOOL_VERSION_INVALID',
+      `ToolManifest version must start with a positive numeric major: ${toolVersion}`,
+    );
+  }
+  return parsed;
+}
+
+function assertHashEquals(expected: string, actual: string, code: string, details: Record<string, unknown>): void {
+  if (expected !== actual) {
+    throw new EvaluationRepositoryError(code, 'Evaluation candidate hash mismatch', {
+      ...details,
+      expected_hash: expected,
+      actual_hash: actual,
+    });
+  }
+}
+
 function requiredHash(value: string | undefined, code: string): string {
   if (!value) {
     throw new EvaluationRepositoryError(code, 'Required hash is missing');
@@ -1781,13 +2175,6 @@ function requiredHash(value: string | undefined, code: string): string {
 function requiredString(value: string | undefined, code: string): string {
   if (!value) {
     throw new EvaluationRepositoryError(code, 'Required string is missing');
-  }
-  return value;
-}
-
-function requiredNumber(value: number | undefined, code: string): number {
-  if (!value) {
-    throw new EvaluationRepositoryError(code, 'Required number is missing');
   }
   return value;
 }

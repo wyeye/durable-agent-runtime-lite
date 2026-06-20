@@ -431,6 +431,8 @@ describe('contracts schemas', () => {
       model_policy_id: 'local-ollama-qwen25-7b',
       model_policy_version: 1,
       model_policy_hash: hash,
+      agent_execution_plan_ref: 'db://agent-execution-plan/sample_agent_plan',
+      agent_execution_plan_hash: hash,
       tool_refs: [
         {
           tool_name: 'knowledge.search',

@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
-import type { EvaluationCase, EvaluationGatePolicy } from '@dar/contracts';
+import {
+  evaluationGateThresholdsSchema,
+  evaluationRegressionRulesSchema,
+  type EvaluationCase,
+  type EvaluationGatePolicy,
+} from '@dar/contracts';
 import {
   EvaluationComparisonService,
   EvaluationScoringEngine,
@@ -44,6 +49,8 @@ const candidateBundleHash = hashEvaluationCandidateBundle({
   model_policy_id: 'local-ollama-qwen25-7b',
   model_policy_version: 1,
   model_policy_hash: hash,
+  agent_execution_plan_ref: 'db://agent-execution-plan/sample_agent_plan',
+  agent_execution_plan_hash: hash,
   tool_refs: [],
   tenant_policy_snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
   tenant_policy_snapshot_hash: hash,
@@ -56,8 +63,8 @@ const gatePolicy: EvaluationGatePolicy = {
   status: 'published',
   resource_types: ['prompt', 'agent', 'model_policy'],
   required_dataset_refs: [`runtime-agent-core-v1@1#${datasetHash}`],
-  thresholds: { minimum_pass_rate: 1, minimum_score: 0.95 },
-  regression_rules: {},
+  thresholds: evaluationGateThresholdsSchema.parse({ minimum_pass_rate: 1, minimum_weighted_score: 0.95 }),
+  regression_rules: evaluationRegressionRulesSchema.parse({}),
   required_case_tags: [],
   allow_override: true,
   revision: 1,

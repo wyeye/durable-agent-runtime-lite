@@ -1208,6 +1208,11 @@ export class AgentExecutionPlanRepository {
 
   async createForAgent(input: BuildAgentExecutionPlanInput): Promise<AgentExecutionPlan> {
     const plan = await buildAgentExecutionPlan(this.db, input);
+    return this.create(plan);
+  }
+
+  async create(planInput: AgentExecutionPlan): Promise<AgentExecutionPlan> {
+    const plan = agentExecutionPlanSchema.parse(planInput);
     const existing = await this.findMatchingExistingPlan(plan.agent_id, plan.agent_version, {
       tenantId: plan.tenant_id,
     }, agentExecutionPlanContentHash(plan));

@@ -38,6 +38,8 @@ import {
   ToolManifestRepository,
   AuditEventRepository,
   EvaluationComparisonService,
+  buildCandidateAgentExecutionPlan,
+  assertCandidateFidelity,
   EvaluationGateError,
   EvaluationGateService,
   EvaluationScoringEngine,
@@ -198,6 +200,51 @@ const toolManifest: ToolManifest = {
   required_permissions: [],
 };
 
+function modelPolicyFixture(modelPolicyId: string, version: number) {
+  return {
+    model_policy_id: modelPolicyId,
+    version,
+    status: 'published' as const,
+    protocol: 'dar_generate' as const,
+    targets: [
+      {
+        target_id: `${modelPolicyId}-target`,
+        gateway_profile: 'local-mock',
+        model_id: `deterministic:${modelPolicyId}`,
+        priority: 0,
+        enabled: true,
+        capabilities: ['text' as const],
+      },
+    ],
+    retry_policy: {
+      max_attempts_per_target: 1,
+      retryable_status_codes: [429, 500],
+      retry_on_timeout: true,
+      retry_on_network_error: true,
+      backoff_ms: 0,
+      max_backoff_ms: 0,
+    },
+    fallback_policy: {
+      enabled: false,
+      ordered_target_ids: [],
+      eligible_error_classes: [],
+      stop_on_auth_error: true,
+      stop_on_validation_error: true,
+      stop_on_policy_denial: true,
+    },
+    request_policy: {
+      temperature: 0,
+      top_p: 1,
+      max_output_tokens: 1000,
+      initial_tool_choice_mode: 'auto' as const,
+      after_tool_result_tool_choice_mode: 'auto' as const,
+      response_format: 'text' as const,
+      allow_parallel_tool_calls: false,
+    },
+    revision: 1,
+  };
+}
+
 describe('db repositories', () => {
   it('builds stable hashes and DB flow refs', () => {
     expect(stableStringify({ b: 2, a: 1 })).toBe('{"a":1,"b":2}');
@@ -339,6 +386,8 @@ describe('db repositories', () => {
       model_policy_id: 'local-ollama-qwen25-7b',
       model_policy_version: 1,
       model_policy_hash: hash,
+      agent_execution_plan_ref: 'db://agent-execution-plan/sample_agent_plan',
+      agent_execution_plan_hash: hash,
       tool_refs: [],
       tenant_policy_snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
       tenant_policy_snapshot_hash: hash,
@@ -358,6 +407,224 @@ describe('db repositories', () => {
       revision: 1,
     });
     expect(policyHash).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it('builds prompt candidate execution plans with candidate prompt content, not agent current prompt', () => {
+    const agentHash = 'a'.repeat(64);
+    const oldPromptHash = 'b'.repeat(64);
+    const candidatePromptHash = 'c'.repeat(64);
+    const modelPolicyHash = 'd'.repeat(64);
+    const plan = buildCandidateAgentExecutionPlan({
+      tenantId: 'tenant_1',
+      agent: {
+        sha256: agentHash,
+        spec: {
+          agent_id: 'agent_1',
+          version: 1,
+          status: 'published',
+          prompt_ref: 'prompt_old@1',
+          model_policy: 'deterministic:final_only',
+          model_policy_ref: {
+            model_policy_id: 'policy_1',
+            model_policy_version: 1,
+            model_policy_hash: modelPolicyHash,
+          },
+          allowed_tools: [],
+          allowed_handoffs: [],
+          max_steps: 3,
+          max_tokens: 1000,
+        },
+      },
+      prompt: {
+        sha256: candidatePromptHash,
+        spec: {
+          prompt_id: 'prompt_candidate',
+          version: 2,
+          name: 'candidate',
+          content: 'candidate prompt content',
+          variables: [],
+          status: 'draft',
+        },
+      },
+      modelPolicy: modelPolicyFixture('policy_1', 1),
+      modelPolicyHash,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    expect(plan.prompt_id).toBe('prompt_candidate');
+    expect(plan.prompt_sha256).toBe(candidatePromptHash);
+    expect(plan.plan.system_prompt).toBe('candidate prompt content');
+    expect(plan.plan.prompt_sha256).not.toBe(oldPromptHash);
+  });
+
+  it('builds agent candidate execution plans from candidate agent dependencies', () => {
+    const agentHash = 'e'.repeat(64);
+    const promptHash = 'f'.repeat(64);
+    const modelPolicyHash = '1'.repeat(64);
+    const plan = buildCandidateAgentExecutionPlan({
+      tenantId: 'tenant_1',
+      agent: {
+        sha256: agentHash,
+        spec: {
+          agent_id: 'agent_candidate',
+          version: 3,
+          status: 'draft',
+          prompt_ref: 'prompt_candidate@7',
+          model_policy: 'deterministic:readonly_tool',
+          model_policy_ref: {
+            model_policy_id: 'policy_candidate',
+            model_policy_version: 4,
+            model_policy_hash: modelPolicyHash,
+          },
+          allowed_tools: [],
+          allowed_handoffs: ['flow_next'],
+          max_steps: 5,
+          max_tokens: 2000,
+        },
+      },
+      prompt: {
+        sha256: promptHash,
+        spec: {
+          prompt_id: 'prompt_candidate',
+          version: 7,
+          name: 'candidate',
+          content: 'agent candidate prompt',
+          variables: [],
+          status: 'published',
+        },
+      },
+      modelPolicy: modelPolicyFixture('policy_candidate', 4),
+      modelPolicyHash,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    expect(plan.agent_id).toBe('agent_candidate');
+    expect(plan.agent_sha256).toBe(agentHash);
+    expect(plan.prompt_id).toBe('prompt_candidate');
+    expect(plan.model_policy_id).toBe('policy_candidate');
+    expect(plan.allowed_handoffs).toEqual(['flow_next']);
+    expect(plan.budget.max_segments).toBe(5);
+  });
+
+  it('builds model policy candidate execution plans with candidate resolved model policy', () => {
+    const modelPolicyHash = '2'.repeat(64);
+    const plan = buildCandidateAgentExecutionPlan({
+      tenantId: 'tenant_1',
+      agent: {
+        sha256: '3'.repeat(64),
+        spec: {
+          agent_id: 'agent_1',
+          version: 1,
+          status: 'published',
+          prompt_ref: 'prompt_1@1',
+          model_policy: 'deterministic:old',
+          model_policy_ref: {
+            model_policy_id: 'old_policy',
+            model_policy_version: 1,
+            model_policy_hash: '4'.repeat(64),
+          },
+          allowed_tools: [],
+          allowed_handoffs: [],
+          max_steps: 3,
+          max_tokens: 1000,
+        },
+      },
+      prompt: {
+        sha256: '5'.repeat(64),
+        spec: {
+          prompt_id: 'prompt_1',
+          version: 1,
+          name: 'prompt',
+          content: 'prompt',
+          variables: [],
+          status: 'published',
+        },
+      },
+      modelPolicy: modelPolicyFixture('candidate_policy', 9),
+      modelPolicyHash,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    expect(plan.model_policy_id).toBe('candidate_policy');
+    expect(plan.model_policy_version).toBe(9);
+    expect(plan.model_policy_hash).toBe(modelPolicyHash);
+    expect(plan.plan.resolved_model_policy.model_policy_id).toBe('candidate_policy');
+    expect(plan.plan.resolved_model_policy.model_policy_hash).not.toBe('4'.repeat(64));
+  });
+
+  it('fails closed when subject snapshot candidate bundle and execution plan hashes diverge', () => {
+    const hash = '6'.repeat(64);
+    const plan = buildCandidateAgentExecutionPlan({
+      tenantId: 'tenant_1',
+      agent: {
+        sha256: hash,
+        spec: {
+          agent_id: 'agent_1',
+          version: 1,
+          status: 'published',
+          prompt_ref: 'prompt_1@1',
+          model_policy: 'deterministic:final_only',
+          model_policy_ref: {
+            model_policy_id: 'policy_1',
+            model_policy_version: 1,
+            model_policy_hash: hash,
+          },
+          allowed_tools: [],
+          allowed_handoffs: [],
+          max_steps: 3,
+          max_tokens: 1000,
+        },
+      },
+      prompt: {
+        sha256: hash,
+        spec: {
+          prompt_id: 'prompt_1',
+          version: 1,
+          name: 'prompt',
+          content: 'prompt',
+          variables: [],
+          status: 'published',
+        },
+      },
+      modelPolicy: modelPolicyFixture('policy_1', 1),
+      modelPolicyHash: hash,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const bundle = {
+      primary_subject_type: 'prompt' as const,
+      primary_subject_id: 'prompt_1',
+      primary_subject_version: 1,
+      primary_subject_hash: hash,
+      agent_id: 'agent_1',
+      agent_version: 1,
+      agent_hash: hash,
+      prompt_id: 'prompt_1',
+      prompt_version: 1,
+      prompt_hash: hash,
+      model_policy_id: 'policy_1',
+      model_policy_version: 1,
+      model_policy_hash: hash,
+      agent_execution_plan_ref: plan.execution_plan_ref,
+      agent_execution_plan_hash: '7'.repeat(64),
+      tool_refs: [],
+      tenant_policy_snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
+      tenant_policy_snapshot_hash: hash,
+    };
+
+    expect(() => assertCandidateFidelity({
+      subjectSnapshot: {
+        subject_snapshot_id: 'snapshot_1',
+        subject_snapshot_ref: 'db://evaluation-subject-snapshot/snapshot_1',
+        primary_subject_type: 'prompt',
+        primary_subject_id: 'prompt_1',
+        primary_subject_version: 1,
+        primary_subject_hash: hash,
+        candidate_bundle: bundle,
+        candidate_bundle_hash: hashEvaluationCandidateBundle(bundle),
+        created_at: '2026-01-01T00:00:00.000Z',
+      },
+      agentExecutionPlan: plan,
+    })).toThrow(/fidelity mismatch/u);
   });
 
   it('scores evaluation cases with safety hard gates independent of averages', () => {
@@ -392,6 +659,54 @@ describe('db repositories', () => {
     expect(result.status).toBe('failed');
     expect(result.score).toBe(0);
     expect(result.metric_results.some((metric) => metric.metric_name === 'forbidden_tool_count' && metric.hard_gate && !metric.passed)).toBe(true);
+  });
+
+  it('does not fail a case solely because a continuous score is below one', () => {
+    const baseCase: EvaluationCase = {
+      case_id: 'case_partial_score',
+      dataset_id: 'runtime-agent-core-v1',
+      dataset_version: 1,
+      name: 'partial score',
+      input: { text: 'answer' },
+      expected_tool_calls: [
+        {
+          tool_name: 'knowledge.search',
+          min_calls: 1,
+          max_calls: 3,
+          argument_match_mode: 'ignore',
+          expected_arguments: {},
+        },
+      ],
+      forbidden_tools: [],
+      final_assertions: [],
+      policy_assertions: [],
+      context_refs: [],
+      weight: 1,
+      tags: [],
+      enabled: true,
+    };
+    const partial = new EvaluationScoringEngine().scoreCase({
+      evaluationCase: baseCase,
+      actualStatus: 'completed',
+      finalOutput: 'done',
+      toolCalls: [
+        { tool_name: 'knowledge.search', arguments: {} },
+        { tool_name: 'knowledge.search', arguments: {} },
+      ],
+    });
+    expect(partial.score).toBeLessThan(1);
+    expect(partial.status).toBe('passed');
+
+    const requiredMinimum = new EvaluationScoringEngine().scoreCase({
+      evaluationCase: { ...baseCase, minimum_case_score: 0.9 },
+      actualStatus: 'completed',
+      finalOutput: 'done',
+      toolCalls: [
+        { tool_name: 'knowledge.search', arguments: {} },
+        { tool_name: 'knowledge.search', arguments: {} },
+      ],
+    });
+    expect(requiredMinimum.status).toBe('failed');
   });
 
   it('compares evaluation runs only when dataset versions match', () => {

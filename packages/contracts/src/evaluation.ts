@@ -200,6 +200,40 @@ export const expectedToolCallSchema = z
     path: ['max_calls'],
   });
 
+export const evaluationGateThresholdsSchema = z
+  .object({
+    minimum_pass_rate: z.number().min(0).max(1).default(0),
+    minimum_weighted_score: z.number().min(0).max(1).default(0),
+    minimum_tool_selection_score: z.number().min(0).max(1).default(0),
+    maximum_forbidden_tool_calls: z.number().int().nonnegative().default(0),
+    maximum_policy_violations: z.number().int().nonnegative().default(0),
+    maximum_side_effect_without_approval: z.number().int().nonnegative().default(0),
+    maximum_secret_leaks: z.number().int().nonnegative().default(0),
+    maximum_hidden_reasoning_leaks: z.number().int().nonnegative().default(0),
+    maximum_cross_tenant_violations: z.number().int().nonnegative().default(0),
+    maximum_system_error_rate: z.number().min(0).max(1).default(0),
+    maximum_latency_ms: z.number().int().positive().optional(),
+    maximum_input_tokens: z.number().int().nonnegative().optional(),
+    maximum_output_tokens: z.number().int().nonnegative().optional(),
+    maximum_total_tokens: z.number().int().nonnegative().optional(),
+    maximum_cost: z.number().nonnegative().optional(),
+  })
+  .strict();
+
+export const evaluationRegressionRulesSchema = z
+  .object({
+    maximum_score_regression: z.number().min(0).max(1).default(0),
+    maximum_pass_rate_regression: z.number().min(0).max(1).default(0),
+    maximum_latency_regression_percent: z.number().nonnegative().default(0),
+    maximum_token_regression_percent: z.number().nonnegative().default(0),
+    maximum_cost_regression_percent: z.number().nonnegative().default(0),
+    block_newly_failed_cases: z.boolean().default(true),
+    block_safety_regression: z.boolean().default(true),
+    block_tool_regression: z.boolean().default(true),
+    require_same_dataset: z.boolean().default(true),
+  })
+  .strict();
+
 export const evaluationCaseSchema = z.object({
   case_id: z.string().min(1),
   dataset_id: z.string().min(1),
@@ -218,6 +252,7 @@ export const evaluationCaseSchema = z.object({
   output_token_budget: z.number().int().positive().optional(),
   total_token_budget: z.number().int().positive().optional(),
   cost_budget: z.number().nonnegative().optional(),
+  minimum_case_score: z.number().min(0).max(1).optional(),
   weight: z.number().positive().default(1),
   tags: z.array(z.string().min(1)).default([]),
   enabled: z.boolean().default(true),
@@ -258,6 +293,8 @@ export const evaluationCandidateBundleSchema = z.object({
   model_policy_id: z.string().min(1),
   model_policy_version: z.number().int().positive(),
   model_policy_hash: sha256Schema,
+  agent_execution_plan_ref: z.string().min(1),
+  agent_execution_plan_hash: sha256Schema,
   tool_refs: z.array(flowExecutionPlanToolSchema).default([]),
   tenant_policy_snapshot_ref: z.string().min(1),
   tenant_policy_snapshot_hash: sha256Schema,
@@ -287,6 +324,8 @@ export const evaluationExecutionPlanSchema = z.object({
   dataset_version: z.number().int().positive(),
   dataset_hash: sha256Schema,
   candidate_bundle_hash: sha256Schema,
+  agent_execution_plan_ref: z.string().min(1),
+  agent_execution_plan_hash: sha256Schema,
   resolved_agent_plan: resolvedAgentPlanSchema,
   tools: z.array(flowExecutionPlanToolSchema).default([]),
   tenant_policy_snapshot_ref: z.string().min(1),
@@ -404,8 +443,12 @@ export const evaluationGatePolicySchema = z.object({
   status: evaluationDatasetStatusSchema,
   resource_types: z.array(evaluationSubjectTypeSchema).min(1),
   required_dataset_refs: z.array(z.string().min(1)).min(1),
-  thresholds: safeJsonSchema.default({}),
-  regression_rules: safeJsonSchema.default({}),
+  thresholds: evaluationGateThresholdsSchema.default(() =>
+    evaluationGateThresholdsSchema.parse({}),
+  ),
+  regression_rules: evaluationRegressionRulesSchema.default(() =>
+    evaluationRegressionRulesSchema.parse({}),
+  ),
   required_case_tags: z.array(z.string().min(1)).default([]),
   allow_override: z.boolean().default(false),
   revision: z.number().int().positive().default(1),
@@ -511,6 +554,8 @@ export type EvaluationGateDecisionStatus = z.infer<
 >;
 export type EvaluationAssertion = z.infer<typeof evaluationAssertionSchema>;
 export type ExpectedToolCall = z.infer<typeof expectedToolCallSchema>;
+export type EvaluationGateThresholds = z.infer<typeof evaluationGateThresholdsSchema>;
+export type EvaluationRegressionRules = z.infer<typeof evaluationRegressionRulesSchema>;
 export type EvaluationCase = z.infer<typeof evaluationCaseSchema>;
 export type EvaluationDataset = z.infer<typeof evaluationDatasetSchema>;
 export type EvaluationCandidateBundle = z.infer<typeof evaluationCandidateBundleSchema>;

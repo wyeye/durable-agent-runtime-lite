@@ -37,13 +37,17 @@ The intended publish gate path is:
 
 ```text
 resource id/version/hash
-  -> candidate bundle hash
+  -> candidate bundle hash with exact AgentExecutionPlan ref/hash
   -> published EvaluationGatePolicy id/version/hash
   -> exact EvaluationGateDecision
   -> optional active EvaluationGateOverride
   -> Registry publish
   -> CapabilityRelease with gate ids
 ```
+
+Candidate bundles must bind the primary subject hash to the actual immutable `AgentExecutionPlan` used by runtime execution. Prompt candidates replace `ResolvedAgentPlan.system_prompt`, agent candidates use the candidate agent's own prompt/model/tool/budget refs, and model-policy candidates replace `resolved_model_policy`. Any mismatch between subject snapshot, candidate bundle, execution plan hash, prompt hash, agent hash, or model-policy hash must fail closed with `EVALUATION_CANDIDATE_FIDELITY_MISMATCH`.
+
+Gate policy `thresholds` and `regression_rules` are typed contracts, not free-form JSON. Case pass semantics distinguish hard gate failures, required assertion failures, explicit `minimum_case_score`, `system_error`, and ordinary continuous quality scores.
 
 No default dataset, latest candidate, missing decision fallback, deterministic/mock model fallback, or memory fallback is allowed in required mode.
 
