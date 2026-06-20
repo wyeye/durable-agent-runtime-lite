@@ -42,6 +42,7 @@ import {
   assertCandidateFidelity,
   EvaluationGateError,
   EvaluationGateService,
+  EvaluationEvidenceCollector,
   EvaluationScoringEngine,
   hashEvaluationCandidateBundle,
   hashEvaluationDataset,
@@ -72,6 +73,14 @@ class FakeQuery {
   }
 
   orderBy() {
+    return this;
+  }
+
+  limit() {
+    return this;
+  }
+
+  offset() {
     return this;
   }
 
@@ -260,6 +269,159 @@ function evaluationCaseFixture(caseId: string, weight = 1): EvaluationCase {
     weight,
     tags: [],
     enabled: true,
+  };
+}
+
+function taskRunRow(overrides: Partial<Record<string, unknown>> = {}) {
+  const now = '2026-01-01T00:00:00.000Z';
+  return {
+    task_run_id: 'task_eval',
+    tenant_id: 'tenant_1',
+    user_id: 'user_1',
+    route_type: 'manual',
+    flow_id: null,
+    flow_version: null,
+    workflow_id: 'workflow_eval',
+    execution_plan_ref: 'db://agent-execution-plan/agent_eval',
+    tenant_policy_snapshot_ref: null,
+    tenant_policy_hash: null,
+    tenant_admission_id: null,
+    status: 'completed',
+    error_code: null,
+    error_message: null,
+    input_json: {},
+    route_result_json: null,
+    workflow_start_json: null,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+}
+
+function agentRunRow(overrides: Partial<Record<string, unknown>> = {}) {
+  const now = '2026-01-01T00:00:00.000Z';
+  return {
+    agent_run_id: 'agent_eval',
+    tenant_id: 'tenant_1',
+    user_id: 'user_1',
+    task_run_id: 'task_eval',
+    workflow_id: 'workflow_eval',
+    workflow_run_id: null,
+    parent_workflow_id: null,
+    execution_plan_ref: 'db://agent-execution-plan/agent_eval',
+    execution_plan_hash: 'a'.repeat(64),
+    agent_id: 'agent_eval',
+    agent_version: 1,
+    prompt_id: 'prompt_eval',
+    prompt_version: 1,
+    model: 'deterministic:final_only',
+    model_policy_id: 'policy_eval',
+    model_policy_version: 1,
+    model_policy_hash: 'b'.repeat(64),
+    selected_model_id: 'model_eval',
+    selected_provider: 'provider_eval',
+    fallback_count: 0,
+    model_call_count: 1,
+    execution_mode: 'mediated_tool_call',
+    tenant_policy_snapshot_ref: null,
+    tenant_policy_version: null,
+    tenant_policy_hash: null,
+    tenant_admission_id: null,
+    status: 'completed',
+    current_segment_index: 0,
+    model_turn_count: 1,
+    tool_call_count: 2,
+    handoff_count: 0,
+    input_tokens: 10,
+    output_tokens: 5,
+    total_tokens: 15,
+    estimated_cost: 0.001,
+    started_at: now,
+    completed_at: now,
+    error_code: null,
+    error_message: null,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+}
+
+function toolCallRow(overrides: Partial<ToolCallLog> = {}) {
+  const now = '2026-01-01T00:00:00.000Z';
+  return {
+    id: 1,
+    tool_call_id: 'tool_eval',
+    task_run_id: 'task_eval',
+    workflow_id: 'workflow_eval',
+    tenant_id: 'tenant_1',
+    user_id: 'user_1',
+    tool_name: 'knowledge.search',
+    tool_version: '1.0.0',
+    risk_level: 'L1',
+    policy_decision: 'allow',
+    status: 'committed',
+    duration_ms: 5,
+    idempotency_key: 'idem_eval',
+    input_hash: null,
+    output_hash: null,
+    error_code: null,
+    adapter_type: 'mock',
+    mode: 'commit',
+    execution_context_type: 'evaluation',
+    evaluation_run_id: 'eval_run_1',
+    evaluation_case_id: 'case_1',
+    evaluation_execution_plan_ref: 'db://evaluation-execution-plan/plan_1',
+    evaluation_execution_plan_hash: 'c'.repeat(64),
+    preview_json: null,
+    result_json: null,
+    tenant_policy_snapshot_ref: null,
+    policy_decision_code: 'policy_allowed',
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+}
+
+function modelCallRow(overrides: Partial<Record<string, unknown>> = {}) {
+  const now = '2026-01-01T00:00:00.000Z';
+  return {
+    model_call_id: 'model_call_eval',
+    model_request_key: 'model_request_eval',
+    tenant_id: 'tenant_1',
+    user_id: 'user_1',
+    task_run_id: 'task_eval',
+    workflow_id: 'workflow_eval',
+    workflow_run_id: null,
+    agent_run_id: 'agent_eval',
+    segment_index: 0,
+    model_turn_index: 0,
+    model_policy_id: 'policy_eval',
+    model_policy_version: 1,
+    model_policy_hash: 'b'.repeat(64),
+    target_id: 'target_eval',
+    provider: 'provider_eval',
+    model_id: 'model_eval',
+    protocol: 'dar_generate',
+    attempt_count: 1,
+    fallback_index: 0,
+    status: 'succeeded',
+    finish_reason: 'stop',
+    response_id: 'response_eval',
+    input_tokens: 10,
+    output_tokens: 5,
+    total_tokens: 15,
+    estimated_cost: 0.001,
+    latency_ms: 25,
+    error_class: null,
+    error_code: null,
+    request_hash: 'd'.repeat(64),
+    response_hash: 'e'.repeat(64),
+    safe_response_json: { text: 'safe' },
+    started_at: now,
+    completed_at: now,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
   };
 }
 
@@ -816,6 +978,137 @@ describe('db repositories', () => {
     });
     expect(comparison.comparable).toBe(false);
     expect(comparison.regression_severity).toBe('not_comparable');
+  });
+
+  it('collects authoritative evaluation evidence from DB records and marks missing evidence incomplete', async () => {
+    const now = '2026-01-01T00:00:00.000Z';
+    const db = new FakeDb({
+      task_run: [taskRunRow({ task_run_id: 'task_eval', status: 'failed', error_code: 'TASK_FAILED' })],
+      agent_run: [agentRunRow({ status: 'failed', error_code: 'AGENT_FAILED', error_message: 'agent failed after tool evidence' })],
+      tool_call_log: [
+        toolCallRow({
+          tool_call_id: 'tool_read',
+          status: 'committed',
+          tool_name: 'knowledge.search',
+          input_hash: 'input_hash_read',
+          output_hash: 'output_hash_read',
+          evaluation_run_id: 'eval_run_1',
+          evaluation_case_id: 'case_1',
+        }),
+        toolCallRow({
+          tool_call_id: 'tool_l3',
+          status: 'committed',
+          tool_name: 'record.write.mock',
+          risk_level: 'L3',
+          input_hash: 'input_hash_l3',
+          output_hash: 'output_hash_l3',
+          evaluation_run_id: 'eval_run_1',
+          evaluation_case_id: 'case_1',
+        }),
+      ],
+      model_call_log: [
+        modelCallRow({
+          model_call_id: 'model_call_1',
+          status: 'failed',
+          error_code: 'MODEL_FAILED',
+          input_tokens: 10,
+          output_tokens: 5,
+          total_tokens: 15,
+          estimated_cost: 0.001,
+        }),
+      ],
+      human_task: [
+        {
+          human_task_id: 'human_1',
+          tenant_id: 'tenant_1',
+          task_run_id: 'task_eval',
+          workflow_id: 'workflow_eval',
+          kind: 'approval',
+          status: 'approved',
+          assignee: null,
+          candidate_groups: [],
+          payload: { tool_call_id: 'tool_l3' },
+          requested_schema_json: null,
+          response_json: null,
+          responded_by: null,
+          responded_at: null,
+          response_idempotency_key: null,
+          decision: null,
+          decided_by: 'approver',
+          decided_at: now,
+          decision_reason: null,
+          created_at: now,
+          completed_at: now,
+        },
+      ],
+      audit_event: [
+        {
+          event_id: 'audit_policy',
+          event_key: 'audit_policy',
+          tenant_id: 'tenant_1',
+          actor_id: 'user_1',
+          action: 'tool.invoke',
+          target_type: 'tool',
+          target_id: 'knowledge.search',
+          result: 'denied',
+          reason: 'TOOL_DENIED_BY_TENANT_POLICY',
+          payload: { token_ref: 'masked-ref' },
+          trace_id: 'trace_1',
+          occurred_at: now,
+        },
+      ],
+    });
+
+    const evidence = await new EvaluationEvidenceCollector(db as never).collect({
+      tenantId: 'tenant_1',
+      evaluationRunId: 'eval_run_1',
+      caseId: 'case_1',
+      taskRunId: 'task_eval',
+      agentRunId: 'agent_eval',
+    });
+
+    expect(evidence).toMatchObject({
+      actual_status: 'failed',
+      tool_order: ['knowledge.search', 'record.write.mock'],
+      tool_call_order: ['knowledge.search', 'record.write.mock'],
+      tool_result_refs: ['sha256:output_hash_read', 'sha256:output_hash_l3'],
+      tool_results_refs: ['sha256:output_hash_read', 'sha256:output_hash_l3'],
+      unauthorized_tool_count: 1,
+      policy_violation_count: 1,
+      side_effect_without_approval_count: 0,
+      model_call_count: 1,
+      completeness_status: 'complete',
+      refs: {
+        task_run_id: 'task_eval',
+        agent_run_id: 'agent_eval',
+        model_call_ids: ['model_call_1'],
+        tool_call_ids: ['tool_read', 'tool_l3'],
+      },
+    });
+    expect(evidence.final_output_safe).toEqual({ error_message: 'agent failed after tool evidence' });
+    expect(evidence.final_output_ref).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(evidence.system_error).toEqual({
+      code: 'AGENT_FAILED',
+      message: 'agent failed after tool evidence',
+    });
+    expect(evidence.secret_leak_count).toBe(1);
+
+    const incomplete = await new EvaluationEvidenceCollector(new FakeDb({
+      task_run: [],
+      agent_run: [],
+      tool_call_log: [],
+    }) as never).collect({
+      tenantId: 'tenant_1',
+      evaluationRunId: 'eval_run_missing',
+      caseId: 'case_missing',
+      taskRunId: 'missing_task',
+    });
+    expect(incomplete).toMatchObject({
+      actual_status: 'system_error',
+      completeness_status: 'incomplete',
+      completeness_reasons: ['task_run_missing'],
+      error_code: 'EVALUATION_EVIDENCE_INCOMPLETE',
+    });
   });
 
   it('fails closed for publish gates unless an exact passed decision exists', async () => {

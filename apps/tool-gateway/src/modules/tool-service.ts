@@ -125,6 +125,12 @@ export class InMemoryToolCallLogStore implements ToolCallLogStore {
       if (options.taskRunId && log.task_run_id !== options.taskRunId) {
         return false;
       }
+      if (options.evaluationRunId && log.evaluation_run_id !== options.evaluationRunId) {
+        return false;
+      }
+      if (options.evaluationCaseId && log.evaluation_case_id !== options.evaluationCaseId) {
+        return false;
+      }
       if (options.toolName && log.tool_name !== options.toolName) {
         return false;
       }
@@ -727,6 +733,21 @@ export class ToolService {
     }
     if (!request.evaluation_run_id || !request.evaluation_case_id || !request.evaluation_execution_plan_ref || !request.evaluation_execution_plan_hash) {
       return tenantPolicyDenied(manifest.risk_level, 'TOOL_EVALUATION_CONTEXT_REQUIRED', 'Evaluation tool calls require run, case and execution plan identity');
+    }
+    if (policy.maximum_calls_per_case !== undefined) {
+      const existingCalls = await this.toolCallLogStore.list({
+        tenantId: request.tenant_id,
+        evaluationRunId: request.evaluation_run_id,
+        evaluationCaseId: request.evaluation_case_id,
+        toolName: request.tool_name,
+        limit: policy.maximum_calls_per_case + 1,
+      });
+      const countedCalls = operation === 'commit' && 'tool_call_id' in request
+        ? existingCalls.filter((call) => call.tool_call_id !== request.tool_call_id)
+        : existingCalls;
+      if (countedCalls.length >= policy.maximum_calls_per_case) {
+        return tenantPolicyDenied(manifest.risk_level, 'TOOL_EVALUATION_CALL_LIMIT_EXCEEDED', 'Evaluation tool call limit exceeded for this case');
+      }
     }
     return { decision: 'allow' };
   }

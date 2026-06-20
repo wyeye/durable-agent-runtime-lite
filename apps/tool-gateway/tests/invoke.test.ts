@@ -658,6 +658,74 @@ describe('tool-gateway invoke', () => {
     await server.close();
   });
 
+  it('enforces evaluation maximum calls per case through Tool Gateway state', async () => {
+    const toolCallLogStore = new InMemoryToolCallLogStore();
+    const registry = new MutableRegistry([{
+      ...dbKnowledgeSearchTool,
+      evaluation_policy: {
+        allowed_in_evaluation: true,
+        mode: 'sandbox_commit',
+        allowed_tenants: ['tenant_1'],
+        result_redaction_policy: 'summary_only',
+        maximum_calls_per_case: 1,
+      },
+    }]);
+    const server = buildServer(new ToolService({ registry, toolCallLogStore }));
+    const basePayload = {
+      tool_version: '1.0.0',
+      tenant_id: 'tenant_1',
+      user_context: { user_id: 'user_1' },
+      task_context: { task_run_id: 'task_eval_limited' },
+      arguments: { query: 'hello' },
+      execution_context_type: 'evaluation',
+      evaluation_run_id: 'eval_run_1',
+      evaluation_case_id: 'case_1',
+      evaluation_execution_plan_ref: 'db://evaluation-execution-plan/plan_1',
+      evaluation_execution_plan_hash: 'a'.repeat(64),
+    };
+
+    const first = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/knowledge.search/invoke',
+      payload: {
+        ...basePayload,
+        idempotency_key: 'task_eval_limited:knowledge.search:first',
+      },
+    });
+    expect(first.statusCode).toBe(200);
+
+    const second = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/knowledge.search/invoke',
+      payload: {
+        ...basePayload,
+        idempotency_key: 'task_eval_limited:knowledge.search:second',
+      },
+    });
+    expect(second.statusCode).toBe(400);
+    expect(second.json().error.code).toBe('TOOL_EVALUATION_CALL_LIMIT_EXCEEDED');
+
+    const otherCase = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/knowledge.search/invoke',
+      payload: {
+        ...basePayload,
+        evaluation_case_id: 'case_2',
+        idempotency_key: 'task_eval_limited:knowledge.search:case-2',
+      },
+    });
+    expect(otherCase.statusCode).toBe(200);
+
+    const caseOneCalls = await toolCallLogStore.list({
+      tenantId: 'tenant_1',
+      evaluationRunId: 'eval_run_1',
+      evaluationCaseId: 'case_1',
+      toolName: 'knowledge.search',
+    });
+    expect(caseOneCalls).toHaveLength(1);
+    await server.close();
+  });
+
   it('loads the exact tool version locked by the execution plan', async () => {
     const registry = new MutableRegistry([
       {

@@ -1174,7 +1174,7 @@ export async function collectAndScoreEvaluationCaseActivity(input: {
     const scored = new EvaluationScoringEngine().scoreCase({
       evaluationCase,
       actualStatus: normalizeActualStatus(evidence.actual_status),
-      finalOutput: evidence.final_output ?? 'completed',
+      finalOutput: evidence.final_output_safe ?? 'completed',
       toolCalls: evidence.tool_calls.map((call) => ({
         tool_name: call.tool_name,
         status: call.status,
@@ -1244,19 +1244,18 @@ export async function recordEvaluationCaseSystemErrorActivity(input: {
     const latencyMs = input.started_at_ms !== undefined
       ? Math.max(0, Date.now() - input.started_at_ms)
       : undefined;
-    const evidence = {
-      actual_status: input.cancelled ? 'cancelled' : 'system_error',
-      system_error: {
-        code: input.error_code,
-        message: input.error_message,
-      },
-      refs: {
-        ...(input.task_run_id ? { task_run_id: input.task_run_id } : {}),
-        ...(input.agent_run_id ? { agent_run_id: input.agent_run_id } : {}),
-        model_call_ids: [],
-        tool_call_ids: [],
-      },
-    };
+    const collectedEvidence = await collectSystemErrorEvidence({
+      db,
+      tenantId: input.tenant_id,
+      evaluationRunId: input.evaluation_run_id,
+      caseId: input.case_id,
+      ...(input.task_run_id ? { taskRunId: input.task_run_id } : {}),
+      ...(input.agent_run_id ? { agentRunId: input.agent_run_id } : {}),
+      ...(input.started_at_ms !== undefined ? { startedAtMs: input.started_at_ms } : {}),
+      ...(input.cancelled !== undefined ? { cancelled: input.cancelled } : {}),
+      errorCode: input.error_code,
+      errorMessage: input.error_message,
+    });
     const result = await new EvaluationCaseResultRepository(db).upsert({
       evaluation_run_id: input.evaluation_run_id,
       case_id: input.case_id,
@@ -1275,17 +1274,17 @@ export async function recordEvaluationCaseSystemErrorActivity(input: {
           reason: input.error_message,
         },
       ],
-      evidence_snapshot: evidence,
-      evidence_hash: hashJson(evidence),
+      evidence_snapshot: collectedEvidence,
+      evidence_hash: hashJson(collectedEvidence),
       candidate_fidelity_verified: true,
       assertion_failure_count: 0,
       hard_gate_failure_count: input.cancelled ? 0 : 1,
       system_error_class: input.error_code,
       actual_status: input.cancelled ? 'cancelled' : 'system_error',
-      ...(input.task_run_id ? { task_run_id: input.task_run_id } : {}),
-      ...(input.agent_run_id ? { agent_run_id: input.agent_run_id } : {}),
-      model_call_ids: [],
-      tool_call_ids: [],
+      ...(collectedEvidence.refs.task_run_id ? { task_run_id: collectedEvidence.refs.task_run_id } : input.task_run_id ? { task_run_id: input.task_run_id } : {}),
+      ...(collectedEvidence.refs.agent_run_id ? { agent_run_id: collectedEvidence.refs.agent_run_id } : input.agent_run_id ? { agent_run_id: input.agent_run_id } : {}),
+      model_call_ids: collectedEvidence.refs.model_call_ids,
+      tool_call_ids: collectedEvidence.refs.tool_call_ids,
       ...(latencyMs !== undefined ? { latency_ms: latencyMs } : {}),
       error_code: input.error_code,
       error_message: input.error_message,
@@ -1310,6 +1309,76 @@ export async function recordEvaluationCaseSystemErrorActivity(input: {
     });
     return result;
   });
+}
+
+async function collectSystemErrorEvidence(input: {
+  db: ReturnType<typeof createDb>;
+  tenantId: string;
+  evaluationRunId: string;
+  caseId: string;
+  taskRunId?: string;
+  agentRunId?: string;
+  startedAtMs?: number;
+  cancelled?: boolean;
+  errorCode: string;
+  errorMessage: string;
+}) {
+  try {
+    const evidence = await new EvaluationEvidenceCollector(input.db).collect({
+      tenantId: input.tenantId,
+      evaluationRunId: input.evaluationRunId,
+      caseId: input.caseId,
+      ...(input.taskRunId ? { taskRunId: input.taskRunId } : {}),
+      ...(input.agentRunId ? { agentRunId: input.agentRunId } : {}),
+      ...(input.startedAtMs !== undefined ? { startedAtMs: input.startedAtMs } : {}),
+    });
+    return {
+      ...evidence,
+      actual_status: input.cancelled ? 'cancelled' : 'system_error',
+      system_error: {
+        code: input.errorCode,
+        message: input.errorMessage,
+      },
+    };
+  } catch (error) {
+    return {
+      actual_status: input.cancelled ? 'cancelled' : 'system_error',
+      system_error: {
+        code: input.errorCode,
+        message: input.errorMessage,
+      },
+      tool_calls: [],
+      tool_call_order: [],
+      tool_order: [],
+      tool_arguments: [],
+      tool_results_refs: [],
+      tool_result_refs: [],
+      unauthorized_tool_count: 0,
+      forbidden_tool_count: 0,
+      side_effect_without_approval_count: 0,
+      duplicate_tool_call_count: 0,
+      duplicate_commit_count: 0,
+      policy_violation_count: 0,
+      cross_tenant_violation_count: 0,
+      secret_leak_count: 0,
+      hidden_reasoning_leak_count: 0,
+      model_call_count: 0,
+      fallback_count: 0,
+      latency: {},
+      tokens: {},
+      cost: {},
+      completeness_status: 'incomplete',
+      completeness_reasons: ['collector_failed'],
+      error_code: 'EVALUATION_EVIDENCE_INCOMPLETE',
+      refs: {
+        ...(input.taskRunId ? { task_run_id: input.taskRunId } : {}),
+        ...(input.agentRunId ? { agent_run_id: input.agentRunId } : {}),
+        model_call_ids: [],
+        tool_call_ids: [],
+      },
+      collector_error: error instanceof Error ? error.message : 'unknown',
+    };
+  }
 }
 
 export async function aggregateEvaluationRunActivity(input: {

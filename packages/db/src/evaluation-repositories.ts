@@ -128,7 +128,8 @@ export interface UpsertEvaluationCaseResultInput
 
 export interface EvaluationEvidenceSnapshot {
   actual_status: string;
-  final_output?: unknown;
+  final_output_safe?: unknown;
+  final_output_ref?: string;
   tool_calls: Array<{
     tool_call_id: string;
     tool_name: string;
@@ -140,8 +141,10 @@ export interface EvaluationEvidenceSnapshot {
     mode?: string;
   }>;
   tool_call_order: string[];
+  tool_order: string[];
   tool_arguments: Array<{ tool_name: string; input_hash?: string }>;
   tool_results_refs: string[];
+  tool_result_refs: string[];
   unauthorized_tool_count: number;
   forbidden_tool_count: number;
   side_effect_without_approval_count: number;
@@ -157,6 +160,9 @@ export interface EvaluationEvidenceSnapshot {
   tokens: { input?: number; output?: number; total?: number };
   cost: { estimated?: number };
   system_error?: { code?: string; message?: string };
+  completeness_status: 'complete' | 'incomplete';
+  completeness_reasons: string[];
+  error_code?: 'EVALUATION_EVIDENCE_INCOMPLETE';
   refs: {
     task_run_id?: string;
     agent_run_id?: string;
@@ -1545,17 +1551,16 @@ export class EvaluationEvidenceCollector {
     tenantId: string;
     evaluationRunId: string;
     caseId: string;
-    taskRunId: string;
+    taskRunId?: string;
     agentRunId?: string;
     startedAtMs?: number;
   }): Promise<EvaluationEvidenceSnapshot> {
-    const taskRun = await new TaskRunRepository(this.db).get(input.taskRunId);
-    if (!taskRun || taskRun.tenant_id !== input.tenantId) {
-      throw new EvaluationRepositoryError('EVALUATION_EVIDENCE_TASK_NOT_FOUND', 'TaskRun evidence not found');
-    }
+    const taskRun = input.taskRunId ? await new TaskRunRepository(this.db).get(input.taskRunId) : undefined;
     const agentRuns = input.agentRunId
       ? [await new AgentRunRepository(this.db).get(input.agentRunId, { tenantId: input.tenantId })].filter((run): run is NonNullable<typeof run> => Boolean(run))
-      : await new AgentRunRepository(this.db).list({ tenantId: input.tenantId, taskRunId: input.taskRunId, limit: 10 });
+      : input.taskRunId
+        ? await new AgentRunRepository(this.db).list({ tenantId: input.tenantId, taskRunId: input.taskRunId, limit: 10 })
+        : [];
     const agentRun = agentRuns[0];
     const toolCallsByEvaluation = await new ToolCallLogRepository(this.db).list({
       tenantId: input.tenantId,
@@ -1563,25 +1568,31 @@ export class EvaluationEvidenceCollector {
       evaluationCaseId: input.caseId,
       limit: 100,
     });
-    const toolCalls = toolCallsByEvaluation.length > 0
+    const toolCalls = toolCallsByEvaluation.length > 0 || !input.taskRunId
       ? toolCallsByEvaluation
       : await new ToolCallLogRepository(this.db).list({ tenantId: input.tenantId, taskRunId: input.taskRunId, limit: 100 });
-    const modelCalls = await new ModelCallLogRepository(this.db).list({
-      tenantId: input.tenantId,
-      taskRunId: input.taskRunId,
-      ...(agentRun ? { agentRunId: agentRun.agent_run_id } : {}),
-      limit: 100,
-    });
-    const humanTasks = await new HumanTaskRepository(this.db).list({
-      tenantId: input.tenantId,
-      taskRunId: input.taskRunId,
-      limit: 100,
-    });
-    const auditEvents = await new AuditEventRepository(this.db).list({
-      tenantId: input.tenantId,
-      taskRunId: input.taskRunId,
-      limit: 200,
-    });
+    const modelCalls = input.taskRunId
+      ? await new ModelCallLogRepository(this.db).list({
+          tenantId: input.tenantId,
+          taskRunId: input.taskRunId,
+          ...(agentRun ? { agentRunId: agentRun.agent_run_id } : {}),
+          limit: 100,
+        })
+      : [];
+    const humanTasks = input.taskRunId
+      ? await new HumanTaskRepository(this.db).list({
+          tenantId: input.tenantId,
+          taskRunId: input.taskRunId,
+          limit: 100,
+        })
+      : [];
+    const auditEvents = input.taskRunId
+      ? await new AuditEventRepository(this.db).list({
+          tenantId: input.tenantId,
+          taskRunId: input.taskRunId,
+          limit: 200,
+        })
+      : [];
     const duplicateToolCallCount = countDuplicates(toolCalls.map((call) => `${call.tool_name}:${call.input_hash ?? ''}`));
     const duplicateCommitCount = countDuplicates(
       toolCalls
@@ -1601,9 +1612,19 @@ export class EvaluationEvidenceCollector {
       : input.startedAtMs
         ? Math.max(0, Date.now() - input.startedAtMs)
         : undefined;
+    const finalOutput = agentRun?.error_message ? { error_message: agentRun.error_message } : undefined;
+    const finalOutputRef = finalOutput === undefined ? undefined : `sha256:${hashJson(finalOutput)}`;
+    const toolOrder = toolCalls.map((call) => call.tool_name);
+    const toolResultRefs = toolCalls.flatMap((call) => call.output_hash ? [`sha256:${call.output_hash}`] : []);
+    const completenessReasons = [
+      ...(taskRun ? [] : ['task_run_missing']),
+      ...(taskRun && taskRun.tenant_id !== input.tenantId ? ['task_run_tenant_mismatch'] : []),
+      ...(input.agentRunId && !agentRun ? ['agent_run_missing'] : []),
+    ];
     return {
-      actual_status: agentRun?.status ?? taskRun.status,
-      ...(agentRun?.error_message ? { final_output: { error_message: agentRun.error_message } } : {}),
+      actual_status: agentRun?.status ?? taskRun?.status ?? 'system_error',
+      ...(finalOutput !== undefined ? { final_output_safe: finalOutput } : {}),
+      ...(finalOutputRef ? { final_output_ref: finalOutputRef } : {}),
       tool_calls: toolCalls.map((call) => ({
         tool_call_id: call.tool_call_id,
         tool_name: call.tool_name,
@@ -1614,16 +1635,18 @@ export class EvaluationEvidenceCollector {
         ...(call.output_hash ? { result_ref: `sha256:${call.output_hash}` } : {}),
         ...(call.mode ? { mode: call.mode } : {}),
       })),
-      tool_call_order: toolCalls.map((call) => call.tool_name),
+      tool_call_order: toolOrder,
+      tool_order: toolOrder,
       tool_arguments: toolCalls.map((call) => ({ tool_name: call.tool_name, ...(call.input_hash ? { input_hash: call.input_hash } : {}) })),
-      tool_results_refs: toolCalls.flatMap((call) => call.output_hash ? [`sha256:${call.output_hash}`] : []),
+      tool_results_refs: toolResultRefs,
+      tool_result_refs: toolResultRefs,
       unauthorized_tool_count: auditEvents.filter((event) => event.reason === 'TOOL_DENIED_BY_TENANT_POLICY').length,
       forbidden_tool_count: 0,
       side_effect_without_approval_count: sideEffectWithoutApprovalCount,
       duplicate_tool_call_count: duplicateToolCallCount,
       duplicate_commit_count: duplicateCommitCount,
       policy_violation_count: policyViolationCount,
-      cross_tenant_violation_count: taskRun.tenant_id === input.tenantId ? 0 : 1,
+      cross_tenant_violation_count: taskRun && taskRun.tenant_id !== input.tenantId ? 1 : 0,
       secret_leak_count: auditEvents.some((event) => stableStringify(event.payload).match(/secret|token|password/iu)) ? 1 : 0,
       hidden_reasoning_leak_count: auditEvents.some((event) => stableStringify(event.payload).match(/chain.of.thought|hidden_reasoning/iu)) ? 1 : 0,
       model_call_count: modelCalls.length || agentRun?.model_call_count || 0,
@@ -1635,11 +1658,14 @@ export class EvaluationEvidenceCollector {
         ...(agentRun?.total_tokens ? { total: agentRun.total_tokens } : {}),
       },
       cost: agentRun?.estimated_cost !== undefined ? { estimated: agentRun.estimated_cost } : {},
-      ...(agentRun?.status === 'failed' || taskRun.status === 'failed'
+      ...(agentRun?.status === 'failed' || taskRun?.status === 'failed'
         ? { system_error: { ...(agentRun?.error_code ? { code: agentRun.error_code } : {}), ...(agentRun?.error_message ? { message: agentRun.error_message } : {}) } }
         : {}),
+      completeness_status: completenessReasons.length > 0 ? 'incomplete' : 'complete',
+      completeness_reasons: completenessReasons,
+      ...(completenessReasons.length > 0 ? { error_code: 'EVALUATION_EVIDENCE_INCOMPLETE' as const } : {}),
       refs: {
-        task_run_id: taskRun.task_run_id,
+        ...(taskRun ? { task_run_id: taskRun.task_run_id } : {}),
         ...(agentRun ? { agent_run_id: agentRun.agent_run_id } : {}),
         model_call_ids: modelCalls.map((call) => call.model_call_id),
         tool_call_ids: toolCalls.map((call) => call.tool_call_id),

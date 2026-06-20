@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-06-20 for AR-2B development pass.
+Last updated: 2026-06-20 for AR-2B-FINAL-2 development pass.
 
 ## Platform Version
 
@@ -10,7 +10,7 @@ The root `package.json` version is the authority. `corepack pnpm version:check` 
 
 ## Baseline
 
-- Observed local HEAD and `origin/main` before the AR-2B-CLOSURE pass: `a1c363aab4c0e0d6e3330165737aa18a6bc03d08`.
+- Observed local HEAD and `origin/main` before the AR-2B-FINAL-2 pass: `4cb53ca4fc753b4c60fbda7fa5d1e4981badaca9`.
 - Platform Core Baseline file: `docs/PLATFORM_CORE_BASELINE.md`.
 - Migration head: `015_evaluation_runtime_state_machine.sql`.
 
@@ -69,7 +69,7 @@ Verified in this local pass:
 - `smoke:ollama-containerized-e2e` passed final, readonly, and L3 paths through the containerized runtime.
 - DB evidence showed `provider=local-ollama`, exact model id, readonly/L3 two model calls, one readonly tool call, one L3 committed tool call, one approved L3 Human Task, audit events, and idempotency records.
 
-Remote evidence checked for `origin/main` / `27598fee653fadc33ae9dc8d40fba4b806bf0d85`:
+Historical AR-2A remote evidence checked for `origin/main` / `27598fee653fadc33ae9dc8d40fba4b806bf0d85`:
 
 - GitHub CI Run 18 passed.
 - GitHub Integration Run 12 passed.
@@ -182,7 +182,7 @@ corepack pnpm smoke:model-gateway-live-l3-e2e
 
 The Ollama containerized smoke used Dockerized `runtime-api`, `runtime-worker`, `tool-gateway`, and `control-plane`; only Ollama ran on the host.
 
-## Verification In Current AR-2B-CLOSURE Pass
+## Verification In Current AR-2B-FINAL-2 Pass
 
 Passed:
 
@@ -195,6 +195,11 @@ corepack pnpm test
 corepack pnpm build
 corepack pnpm test:temporal-replay
 corepack pnpm --filter @dar/runtime-worker typecheck
+corepack pnpm --filter @dar/runtime-worker test -- --runInBand
+corepack pnpm --filter @dar/tool-gateway typecheck
+corepack pnpm --filter @dar/tool-gateway test -- --runInBand
+corepack pnpm --filter @dar/db build
+corepack pnpm --filter @dar/db typecheck
 corepack pnpm --filter @dar/db test
 corepack pnpm --dir apps/runtime-worker exec vitest run tests/evaluation-workflow.test.ts --reporter=verbose
 docker compose -f infra/docker-compose.yml config
@@ -202,7 +207,7 @@ docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml 
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.ollama.yml config
 ```
 
-The local `gh` CLI is not installed, but the public GitHub Actions API showed CI and Integration succeeded for `a1c363aab4c0e0d6e3330165737aa18a6bc03d08`. No Docker image build, container startup smoke, live Ollama evaluation smoke, or new evaluation E2E smoke was completed in this pass.
+The local `gh` CLI is not installed, but the public GitHub Actions API showed CI and Integration succeeded for `4cb53ca4fc753b4c60fbda7fa5d1e4981badaca9`. No Docker image build, container startup smoke, live Ollama evaluation smoke, or new evaluation E2E smoke was completed in this pass.
 
 ## Next AR-2B Work
 
@@ -222,13 +227,17 @@ Implemented in this development pass:
 - Evaluation run finalization now persists comparison and gate decision before marking the run completed.
 - Evaluation run cancellation now has explicit `cancelling` and `cancelled` states and a repository-backed cancel finalization path.
 - Cancelled case results are treated as skipped and excluded from aggregate score denominators.
+- Evaluation Evidence Collector now emits explicit safe output refs, tool order/result refs, completeness status, and `EVALUATION_EVIDENCE_INCOMPLETE` when required DB evidence is missing.
+- Evaluation case `system_error` recording now attempts authoritative evidence collection before persisting the case result, so existing model/tool refs are not discarded on failure paths.
+- Tool Gateway evaluation policy now enforces `maximum_calls_per_case` against recorded ToolCall evidence scoped by tenant, evaluation run, case, and tool.
 
 Still open:
 
 - Production-complete Temporal-backed evaluation smoke coverage.
 - Dataset/Case full CRUD and publish lifecycle.
 - Gate Policy full CRUD and publish lifecycle.
-- Full authoritative Evidence Collector, Tool Evaluation Safety policy enforcement, and tamper tests.
+- Full Evidence Collector coverage for agent steps, idempotency records, model call attempts, final output object storage refs, size caps, tamper/retry tests, and end-to-end DB evidence export.
+- Full Tool Evaluation Safety coverage for preview/commit split, adapter-class policy, cross-tenant DB integration, redaction policy behavior, and production E2E enforcement.
 - Gate Decision stale/override closed loop and publish UI selection flow.
 - Real Ollama Evaluation E2E.
 - Control-plane evaluation pages.
