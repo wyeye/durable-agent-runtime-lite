@@ -10,9 +10,9 @@ The root `package.json` version is the authority. `corepack pnpm version:check` 
 
 ## Baseline
 
-- Observed local HEAD and `origin/main` before this pass: `27598fee653fadc33ae9dc8d40fba4b806bf0d85`.
+- Observed local HEAD and `origin/main` before the AR-2B-CLOSURE pass: `a1c363aab4c0e0d6e3330165737aa18a6bc03d08`.
 - Platform Core Baseline file: `docs/PLATFORM_CORE_BASELINE.md`.
-- Migration head: `013_evaluation_and_release_gates.sql`.
+- Migration head: `015_evaluation_runtime_state_machine.sql`.
 
 ## AR-1 Platform Core
 
@@ -150,7 +150,7 @@ corepack pnpm smoke:ollama-runtime-l3-e2e
 
 `ollama:probe` checks the real local Ollama OpenAI-compatible API and exact model availability. `runtime:assert-containerized` proves the four app containers are healthy, versioned, and not using mock/deterministic runtime. `smoke:ollama-containerized-e2e` runs final, readonly, and L3 through the containerized runtime and checks DB evidence.
 
-## Verification In This Pass
+## Verification In Previous AR-2A Container Pass
 
 Passed:
 
@@ -182,6 +182,28 @@ corepack pnpm smoke:model-gateway-live-l3-e2e
 
 The Ollama containerized smoke used Dockerized `runtime-api`, `runtime-worker`, `tool-gateway`, and `control-plane`; only Ollama ran on the host.
 
+## Verification In Current AR-2B-CLOSURE Pass
+
+Passed:
+
+```bash
+corepack pnpm install --frozen-lockfile
+corepack pnpm version:check
+corepack pnpm lint
+corepack pnpm typecheck
+corepack pnpm test
+corepack pnpm build
+corepack pnpm test:temporal-replay
+corepack pnpm --filter @dar/runtime-worker typecheck
+corepack pnpm --filter @dar/db test
+corepack pnpm --dir apps/runtime-worker exec vitest run tests/evaluation-workflow.test.ts --reporter=verbose
+docker compose -f infra/docker-compose.yml config
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml config
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.ollama.yml config
+```
+
+The local `gh` CLI is not installed, but the public GitHub Actions API showed CI and Integration succeeded for `a1c363aab4c0e0d6e3330165737aa18a6bc03d08`. No Docker image build, container startup smoke, live Ollama evaluation smoke, or new evaluation E2E smoke was completed in this pass.
+
 ## Next AR-2B Work
 
 Current AR-2B status: `AR-2B PARTIAL`.
@@ -190,13 +212,24 @@ Implemented in this development pass:
 
 - Evaluation dataset, case, subject snapshot, execution plan, run, result, gate policy, gate decision, and override contracts.
 - Forward migration `013_evaluation_and_release_gates.sql`.
+- Forward migration `014_evaluation_runtime_closure.sql`.
+- Forward migration `015_evaluation_runtime_state_machine.sql`.
 - DB repositories, stable hashes, deterministic scoring, same-dataset regression comparison, and publish gate decision checks.
 - `prompt`, `agent`, and `model_policy` Registry publish gate hooks with exact candidate bundle hash checks.
 - `capability_release` now stores evaluation gate decision and override ids.
+- Evaluation run workflow now uses deterministic bounded fixed batches from `EVALUATION_MAX_CONCURRENT_CASES`.
+- Evaluation case workflow records per-case `system_error` or `cancelled` results instead of letting a single candidate/Pi child failure fail the whole run.
+- Evaluation run finalization now persists comparison and gate decision before marking the run completed.
+- Evaluation run cancellation now has explicit `cancelling` and `cancelled` states and a repository-backed cancel finalization path.
+- Cancelled case results are treated as skipped and excluded from aggregate score denominators.
 
 Still open:
 
-- Temporal-backed evaluation worker and runner.
+- Production-complete Temporal-backed evaluation smoke coverage.
+- Dataset/Case full CRUD and publish lifecycle.
+- Gate Policy full CRUD and publish lifecycle.
+- Full authoritative Evidence Collector, Tool Evaluation Safety policy enforcement, and tamper tests.
+- Gate Decision stale/override closed loop and publish UI selection flow.
 - Real Ollama Evaluation E2E.
 - Control-plane evaluation pages.
 - Evaluation smoke scripts, CI workflow coverage, and full regression suite rerun.

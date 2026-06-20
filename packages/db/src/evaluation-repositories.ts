@@ -562,6 +562,15 @@ export class EvaluationRunRepository {
   }
 
   async markRunning(runId: string): Promise<EvaluationRun> {
+    const existing = await this.get(runId);
+    if (!existing) {
+      throw new EvaluationRepositoryError('EVALUATION_RUN_NOT_FOUND', 'EvaluationRun not found', {
+        evaluation_run_id: runId,
+      });
+    }
+    if (existing.status === 'cancelling' || existing.status === 'cancelled') {
+      return existing;
+    }
     const row = await this.db
       .updateTable('evaluation_run')
       .set({
@@ -572,8 +581,18 @@ export class EvaluationRunRepository {
         updated_at: new Date(),
       })
       .where('evaluation_run_id', '=', runId)
+      .where('status', 'in', ['queued', 'running'])
       .returningAll()
-      .executeTakeFirstOrThrow();
+      .executeTakeFirst();
+    if (!row) {
+      const existing = await this.get(runId);
+      if (!existing) {
+        throw new EvaluationRepositoryError('EVALUATION_RUN_NOT_FOUND', 'EvaluationRun not found', {
+          evaluation_run_id: runId,
+        });
+      }
+      return existing;
+    }
     return mapEvaluationRun(row);
   }
 
@@ -592,12 +611,37 @@ export class EvaluationRunRepository {
   }
 
   async markCancellationRequested(runId: string): Promise<EvaluationRun> {
+    const existing = await this.get(runId);
+    if (!existing) {
+      throw new EvaluationRepositoryError('EVALUATION_RUN_NOT_FOUND', 'EvaluationRun not found', {
+        evaluation_run_id: runId,
+      });
+    }
+    if (['completed', 'failed', 'cancelled'].includes(existing.status)) {
+      return existing;
+    }
     const row = await this.db
       .updateTable('evaluation_run')
-      .set({ cancellation_requested_at: new Date(), updated_at: new Date() })
+      .set({
+        status: 'cancelling',
+        cancellation_requested_at: existing.cancellation_requested_at
+          ? new Date(existing.cancellation_requested_at)
+          : new Date(),
+        updated_at: new Date(),
+      })
       .where('evaluation_run_id', '=', runId)
+      .where('status', 'in', ['queued', 'running', 'cancelling'])
       .returningAll()
-      .executeTakeFirstOrThrow();
+      .executeTakeFirst();
+    if (!row) {
+      const current = await this.get(runId);
+      if (!current) {
+        throw new EvaluationRepositoryError('EVALUATION_RUN_NOT_FOUND', 'EvaluationRun not found', {
+          evaluation_run_id: runId,
+        });
+      }
+      return current;
+    }
     return mapEvaluationRun(row);
   }
 
@@ -617,8 +661,18 @@ export class EvaluationRunRepository {
         updated_at: new Date(),
       })
       .where('evaluation_run_id', '=', runId)
+      .where('status', 'in', ['running', 'completed'])
       .returningAll()
-      .executeTakeFirstOrThrow();
+      .executeTakeFirst();
+    if (!row) {
+      const existing = await this.get(runId);
+      if (!existing) {
+        throw new EvaluationRepositoryError('EVALUATION_RUN_NOT_FOUND', 'EvaluationRun not found', {
+          evaluation_run_id: runId,
+        });
+      }
+      return existing;
+    }
     return mapEvaluationRun(row);
   }
 
@@ -634,8 +688,57 @@ export class EvaluationRunRepository {
         updated_at: new Date(),
       })
       .where('evaluation_run_id', '=', runId)
+      .where('status', 'not in', ['completed', 'cancelled'])
       .returningAll()
-      .executeTakeFirstOrThrow();
+      .executeTakeFirst();
+    if (!row) {
+      const existing = await this.get(runId);
+      if (!existing) {
+        throw new EvaluationRepositoryError('EVALUATION_RUN_NOT_FOUND', 'EvaluationRun not found', {
+          evaluation_run_id: runId,
+        });
+      }
+      return existing;
+    }
+    return mapEvaluationRun(row);
+  }
+
+  async cancel(runId: string, aggregate?: EvaluationAggregateResult): Promise<EvaluationRun> {
+    const existing = await this.get(runId);
+    if (!existing) {
+      throw new EvaluationRepositoryError('EVALUATION_RUN_NOT_FOUND', 'EvaluationRun not found', {
+        evaluation_run_id: runId,
+      });
+    }
+    if (existing.status === 'cancelled') {
+      return existing;
+    }
+    const row = await this.db
+      .updateTable('evaluation_run')
+      .set({
+        status: 'cancelled',
+        ...(aggregate
+          ? {
+              completed_cases: aggregate.completed_cases,
+              passed_cases: aggregate.passed_cases,
+              failed_cases: aggregate.failed_cases,
+              skipped_cases: aggregate.skipped_cases,
+              system_error_cases: Number(aggregate.metric_summary.system_error_cases ?? 0),
+              aggregate_score: aggregate.weighted_score,
+              evidence_collection_status: 'completed',
+            }
+          : { evidence_collection_status: 'partial' }),
+        completed_at: new Date(),
+        updated_at: new Date(),
+      })
+      .where('evaluation_run_id', '=', runId)
+      .where('status', 'in', ['queued', 'running', 'cancelling'])
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      const current = await this.get(runId);
+      return current ?? existing;
+    }
     return mapEvaluationRun(row);
   }
 }
@@ -1328,6 +1431,11 @@ export class EvaluationScoringEngine {
         failed += 1;
       } else if (result.status === 'system_error') {
         failed += 1;
+      } else if (result.status === 'cancelled') {
+        skipped += 1;
+      }
+      if (result.status === 'cancelled') {
+        continue;
       }
       denominator += evaluationCase.weight;
       weightedScore += (result.score ?? 0) * evaluationCase.weight;

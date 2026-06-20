@@ -245,6 +245,24 @@ function modelPolicyFixture(modelPolicyId: string, version: number) {
   };
 }
 
+function evaluationCaseFixture(caseId: string, weight = 1): EvaluationCase {
+  return {
+    case_id: caseId,
+    dataset_id: 'runtime-agent-core-v1',
+    dataset_version: 1,
+    name: caseId,
+    input: { text: caseId },
+    expected_tool_calls: [],
+    forbidden_tools: [],
+    final_assertions: [],
+    policy_assertions: [],
+    context_refs: [],
+    weight,
+    tags: [],
+    enabled: true,
+  };
+}
+
 describe('db repositories', () => {
   it('builds stable hashes and DB flow refs', () => {
     expect(stableStringify({ b: 2, a: 1 })).toBe('{"a":1,"b":2}');
@@ -707,6 +725,50 @@ describe('db repositories', () => {
       ],
     });
     expect(requiredMinimum.status).toBe('failed');
+  });
+
+  it('treats cancelled evaluation cases as skipped and excludes them from weighted score', () => {
+    const cases: EvaluationCase[] = [
+      evaluationCaseFixture('case_passed', 2),
+      evaluationCaseFixture('case_cancelled', 3),
+    ];
+    const aggregate = new EvaluationScoringEngine().aggregate({
+      runId: 'run_cancelled',
+      cases,
+      results: [
+        {
+          evaluation_case_result_id: 'result_passed',
+          evaluation_run_id: 'run_cancelled',
+          case_id: 'case_passed',
+          status: 'passed',
+          score: 1,
+          metric_results: [],
+          candidate_fidelity_verified: true,
+          assertion_failure_count: 0,
+          hard_gate_failure_count: 0,
+          model_call_ids: [],
+          tool_call_ids: [],
+        },
+        {
+          evaluation_case_result_id: 'result_cancelled',
+          evaluation_run_id: 'run_cancelled',
+          case_id: 'case_cancelled',
+          status: 'cancelled',
+          score: 0,
+          metric_results: [],
+          candidate_fidelity_verified: true,
+          assertion_failure_count: 0,
+          hard_gate_failure_count: 0,
+          model_call_ids: [],
+          tool_call_ids: [],
+        },
+      ],
+    });
+
+    expect(aggregate.completed_cases).toBe(1);
+    expect(aggregate.skipped_cases).toBe(1);
+    expect(aggregate.weighted_score).toBe(1);
+    expect(aggregate.pass_rate).toBe(1);
   });
 
   it('compares evaluation runs only when dataset versions match', () => {

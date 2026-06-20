@@ -51,6 +51,17 @@ Gate policy `thresholds` and `regression_rules` are typed contracts, not free-fo
 
 No default dataset, latest candidate, missing decision fallback, deterministic/mock model fallback, or memory fallback is allowed in required mode.
 
+## Runtime Closure Slice
+
+The current runtime closure slice adds:
+
+- `014_evaluation_runtime_closure.sql` for workflow ids, cancellation request time, evidence collection state, case evidence snapshots, persisted comparisons, and evaluation context columns on `tool_call_log`.
+- `015_evaluation_runtime_state_machine.sql` for explicit run states `queued`, `running`, `cancelling`, `completed`, `failed`, and `cancelled`, plus case state `cancelled`.
+- Deterministic bounded case execution in `evaluationRunWorkflow` using `EVALUATION_MAX_CONCURRENT_CASES`.
+- Per-case `system_error` and `cancelled` result recording when a candidate/Pi child workflow fails or is cancelled.
+- Run finalization order of aggregate, comparison, gate decision, then completed status.
+- Cancelled case aggregation as skipped, excluded from weighted-score denominator.
+
 ## Configuration
 
 Development defaults:
@@ -70,7 +81,7 @@ EVALUATION_GATE_MODE=required
 
 The following AR-2B items are not yet production-complete:
 
-- Temporal evaluation workflow and activity execution.
+- Production framework/regression/publish-gate evaluation smokes through Temporal, Pi, Tool Gateway, Evidence Collector, Scoring, and DB.
 - Real Ollama Evaluation E2E through the full evaluation runner.
 - Control-plane Dataset, Run, Result, Comparison, and Gate pages.
 - Evaluation smoke scripts and CI workflows.

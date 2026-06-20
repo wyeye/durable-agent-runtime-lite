@@ -951,6 +951,8 @@ export interface LoadEvaluationRunPlanActivityResult {
   plan: EvaluationExecutionPlan;
   subject_snapshot: EvaluationSubjectSnapshot;
   cases: EvaluationCase[];
+  max_concurrent_cases: number;
+  case_timeout_ms: number;
 }
 
 export interface EvaluationCaseSummary {
@@ -974,6 +976,13 @@ export async function loadEvaluationRunPlanActivity(
 ): Promise<LoadEvaluationRunPlanActivityResult> {
   return classifyActivityFailure('loadEvaluationRunPlanActivity', async () => {
     const db = getProcessDb();
+    const config = loadConfig();
+    if (config.EVALUATION_MAX_CONCURRENT_CASES < 1) {
+      throw ApplicationFailure.nonRetryable(
+        'EVALUATION_MAX_CONCURRENT_CASES must be positive',
+        'VALIDATION_FAILED',
+      );
+    }
     const run = await new EvaluationRunRepository(db).get(input.evaluation_run_id);
     if (!run || run.tenant_id !== input.tenant_id) {
       throw ApplicationFailure.nonRetryable('EvaluationRun not found', 'NOT_FOUND');
@@ -987,7 +996,14 @@ export async function loadEvaluationRunPlanActivity(
       throw ApplicationFailure.nonRetryable('EvaluationSubjectSnapshot hash mismatch', 'EVALUATION_SUBJECT_HASH_MISMATCH');
     }
     const cases = await new EvaluationCaseRepository(db).list(plan.dataset_id, plan.dataset_version, true);
-    return { run, plan, subject_snapshot: subjectSnapshot, cases };
+    return {
+      run,
+      plan,
+      subject_snapshot: subjectSnapshot,
+      cases,
+      max_concurrent_cases: config.EVALUATION_MAX_CONCURRENT_CASES,
+      case_timeout_ms: config.EVALUATION_CASE_TIMEOUT_MS,
+    };
   });
 }
 
@@ -1019,6 +1035,15 @@ export async function completeEvaluationRunActivity(input: {
 }): Promise<EvaluationRun> {
   return classifyActivityFailure('completeEvaluationRunActivity', async () =>
     new EvaluationRunRepository(getProcessDb()).complete(input.evaluation_run_id, input.aggregate),
+  );
+}
+
+export async function cancelEvaluationRunActivity(input: {
+  evaluation_run_id: string;
+  aggregate?: EvaluationAggregateResult;
+}): Promise<EvaluationRun> {
+  return classifyActivityFailure('cancelEvaluationRunActivity', async () =>
+    new EvaluationRunRepository(getProcessDb()).cancel(input.evaluation_run_id, input.aggregate),
   );
 }
 
@@ -1189,6 +1214,104 @@ export async function collectAndScoreEvaluationCaseActivity(input: {
   });
 }
 
+export async function recordEvaluationCaseSystemErrorActivity(input: {
+  tenant_id: string;
+  evaluation_run_id: string;
+  case_id: string;
+  task_run_id?: string;
+  agent_run_id?: string;
+  workflow_id: string;
+  workflow_run_id?: string;
+  started_at_ms?: number;
+  error_code: string;
+  error_message: string;
+  cancelled?: boolean;
+}): Promise<EvaluationCaseResult> {
+  return classifyActivityFailure('recordEvaluationCaseSystemErrorActivity', async () => {
+    const db = getProcessDb();
+    const run = await new EvaluationRunRepository(db).get(input.evaluation_run_id);
+    if (!run || run.tenant_id !== input.tenant_id) {
+      throw ApplicationFailure.nonRetryable('EvaluationRun not found', 'NOT_FOUND');
+    }
+    const evaluationCase = await new EvaluationCaseRepository(db).get(input.case_id);
+    if (!evaluationCase || evaluationCase.dataset_id !== run.dataset_id || evaluationCase.dataset_version !== run.dataset_version) {
+      throw ApplicationFailure.nonRetryable('EvaluationCase not found for run dataset', 'NOT_FOUND');
+    }
+    const completedAt = new Date().toISOString();
+    const startedAt = input.started_at_ms !== undefined
+      ? new Date(input.started_at_ms).toISOString()
+      : completedAt;
+    const latencyMs = input.started_at_ms !== undefined
+      ? Math.max(0, Date.now() - input.started_at_ms)
+      : undefined;
+    const evidence = {
+      actual_status: input.cancelled ? 'cancelled' : 'system_error',
+      system_error: {
+        code: input.error_code,
+        message: input.error_message,
+      },
+      refs: {
+        ...(input.task_run_id ? { task_run_id: input.task_run_id } : {}),
+        ...(input.agent_run_id ? { agent_run_id: input.agent_run_id } : {}),
+        model_call_ids: [],
+        tool_call_ids: [],
+      },
+    };
+    const result = await new EvaluationCaseResultRepository(db).upsert({
+      evaluation_run_id: input.evaluation_run_id,
+      case_id: input.case_id,
+      workflow_id: input.workflow_id,
+      ...(input.workflow_run_id ? { workflow_run_id: input.workflow_run_id } : {}),
+      status: input.cancelled ? 'cancelled' : 'system_error',
+      score: 0,
+      metric_results: [
+        {
+          metric_name: input.cancelled ? 'case_cancelled' : 'case_system_error',
+          metric_type: 'runtime',
+          score: 0,
+          passed: false,
+          hard_gate: !input.cancelled,
+          actual: input.error_code,
+          reason: input.error_message,
+        },
+      ],
+      evidence_snapshot: evidence,
+      evidence_hash: hashJson(evidence),
+      candidate_fidelity_verified: true,
+      assertion_failure_count: 0,
+      hard_gate_failure_count: input.cancelled ? 0 : 1,
+      system_error_class: input.error_code,
+      actual_status: input.cancelled ? 'cancelled' : 'system_error',
+      ...(input.task_run_id ? { task_run_id: input.task_run_id } : {}),
+      ...(input.agent_run_id ? { agent_run_id: input.agent_run_id } : {}),
+      model_call_ids: [],
+      tool_call_ids: [],
+      ...(latencyMs !== undefined ? { latency_ms: latencyMs } : {}),
+      error_code: input.error_code,
+      error_message: input.error_message,
+      started_at: startedAt,
+      completed_at: completedAt,
+    });
+    await new AuditEventRepository(db).append({
+      event_key: `evaluation.case.${input.cancelled ? 'cancelled' : 'system_error'}:${input.evaluation_run_id}:${input.case_id}`,
+      tenant_id: input.tenant_id,
+      actor_id: run.created_by ?? 'evaluation-system',
+      action: input.cancelled ? 'evaluation.case.cancelled' : 'evaluation.case.system_error',
+      target_type: 'evaluation_case',
+      target_id: input.case_id,
+      result: input.cancelled ? 'pending' : 'failed',
+      reason: input.error_code,
+      trace_id: input.workflow_id,
+      payload: {
+        evaluation_run_id: input.evaluation_run_id,
+        case_id: input.case_id,
+        error_code: input.error_code,
+      },
+    });
+    return result;
+  });
+}
+
 export async function aggregateEvaluationRunActivity(input: {
   evaluation_run_id: string;
 }): Promise<EvaluationAggregateResult> {
@@ -1208,6 +1331,7 @@ export async function compareEvaluationRunActivity(input: {
   candidate_run_id: string;
   baseline_run_id: string;
   created_by?: string;
+  candidate_aggregate?: EvaluationAggregateResult;
 }): Promise<EvaluationComparison> {
   return classifyActivityFailure('compareEvaluationRunActivity', async () => {
     const db = getProcessDb();
@@ -1219,13 +1343,28 @@ export async function compareEvaluationRunActivity(input: {
     }
     const resultRepository = new EvaluationCaseResultRepository(db);
     const comparison = new EvaluationComparisonService().compare({
-      candidateRun,
+      candidateRun: input.candidate_aggregate
+        ? runWithAggregate(candidateRun, input.candidate_aggregate)
+        : candidateRun,
       candidateResults: await resultRepository.listByRun(candidateRun.evaluation_run_id),
       baselineRun,
       baselineResults: await resultRepository.listByRun(baselineRun.evaluation_run_id),
     });
     return new EvaluationComparisonRepository(db).create(comparison, input.created_by);
   });
+}
+
+function runWithAggregate(run: EvaluationRun, aggregate: EvaluationAggregateResult): EvaluationRun {
+  return {
+    ...run,
+    total_cases: aggregate.total_cases,
+    completed_cases: aggregate.completed_cases,
+    passed_cases: aggregate.passed_cases,
+    failed_cases: aggregate.failed_cases,
+    skipped_cases: aggregate.skipped_cases,
+    system_error_cases: Number(aggregate.metric_summary.system_error_cases ?? 0),
+    aggregate_score: aggregate.weighted_score,
+  };
 }
 
 export async function generateEvaluationGateDecisionActivity(input: {

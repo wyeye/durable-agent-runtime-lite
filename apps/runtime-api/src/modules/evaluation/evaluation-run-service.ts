@@ -166,7 +166,7 @@ export class EvaluationRunService {
       throw new EvaluationRepositoryError('EVALUATION_RUN_NOT_FOUND', 'EvaluationRun not found');
     }
     const marked = await this.runs.markCancellationRequested(runId);
-    if (marked.workflow_id) {
+    if (marked.workflow_id && ['queued', 'running', 'cancelling'].includes(marked.status)) {
       await this.workflowStarter.cancelEvaluationRun(marked.workflow_id);
     }
     return marked;

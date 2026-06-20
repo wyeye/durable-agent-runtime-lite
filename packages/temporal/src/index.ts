@@ -93,6 +93,7 @@ export interface EvaluationCaseWorkflowInput {
   user_id: string;
   evaluation_run_id: string;
   case_id: string;
+  case_timeout_ms?: number;
   evaluation_execution_plan_ref: string;
   evaluation_execution_plan_hash: string;
   request_id: string;

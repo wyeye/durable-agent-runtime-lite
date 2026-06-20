@@ -122,6 +122,7 @@ export const evaluationSubjectTypeSchema = z.enum(['prompt', 'agent', 'model_pol
 export const evaluationRunStatusSchema = z.enum([
   'queued',
   'running',
+  'cancelling',
   'completed',
   'failed',
   'cancelled',
@@ -133,6 +134,7 @@ export const evaluationCaseStatusSchema = z.enum([
   'failed',
   'skipped',
   'system_error',
+  'cancelled',
 ]);
 export const evaluationMetricTypeSchema = z.enum([
   'runtime',
