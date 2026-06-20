@@ -168,7 +168,8 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
         temperature: 0.2,
         top_p: 1,
         max_output_tokens: 1000,
-        tool_choice_mode: 'auto',
+        initial_tool_choice_mode: 'auto',
+        after_tool_result_tool_choice_mode: 'auto',
         response_format: 'text',
         allow_parallel_tool_calls: false,
       },
@@ -235,23 +236,57 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
 
 function renderFlowSummary(record: RegistryRecord) {
   const spec = asRecord(record.spec);
-  const steps = Array.isArray(spec.steps) ? spec.steps.filter(isRecord) as FlowStep[] : [];
+  const steps = Array.isArray(spec.steps) ? (spec.steps.filter(isRecord) as FlowStep[]) : [];
   const columns: ColumnsType<FlowStep> = [
     { title: 'step id', dataIndex: 'id', key: 'id' },
     { title: 'type', dataIndex: 'type', key: 'type' },
-    { title: 'tool', dataIndex: 'tool', key: 'tool', render: (value: string | undefined) => value ?? '-' },
-    { title: 'agent', dataIndex: 'agent_id', key: 'agent_id', render: (value: string | undefined) => value ?? '-' },
-    { title: 'activity', dataIndex: 'activity', key: 'activity', render: (value: string | undefined) => value ?? '-' },
-    { title: 'mode', dataIndex: 'mode', key: 'mode', render: (value: string | undefined) => value ?? '-' },
-    { title: 'risk', dataIndex: 'risk_level', key: 'risk_level', render: (value: ToolRiskLevel | undefined) => value ? <RiskTag risk={value} /> : '-' },
+    {
+      title: 'tool',
+      dataIndex: 'tool',
+      key: 'tool',
+      render: (value: string | undefined) => value ?? '-',
+    },
+    {
+      title: 'agent',
+      dataIndex: 'agent_id',
+      key: 'agent_id',
+      render: (value: string | undefined) => value ?? '-',
+    },
+    {
+      title: 'activity',
+      dataIndex: 'activity',
+      key: 'activity',
+      render: (value: string | undefined) => value ?? '-',
+    },
+    {
+      title: 'mode',
+      dataIndex: 'mode',
+      key: 'mode',
+      render: (value: string | undefined) => value ?? '-',
+    },
+    {
+      title: 'risk',
+      dataIndex: 'risk_level',
+      key: 'risk_level',
+      render: (value: ToolRiskLevel | undefined) => (value ? <RiskTag risk={value} /> : '-'),
+    },
   ];
-  const hasL3PreviewCommit = steps.some((step) => step.type === 'tool' && (step.risk_level === 'L3' || step.mode === 'preview_commit') && step.mode === 'preview_commit');
+  const hasL3PreviewCommit = steps.some(
+    (step) =>
+      step.type === 'tool' &&
+      (step.risk_level === 'L3' || step.mode === 'preview_commit') &&
+      step.mode === 'preview_commit',
+  );
   return (
     <>
       <Descriptions bordered size="small" column={2}>
-        <Descriptions.Item label="flow_id">{readString(spec.flow_id) ?? record.resource_id}</Descriptions.Item>
+        <Descriptions.Item label="flow_id">
+          {readString(spec.flow_id) ?? record.resource_id}
+        </Descriptions.Item>
         <Descriptions.Item label="version">{record.version}</Descriptions.Item>
-        <Descriptions.Item label="workflow_type">{readString(asRecord(spec.runtime).workflow_type) ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="workflow_type">
+          {readString(asRecord(spec.runtime).workflow_type) ?? '-'}
+        </Descriptions.Item>
         <Descriptions.Item label="steps">{steps.length}</Descriptions.Item>
       </Descriptions>
       <Alert
@@ -259,9 +294,20 @@ function renderFlowSummary(record: RegistryRecord) {
         type={hasL3PreviewCommit ? 'success' : 'info'}
         showIcon
         message="L3 human confirmation path"
-        description={hasL3PreviewCommit ? 'Flow 中存在 preview_commit 路径。' : '如 Flow 引用 L3 Tool，validate 会强制检查 preview_commit。'}
+        description={
+          hasL3PreviewCommit
+            ? 'Flow 中存在 preview_commit 路径。'
+            : '如 Flow 引用 L3 Tool，validate 会强制检查 preview_commit。'
+        }
       />
-      <Table size="small" rowKey="id" columns={columns} dataSource={steps} pagination={false} style={{ marginTop: 12 }} />
+      <Table
+        size="small"
+        rowKey="id"
+        columns={columns}
+        dataSource={steps}
+        pagination={false}
+        style={{ marginTop: 12 }}
+      />
     </>
   );
 }
@@ -271,18 +317,38 @@ function renderRouteSummary(record: RegistryRecord) {
   const route = asRecord(spec.route);
   return (
     <Descriptions bordered size="small" column={2}>
-      <Descriptions.Item label="route_id">{readString(spec.route_id) ?? record.resource_id}</Descriptions.Item>
+      <Descriptions.Item label="route_id">
+        {readString(spec.route_id) ?? record.resource_id}
+      </Descriptions.Item>
       <Descriptions.Item label="flow_id">{readString(spec.flow_id) ?? '-'}</Descriptions.Item>
-      <Descriptions.Item label="flow_version">{readNumber(spec.version) ?? record.version}</Descriptions.Item>
+      <Descriptions.Item label="flow_version">
+        {readNumber(spec.version) ?? record.version}
+      </Descriptions.Item>
       <Descriptions.Item label="priority">{readNumber(route.priority) ?? '-'}</Descriptions.Item>
-      <Descriptions.Item label="confidence_threshold">{readNumber(route.confidence_threshold) ?? '-'}</Descriptions.Item>
-      <Descriptions.Item label="ambiguous_threshold">{readNumber(route.ambiguous_threshold) ?? '-'}</Descriptions.Item>
-      <Descriptions.Item label="keywords">{formatList(readStringArray(route.keywords))}</Descriptions.Item>
-      <Descriptions.Item label="examples">{formatList(readStringArray(route.examples))}</Descriptions.Item>
-      <Descriptions.Item label="negative_examples">{formatList(readStringArray(route.negative_examples))}</Descriptions.Item>
-      <Descriptions.Item label="channels">{formatList(readStringArray(route.supported_channels))}</Descriptions.Item>
-      <Descriptions.Item label="roles">{formatList(readStringArray(route.role_constraints))}</Descriptions.Item>
-      <Descriptions.Item label="gray tenant allowlist">{formatList(record.gray_policy.tenant_allowlist)}</Descriptions.Item>
+      <Descriptions.Item label="confidence_threshold">
+        {readNumber(route.confidence_threshold) ?? '-'}
+      </Descriptions.Item>
+      <Descriptions.Item label="ambiguous_threshold">
+        {readNumber(route.ambiguous_threshold) ?? '-'}
+      </Descriptions.Item>
+      <Descriptions.Item label="keywords">
+        {formatList(readStringArray(route.keywords))}
+      </Descriptions.Item>
+      <Descriptions.Item label="examples">
+        {formatList(readStringArray(route.examples))}
+      </Descriptions.Item>
+      <Descriptions.Item label="negative_examples">
+        {formatList(readStringArray(route.negative_examples))}
+      </Descriptions.Item>
+      <Descriptions.Item label="channels">
+        {formatList(readStringArray(route.supported_channels))}
+      </Descriptions.Item>
+      <Descriptions.Item label="roles">
+        {formatList(readStringArray(route.role_constraints))}
+      </Descriptions.Item>
+      <Descriptions.Item label="gray tenant allowlist">
+        {formatList(record.gray_policy.tenant_allowlist)}
+      </Descriptions.Item>
     </Descriptions>
   );
 }
@@ -294,14 +360,28 @@ function renderToolSummary(record: RegistryRecord) {
   return (
     <>
       <Descriptions bordered size="small" column={2}>
-        <Descriptions.Item label="tool_name">{readString(spec.tool_name) ?? record.resource_id}</Descriptions.Item>
-        <Descriptions.Item label="version">{readString(spec.version) ?? record.version}</Descriptions.Item>
-        <Descriptions.Item label="risk_level"><RiskTag risk={risk} /></Descriptions.Item>
-        <Descriptions.Item label="side_effect">{String(Boolean(spec.side_effect))}</Descriptions.Item>
-        <Descriptions.Item label="adapter.type">{readString(adapter.type) ?? '-'}</Descriptions.Item>
-        <Descriptions.Item label="required_permissions">{formatList(readStringArray(spec.required_permissions))}</Descriptions.Item>
+        <Descriptions.Item label="tool_name">
+          {readString(spec.tool_name) ?? record.resource_id}
+        </Descriptions.Item>
+        <Descriptions.Item label="version">
+          {readString(spec.version) ?? record.version}
+        </Descriptions.Item>
+        <Descriptions.Item label="risk_level">
+          <RiskTag risk={risk} />
+        </Descriptions.Item>
+        <Descriptions.Item label="side_effect">
+          {String(Boolean(spec.side_effect))}
+        </Descriptions.Item>
+        <Descriptions.Item label="adapter.type">
+          {readString(adapter.type) ?? '-'}
+        </Descriptions.Item>
+        <Descriptions.Item label="required_permissions">
+          {formatList(readStringArray(spec.required_permissions))}
+        </Descriptions.Item>
       </Descriptions>
-      <div style={{ marginTop: 12 }}><RiskNotice risk={risk} sideEffect={Boolean(spec.side_effect)} /></div>
+      <div style={{ marginTop: 12 }}>
+        <RiskNotice risk={risk} sideEffect={Boolean(spec.side_effect)} />
+      </div>
       <Typography.Title level={5}>input_schema</Typography.Title>
       <pre className="cp-json-pre">{JSON.stringify(spec.input_schema ?? {}, null, 2)}</pre>
       <Typography.Title level={5}>output_schema</Typography.Title>
@@ -314,14 +394,24 @@ function renderAgentSummary(record: RegistryRecord) {
   const spec = asRecord(record.spec);
   return (
     <Descriptions bordered size="small" column={2}>
-      <Descriptions.Item label="agent_id">{readString(spec.agent_id) ?? record.resource_id}</Descriptions.Item>
+      <Descriptions.Item label="agent_id">
+        {readString(spec.agent_id) ?? record.resource_id}
+      </Descriptions.Item>
       <Descriptions.Item label="prompt_ref">{readString(spec.prompt_ref) ?? '-'}</Descriptions.Item>
-      <Descriptions.Item label="allowed_tools">{formatList(readStringArray(spec.allowed_tools))}</Descriptions.Item>
+      <Descriptions.Item label="allowed_tools">
+        {formatList(readStringArray(spec.allowed_tools))}
+      </Descriptions.Item>
       <Descriptions.Item label="max_steps">{readNumber(spec.max_steps) ?? '-'}</Descriptions.Item>
       <Descriptions.Item label="max_tokens">{readNumber(spec.max_tokens) ?? '-'}</Descriptions.Item>
-      <Descriptions.Item label="model_policy">{readString(spec.model_policy) ?? '-'}</Descriptions.Item>
-      <Descriptions.Item label="model_policy_ref">{JSON.stringify(spec.model_policy_ref ?? {})}</Descriptions.Item>
-      <Descriptions.Item label="output_schema" span={2}>{readString(spec.output_schema) ?? '-'}</Descriptions.Item>
+      <Descriptions.Item label="model_policy">
+        {readString(spec.model_policy) ?? '-'}
+      </Descriptions.Item>
+      <Descriptions.Item label="model_policy_ref">
+        {JSON.stringify(spec.model_policy_ref ?? {})}
+      </Descriptions.Item>
+      <Descriptions.Item label="output_schema" span={2}>
+        {readString(spec.output_schema) ?? '-'}
+      </Descriptions.Item>
     </Descriptions>
   );
 }
@@ -330,24 +420,67 @@ function renderModelPolicySummary(record: RegistryRecord) {
   const spec = asRecord(record.spec);
   const targets = Array.isArray(spec.targets) ? spec.targets.filter(isRecord) : [];
   const columns: ColumnsType<Record<string, unknown>> = [
-    { title: 'target_id', dataIndex: 'target_id', key: 'target_id', render: (value: unknown) => readString(value) ?? '-' },
-    { title: 'profile', dataIndex: 'gateway_profile', key: 'gateway_profile', render: (value: unknown) => readString(value) ?? '-' },
-    { title: 'model_id', dataIndex: 'model_id', key: 'model_id', render: (value: unknown) => readString(value) ?? '-' },
-    { title: 'priority', dataIndex: 'priority', key: 'priority', render: (value: unknown) => readNumber(value) ?? '-' },
-    { title: 'enabled', dataIndex: 'enabled', key: 'enabled', render: (value: unknown) => String(Boolean(value)) },
+    {
+      title: 'target_id',
+      dataIndex: 'target_id',
+      key: 'target_id',
+      render: (value: unknown) => readString(value) ?? '-',
+    },
+    {
+      title: 'profile',
+      dataIndex: 'gateway_profile',
+      key: 'gateway_profile',
+      render: (value: unknown) => readString(value) ?? '-',
+    },
+    {
+      title: 'model_id',
+      dataIndex: 'model_id',
+      key: 'model_id',
+      render: (value: unknown) => readString(value) ?? '-',
+    },
+    {
+      title: 'priority',
+      dataIndex: 'priority',
+      key: 'priority',
+      render: (value: unknown) => readNumber(value) ?? '-',
+    },
+    {
+      title: 'enabled',
+      dataIndex: 'enabled',
+      key: 'enabled',
+      render: (value: unknown) => String(Boolean(value)),
+    },
   ];
   const requestPolicy = asRecord(spec.request_policy);
   return (
     <>
       <Descriptions bordered size="small" column={2}>
-        <Descriptions.Item label="model_policy_id">{readString(spec.model_policy_id) ?? record.resource_id}</Descriptions.Item>
-        <Descriptions.Item label="version">{readNumber(spec.version) ?? record.version}</Descriptions.Item>
+        <Descriptions.Item label="model_policy_id">
+          {readString(spec.model_policy_id) ?? record.resource_id}
+        </Descriptions.Item>
+        <Descriptions.Item label="version">
+          {readNumber(spec.version) ?? record.version}
+        </Descriptions.Item>
         <Descriptions.Item label="protocol">{readString(spec.protocol) ?? '-'}</Descriptions.Item>
         <Descriptions.Item label="targets">{targets.length}</Descriptions.Item>
-        <Descriptions.Item label="max_output_tokens">{readNumber(requestPolicy.max_output_tokens) ?? '-'}</Descriptions.Item>
-        <Descriptions.Item label="tool_choice_mode">{readString(requestPolicy.tool_choice_mode) ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="max_output_tokens">
+          {readNumber(requestPolicy.max_output_tokens) ?? '-'}
+        </Descriptions.Item>
+        <Descriptions.Item label="initial_tool_choice_mode">
+          {readString(requestPolicy.initial_tool_choice_mode) ?? '-'}
+        </Descriptions.Item>
+        <Descriptions.Item label="after_tool_result_tool_choice_mode">
+          {readString(requestPolicy.after_tool_result_tool_choice_mode) ?? '-'}
+        </Descriptions.Item>
       </Descriptions>
-      <Table size="small" rowKey={(row) => readString(row.target_id) ?? JSON.stringify(row)} columns={columns} dataSource={targets} pagination={false} style={{ marginTop: 12 }} />
+      <Table
+        size="small"
+        rowKey={(row) => readString(row.target_id) ?? JSON.stringify(row)}
+        columns={columns}
+        dataSource={targets}
+        pagination={false}
+        style={{ marginTop: 12 }}
+      />
     </>
   );
 }
@@ -358,12 +491,24 @@ function renderPromptSummary(record: RegistryRecord) {
   return (
     <>
       <Descriptions bordered size="small" column={2}>
-        <Descriptions.Item label="prompt_id">{readString(spec.prompt_id) ?? record.resource_id}</Descriptions.Item>
-        <Descriptions.Item label="version">{readNumber(spec.version) ?? record.version}</Descriptions.Item>
+        <Descriptions.Item label="prompt_id">
+          {readString(spec.prompt_id) ?? record.resource_id}
+        </Descriptions.Item>
+        <Descriptions.Item label="version">
+          {readNumber(spec.version) ?? record.version}
+        </Descriptions.Item>
         <Descriptions.Item label="name">{readString(spec.name) ?? '-'}</Descriptions.Item>
-        <Descriptions.Item label="variables">{formatList(readStringArray(spec.variables))}</Descriptions.Item>
+        <Descriptions.Item label="variables">
+          {formatList(readStringArray(spec.variables))}
+        </Descriptions.Item>
       </Descriptions>
-      <Alert style={{ marginTop: 12 }} type="info" showIcon message="模板变量格式" description="变量应使用合法标识符，Prompt 内容中的疑似密钥会由 validate 检查并展示 warning/error。" />
+      <Alert
+        style={{ marginTop: 12 }}
+        type="info"
+        showIcon
+        message="模板变量格式"
+        description="变量应使用合法标识符，Prompt 内容中的疑似密钥会由 validate 检查并展示 warning/error。"
+      />
       <Typography.Title level={5}>content</Typography.Title>
       <pre className="cp-json-pre">{content}</pre>
     </>
@@ -379,16 +524,30 @@ function renderTenantRuntimePolicySummary(record: RegistryRecord) {
   return (
     <>
       <Descriptions bordered size="small" column={2}>
-        <Descriptions.Item label="tenant_id">{readString(spec.tenant_id) ?? record.resource_id}</Descriptions.Item>
-        <Descriptions.Item label="version">{readNumber(spec.version) ?? record.version}</Descriptions.Item>
-        <Descriptions.Item label="max_concurrent_agent_runs">{readNumber(spec.max_concurrent_agent_runs) ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="tenant_id">
+          {readString(spec.tenant_id) ?? record.resource_id}
+        </Descriptions.Item>
+        <Descriptions.Item label="version">
+          {readNumber(spec.version) ?? record.version}
+        </Descriptions.Item>
+        <Descriptions.Item label="max_concurrent_agent_runs">
+          {readNumber(spec.max_concurrent_agent_runs) ?? '-'}
+        </Descriptions.Item>
         <Descriptions.Item label="allowed_tools">{allowedTools}</Descriptions.Item>
         <Descriptions.Item label="denied_tools">{deniedTools}</Descriptions.Item>
         <Descriptions.Item label="allowed_models">{allowedModels}</Descriptions.Item>
-        <Descriptions.Item label="max_tool_calls">{readNumber(budget.max_tool_calls) ?? '-'}</Descriptions.Item>
-        <Descriptions.Item label="max_total_tokens">{readNumber(budget.max_total_tokens) ?? '-'}</Descriptions.Item>
-        <Descriptions.Item label="max_handoffs">{readNumber(budget.max_handoffs) ?? '-'}</Descriptions.Item>
-        <Descriptions.Item label="max_context_bytes">{readNumber(budget.max_context_bytes) ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="max_tool_calls">
+          {readNumber(budget.max_tool_calls) ?? '-'}
+        </Descriptions.Item>
+        <Descriptions.Item label="max_total_tokens">
+          {readNumber(budget.max_total_tokens) ?? '-'}
+        </Descriptions.Item>
+        <Descriptions.Item label="max_handoffs">
+          {readNumber(budget.max_handoffs) ?? '-'}
+        </Descriptions.Item>
+        <Descriptions.Item label="max_context_bytes">
+          {readNumber(budget.max_context_bytes) ?? '-'}
+        </Descriptions.Item>
       </Descriptions>
       <Alert
         style={{ marginTop: 12 }}

@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-06-19 for R0 + AR-2A Platform Core Freeze and Real Model Gateway Integration.
+Last updated: 2026-06-19 for R0 + AR-2A local Ollama hardening.
 
 ## Platform Version
 
@@ -10,10 +10,9 @@ The root `package.json` version is the authority. `corepack pnpm version:check` 
 
 ## Baseline
 
-- Observed local HEAD and `origin/main` during this pass: `b4ead47817c1c32f71045139cbdee434a8709afe`.
-- User-provided expected baseline: `ab7cec9`.
+- Observed local HEAD and `origin/main` before this pass: `170b327b4dd3cc280095e38eb17734fb10d06d2c`.
 - Platform Core Baseline file: `docs/PLATFORM_CORE_BASELINE.md`.
-- Migration head: `011_model_policy_and_calls.sql`.
+- Migration head: `012_model_call_attempt_indexes.sql`.
 
 ## AR-1 Platform Core
 
@@ -43,19 +42,23 @@ Implemented and locally verified in this pass:
 - OpenAI-compatible Model Gateway client adapter.
 - Runtime-worker Pi stream integration through existing Pi Agent Core.
 - Stable local model request keys and safe model response replay.
+- OpenAI-compatible assistant `tool_calls` / `tool_call_id` round-trip preservation.
+- Provider-safe tool-name encoding/decoding for tools such as `knowledge.search`.
+- Retry/fallback attempt ledger indexes (`global_attempt_index`, `target_attempt_index`, `fallback_index`).
+- Local Ollama OpenAI-compatible probe script for exact model `qwen2.5:7b-instruct-q4_K_M`.
+- Docker compose override for development/test local Ollama via `host.docker.internal:11434`.
+- Local current-code runtime smokes for Ollama final, readonly tool, and L3 human-confirmed tool paths.
 - Mock OpenAI-compatible `/v1/chat/completions` endpoint.
 - Control-plane ModelPolicy registry entry and JSON editor template.
 - Protected live Model Gateway probe commands that skip unless explicitly enabled.
 
 Not completed in this local pass:
 
-- Full runtime live final, readonly, and L3 smokes against real external credentials.
 - Full protected GitHub live-model runtime workflow with Docker stack, migrations, seed, runtime live smokes, artifacts, and teardown. A protected provider-level probe workflow exists at `.github/workflows/live-model.yml`.
-- Full local fallback/crash model-gateway smoke commands requested for AR-2A.
-- Full Docker image rebuild and long-running smoke suite after the final AR-2A partial edits.
+- Full Docker image rebuild and containerized Ollama runtime smoke after the final AR-2A edits. The local runtime smokes were executed with current host-built runtime-api/runtime-worker code against Docker PostgreSQL, Temporal, and Tool Gateway.
 - Complete Model Usage dashboard and operations model-call query UI.
 
-Because live runtime smokes were not executed with real credentials, this repository must not be labeled `0.9.0-rc.1` yet.
+Because the final Docker image rebuild and containerized Ollama runtime smoke are not complete, this repository must not be labeled `0.9.0-rc.1` yet.
 
 ## Model Gateway Runtime
 
@@ -70,6 +73,18 @@ MODEL_GATEWAY_API_KEY
 ```
 
 Development/test mock gateway is only available through `infra/docker-compose.pi-smoke.yml` and `devtools/mock-server`.
+
+Local Ollama development/test profile:
+
+```text
+MODEL_GATEWAY_PROFILE_ID=local-ollama
+MODEL_GATEWAY_BASE_URL=http://host.docker.internal:11434/v1
+MODEL_GATEWAY_API_KEY=ollama
+MODEL_GATEWAY_MODEL=qwen2.5:7b-instruct-q4_K_M
+MODEL_GATEWAY_ALLOW_INSECURE_HTTP=true
+```
+
+`local-ollama`, insecure HTTP, and the placeholder `ollama` API key are rejected by production readiness.
 
 ## Smoke Commands
 
@@ -106,6 +121,17 @@ corepack pnpm smoke:model-gateway-live-l3-e2e
 
 These live commands require `LIVE_MODEL_GATEWAY_ENABLED=true`; otherwise they print `skipped: true`.
 
+Local Ollama probe and runtime smokes:
+
+```bash
+corepack pnpm ollama:probe
+corepack pnpm smoke:ollama-runtime-final-e2e
+corepack pnpm smoke:ollama-runtime-readonly-e2e
+corepack pnpm smoke:ollama-runtime-l3-e2e
+```
+
+`ollama:probe` checks the real local Ollama OpenAI-compatible API and exact model availability. The `smoke:ollama-runtime-*` commands use `/v1/agent-tasks` and require the DB, Temporal, runtime-api, runtime-worker, and tool-gateway stack to be running with `infra/docker-compose.ollama.yml`.
+
 ## Verification In This Pass
 
 Passed:
@@ -118,20 +144,30 @@ corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm build
 corepack pnpm test:temporal-replay
+corepack pnpm ollama:probe
+corepack pnpm smoke:ollama-runtime-final-e2e
+corepack pnpm smoke:ollama-runtime-readonly-e2e
+corepack pnpm smoke:ollama-runtime-l3-e2e
+docker compose -f infra/docker-compose.yml config
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml config
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.ollama.yml config
+git diff --check
+```
+
+Completed with the protected expected skip because `LIVE_MODEL_GATEWAY_ENABLED` was not `true`:
+
+```bash
 corepack pnpm smoke:model-gateway-live
 corepack pnpm smoke:model-gateway-live-final-e2e
 corepack pnpm smoke:model-gateway-live-readonly-e2e
 corepack pnpm smoke:model-gateway-live-l3-e2e
-docker compose -f infra/docker-compose.yml config
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml config
-git diff --check
 ```
 
-`smoke:model-gateway-live` skipped because `LIVE_MODEL_GATEWAY_ENABLED` was not `true`.
+The Ollama runtime smokes used current host-built `runtime-api` and `runtime-worker` processes with Docker PostgreSQL, Temporal, and Tool Gateway; this proved the real runtime data path but did not prove rebuilt app images.
 
 ## Next AR-2B Work
 
 - Run full Docker build and integrated smoke suite after credentials are available.
-- Add protected `.github/workflows/live-model.yml`.
-- Promote AR-2A only after live final, readonly, and L3 runtime smokes pass without deterministic Pi or mock-server.
+- Run the protected `.github/workflows/live-model.yml` provider probes against real credentials.
+- Promote AR-2A only after protected live final, readonly, and L3 checks plus containerized Docker runtime smokes pass without deterministic Pi or mock-server.
 - Add evaluation and release gate metrics in AR-2B.

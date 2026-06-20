@@ -36,7 +36,10 @@ interface BrowserLike {
 interface PageLike {
   goto(url: string): Promise<unknown>;
   waitForLoadState(state?: string): Promise<unknown>;
-  evaluate<TArg, TResult>(pageFunction: (arg: TArg) => TResult | Promise<TResult>, arg: TArg): Promise<TResult>;
+  evaluate<TArg, TResult>(
+    pageFunction: (arg: TArg) => TResult | Promise<TResult>,
+    arg: TArg,
+  ): Promise<TResult>;
   getByTestId(testId: string): LocatorLike;
   getByText(text: string | RegExp, options?: { exact?: boolean }): LocatorLike;
   getByRole(role: string, options?: { name?: string | RegExp; exact?: boolean }): LocatorLike;
@@ -101,9 +104,12 @@ async function main(): Promise<void> {
 
     await page.goto(controlPlaneUrl);
     await page.waitForLoadState('networkidle');
-    await page.evaluate((identity) => {
-      localStorage.setItem('dar.control-plane.identity', JSON.stringify(identity));
-    }, { user_id: userId, tenant_id: tenantId, roles: ['capability_operator'] });
+    await page.evaluate(
+      (identity) => {
+        localStorage.setItem('dar.control-plane.identity', JSON.stringify(identity));
+      },
+      { user_id: userId, tenant_id: tenantId, roles: ['capability_operator'] },
+    );
     await page.goto(`${controlPlaneUrl}/dashboard`);
     await page.waitForLoadState('networkidle');
     await page.getByText('Dashboard').first().waitFor({ timeout: 15_000 });
@@ -117,22 +123,37 @@ async function main(): Promise<void> {
     await validateResource(page, 'model-policies', ids.modelPolicy, 1);
     await publishResource(page, 'prompts', ids.prompt, 1, 'ui smoke publish prompt');
     await publishResource(page, 'tools', ids.tool, 1, 'ui smoke publish tool');
-    await publishResource(page, 'model-policies', ids.modelPolicy, 1, 'ui smoke publish model policy');
+    await publishResource(
+      page,
+      'model-policies',
+      ids.modelPolicy,
+      1,
+      'ui smoke publish model policy',
+    );
 
-    const agent = await createDraft<AgentSpec>(page, 'agents', agentSpec(ids, 1, modelPolicySpecV1));
+    const agent = await createDraft<AgentSpec>(
+      page,
+      'agents',
+      agentSpec(ids, 1, modelPolicySpecV1),
+    );
     await validateResource(page, 'agents', ids.agent, 1);
     await publishResource(page, 'agents', ids.agent, 1, 'ui smoke publish agent');
 
     const flow = await createDraft<FlowSpec>(page, 'flows', flowSpec(ids, 1));
     const route = await createDraft<RouteSpec>(page, 'routes', routeSpec(ids, 1, ids.keywordV1));
     await validateResource(page, 'flows', ids.flow, 1);
-    await postJson<{ flow_release: CapabilityRelease; route_release: CapabilityRelease }>(page, `${controlPlaneUrl}/api/v1/releases/flow-route`, {
-      flow_id: ids.flow,
-      flow_version: 1,
-      route_id: ids.route,
-      route_version: 1,
-      release_note: 'ui smoke publish flow route v1',
-    }, adminHeaders);
+    await postJson<{ flow_release: CapabilityRelease; route_release: CapabilityRelease }>(
+      page,
+      `${controlPlaneUrl}/api/v1/releases/flow-route`,
+      {
+        flow_id: ids.flow,
+        flow_version: 1,
+        route_id: ids.route,
+        route_version: 1,
+        release_note: 'ui smoke publish flow route v1',
+      },
+      adminHeaders,
+    );
 
     await page.goto(`${controlPlaneUrl}/registry/flows`);
     await page.getByTestId('registry-keyword').fill(ids.flow);
@@ -147,27 +168,49 @@ async function main(): Promise<void> {
     const flowV2 = await cloneResource<FlowSpec>(page, 'flows', ids.flow, 1);
     await updateDraft<FlowSpec>(page, 'flows', ids.flow, 2, flowSpec(ids, 2), flowV2.revision);
     const routeV2 = await cloneResource<RouteSpec>(page, 'routes', ids.route, 1);
-    await updateDraft<RouteSpec>(page, 'routes', ids.route, 2, routeSpec(ids, 2, ids.keywordV2), routeV2.revision);
-    await postJson<{ flow_release: CapabilityRelease; route_release: CapabilityRelease }>(page, `${controlPlaneUrl}/api/v1/releases/flow-route`, {
-      flow_id: ids.flow,
-      flow_version: 2,
-      route_id: ids.route,
-      route_version: 2,
-      release_note: 'ui smoke publish flow route v2',
-    }, adminHeaders);
+    await updateDraft<RouteSpec>(
+      page,
+      'routes',
+      ids.route,
+      2,
+      routeSpec(ids, 2, ids.keywordV2),
+      routeV2.revision,
+    );
+    await postJson<{ flow_release: CapabilityRelease; route_release: CapabilityRelease }>(
+      page,
+      `${controlPlaneUrl}/api/v1/releases/flow-route`,
+      {
+        flow_id: ids.flow,
+        flow_version: 2,
+        route_id: ids.route,
+        route_version: 2,
+        release_note: 'ui smoke publish flow route v2',
+      },
+      adminHeaders,
+    );
 
     const previewV2 = await previewRoute(page, ids.keywordV2);
     assert.equal(previewV2.route_decision.decision, 'matched');
     assert.equal(previewV2.route_decision.flow_version, 2);
 
-    await postJson<CapabilityRelease>(page, `${controlPlaneUrl}/api/v1/routes/${encodeURIComponent(ids.route)}/rollback`, {
-      target_version: 1,
-      release_note: 'ui smoke rollback route to v1',
-    }, adminHeaders);
-    await postJson<CapabilityRelease>(page, `${controlPlaneUrl}/api/v1/flows/${encodeURIComponent(ids.flow)}/rollback`, {
-      target_version: 1,
-      release_note: 'ui smoke rollback flow to v1',
-    }, adminHeaders);
+    await postJson<CapabilityRelease>(
+      page,
+      `${controlPlaneUrl}/api/v1/routes/${encodeURIComponent(ids.route)}/rollback`,
+      {
+        target_version: 1,
+        release_note: 'ui smoke rollback route to v1',
+      },
+      adminHeaders,
+    );
+    await postJson<CapabilityRelease>(
+      page,
+      `${controlPlaneUrl}/api/v1/flows/${encodeURIComponent(ids.flow)}/rollback`,
+      {
+        target_version: 1,
+        release_note: 'ui smoke rollback flow to v1',
+      },
+      adminHeaders,
+    );
     const previewAfterRollback = await previewRoute(page, ids.keywordV1);
     assert.equal(previewAfterRollback.route_decision.decision, 'matched');
     assert.equal(previewAfterRollback.route_decision.flow_version, 1);
@@ -177,7 +220,9 @@ async function main(): Promise<void> {
 
     const l3Task = await startSeededL3Task(page);
     const pendingHumanTask = await waitForPendingHumanTask(page, l3Task.task_run_id);
-    await page.goto(`${controlPlaneUrl}/human-tasks?task_run_id=${encodeURIComponent(l3Task.task_run_id)}`);
+    await page.goto(
+      `${controlPlaneUrl}/human-tasks?task_run_id=${encodeURIComponent(l3Task.task_run_id)}`,
+    );
     await page.getByText(pendingHumanTask.human_task_id).first().waitFor({ timeout: 15_000 });
     await page.getByTestId('human-approve').first().click();
     await page.getByTestId('release-note').fill('ui smoke approve L3 task');
@@ -191,15 +236,21 @@ async function main(): Promise<void> {
     await page.goto(`${controlPlaneUrl}/tool-calls`);
     await page.getByText('Tool Calls').first().waitFor({ timeout: 15_000 });
 
-    console.log(JSON.stringify({
-      ok: true,
-      prompt: `${prompt.resource_id}@${prompt.version}`,
-      tool: `${tool.resource_id}@${tool.version}`,
-      model_policy: `${modelPolicy.resource_id}@${modelPolicy.version}`,
-      agent: `${agent.resource_id}@${agent.version}`,
-      flow: `${flow.resource_id}@${flow.version}`,
-      route: `${route.resource_id}@${route.version}`,
-    }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          prompt: `${prompt.resource_id}@${prompt.version}`,
+          tool: `${tool.resource_id}@${tool.version}`,
+          model_policy: `${modelPolicy.resource_id}@${modelPolicy.version}`,
+          agent: `${agent.resource_id}@${agent.version}`,
+          flow: `${flow.resource_id}@${flow.version}`,
+          route: `${route.resource_id}@${route.version}`,
+        },
+        null,
+        2,
+      ),
+    );
   } finally {
     await browser.close();
   }
@@ -237,14 +288,16 @@ function modelPolicySpec(ids: { modelPolicy: string }, version: number): ModelPo
     version,
     status: 'draft',
     protocol: 'dar_generate',
-    targets: [{
-      target_id: `${ids.modelPolicy}_primary`,
-      gateway_profile: 'local-ui-smoke',
-      model_id: 'deterministic:final_only',
-      priority: 0,
-      enabled: true,
-      capabilities: ['text', 'tools', 'usage'],
-    }],
+    targets: [
+      {
+        target_id: `${ids.modelPolicy}_primary`,
+        gateway_profile: 'local-ui-smoke',
+        model_id: 'deterministic:final_only',
+        priority: 0,
+        enabled: true,
+        capabilities: ['text', 'tools', 'usage'],
+      },
+    ],
     retry_policy: {
       max_attempts_per_target: 1,
       retryable_status_codes: [429, 500, 502, 503, 504],
@@ -265,7 +318,8 @@ function modelPolicySpec(ids: { modelPolicy: string }, version: number): ModelPo
       temperature: 0,
       top_p: 1,
       max_output_tokens: 1000,
-      tool_choice_mode: 'auto',
+      initial_tool_choice_mode: 'auto',
+      after_tool_result_tool_choice_mode: 'auto',
       response_format: 'text',
       allow_parallel_tool_calls: false,
     },
@@ -273,7 +327,11 @@ function modelPolicySpec(ids: { modelPolicy: string }, version: number): ModelPo
   };
 }
 
-function agentSpec(ids: { agent: string; prompt: string; tool: string }, version: number, modelPolicy: ModelPolicy): AgentSpec {
+function agentSpec(
+  ids: { agent: string; prompt: string; tool: string },
+  version: number,
+  modelPolicy: ModelPolicy,
+): AgentSpec {
   return {
     agent_id: ids.agent,
     version,
@@ -305,13 +363,23 @@ function flowSpec(ids: { flow: string; tool: string; agent: string }, version: n
     },
     steps: [
       { id: 'start', type: 'activity', activity: 'input.normalize' },
-      { id: 'call_tool', type: 'tool', tool: ids.tool, tool_version: '1.0.0', input: { query: '${text}' } },
+      {
+        id: 'call_tool',
+        type: 'tool',
+        tool: ids.tool,
+        tool_version: '1.0.0',
+        input: { query: '${text}' },
+      },
       { id: 'agent_step', type: 'agent', agent_id: ids.agent, input: { agent_version: 1 } },
     ],
   };
 }
 
-function routeSpec(ids: { route: string; flow: string }, version: number, keyword: string): RouteSpec {
+function routeSpec(
+  ids: { route: string; flow: string },
+  version: number,
+  keyword: string,
+): RouteSpec {
   return {
     route_id: ids.route,
     flow_id: ids.flow,
@@ -330,30 +398,86 @@ function routeSpec(ids: { route: string; flow: string }, version: number, keywor
   };
 }
 
-async function createDraft<TSpec>(page: PageLike, plural: string, spec: TSpec): Promise<RegistryRecord<TSpec>> {
-  return postJson<RegistryRecord<TSpec>>(page, `${controlPlaneUrl}/api/v1/${plural}`, { spec }, operatorHeaders);
+async function createDraft<TSpec>(
+  page: PageLike,
+  plural: string,
+  spec: TSpec,
+): Promise<RegistryRecord<TSpec>> {
+  return postJson<RegistryRecord<TSpec>>(
+    page,
+    `${controlPlaneUrl}/api/v1/${plural}`,
+    { spec },
+    operatorHeaders,
+  );
 }
 
-async function cloneResource<TSpec>(page: PageLike, plural: string, resourceId: string, version: number): Promise<RegistryRecord<TSpec>> {
-  return postJson<RegistryRecord<TSpec>>(page, `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}/clone`, {}, operatorHeaders);
+async function cloneResource<TSpec>(
+  page: PageLike,
+  plural: string,
+  resourceId: string,
+  version: number,
+): Promise<RegistryRecord<TSpec>> {
+  return postJson<RegistryRecord<TSpec>>(
+    page,
+    `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}/clone`,
+    {},
+    operatorHeaders,
+  );
 }
 
-async function updateDraft<TSpec>(page: PageLike, plural: string, resourceId: string, version: number, spec: TSpec, expectedRevision: number): Promise<RegistryRecord<TSpec>> {
-  return putJson<RegistryRecord<TSpec>>(page, `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}`, {
-    spec,
-    expected_revision: expectedRevision,
-  }, operatorHeaders);
+async function updateDraft<TSpec>(
+  page: PageLike,
+  plural: string,
+  resourceId: string,
+  version: number,
+  spec: TSpec,
+  expectedRevision: number,
+): Promise<RegistryRecord<TSpec>> {
+  return putJson<RegistryRecord<TSpec>>(
+    page,
+    `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}`,
+    {
+      spec,
+      expected_revision: expectedRevision,
+    },
+    operatorHeaders,
+  );
 }
 
-async function validateResource(page: PageLike, plural: string, resourceId: string, version: number): Promise<void> {
-  const result = await postJson<{ validation: { can_publish: boolean; errors: unknown[] } }>(page, `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}/validate`, {}, operatorHeaders);
-  assert.equal(result.validation.can_publish, true, `${plural}:${resourceId}@${version} should validate`);
+async function validateResource(
+  page: PageLike,
+  plural: string,
+  resourceId: string,
+  version: number,
+): Promise<void> {
+  const result = await postJson<{ validation: { can_publish: boolean; errors: unknown[] } }>(
+    page,
+    `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}/validate`,
+    {},
+    operatorHeaders,
+  );
+  assert.equal(
+    result.validation.can_publish,
+    true,
+    `${plural}:${resourceId}@${version} should validate`,
+  );
 }
 
-async function publishResource(page: PageLike, plural: string, resourceId: string, version: number, releaseNote: string): Promise<CapabilityRelease> {
-  return postJson<CapabilityRelease>(page, `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}/publish`, {
-    release_note: releaseNote,
-  }, adminHeaders);
+async function publishResource(
+  page: PageLike,
+  plural: string,
+  resourceId: string,
+  version: number,
+  releaseNote: string,
+): Promise<CapabilityRelease> {
+  return postJson<CapabilityRelease>(
+    page,
+    `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}/publish`,
+    {
+      release_note: releaseNote,
+    },
+    adminHeaders,
+  );
 }
 
 async function previewRoute(page: PageLike, keyword: string): Promise<RouterPreviewResponse> {
@@ -366,16 +490,25 @@ async function previewRoute(page: PageLike, keyword: string): Promise<RouterPrev
   });
 }
 
-async function startSeededL3Task(page: PageLike): Promise<{ task_run_id: string; workflow_id: string }> {
-  return runtimePostJson<{ task_run_id: string; workflow_id: string }>(page, `${runtimeApiUrl}/v1/tasks`, {
-    tenant_id: tenantId,
-    user_id: userId,
-    request_id: `${requestPrefix}_l3_task`,
-    input: { text: 'db-smoke UI human approval' },
-  });
+async function startSeededL3Task(
+  page: PageLike,
+): Promise<{ task_run_id: string; workflow_id: string }> {
+  return runtimePostJson<{ task_run_id: string; workflow_id: string }>(
+    page,
+    `${runtimeApiUrl}/v1/tasks`,
+    {
+      tenant_id: tenantId,
+      user_id: userId,
+      request_id: `${requestPrefix}_l3_task`,
+      input: { text: 'db-smoke UI human approval' },
+    },
+  );
 }
 
-async function waitForPendingHumanTask(page: PageLike, taskRunId: string): Promise<HumanTaskListResponse['human_tasks'][number]> {
+async function waitForPendingHumanTask(
+  page: PageLike,
+  taskRunId: string,
+): Promise<HumanTaskListResponse['human_tasks'][number]> {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     const list = await getJson<HumanTaskListResponse>(
@@ -395,25 +528,46 @@ async function waitForPendingHumanTask(page: PageLike, taskRunId: string): Promi
 async function waitForTaskCompleted(page: PageLike, taskRunId: string): Promise<TaskRun> {
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
-    const task = await runtimeGetJson<TaskRun>(page, `${runtimeApiUrl}/v1/tasks/${encodeURIComponent(taskRunId)}`);
+    const task = await runtimeGetJson<TaskRun>(
+      page,
+      `${runtimeApiUrl}/v1/tasks/${encodeURIComponent(taskRunId)}`,
+    );
     if (task.status === 'completed') {
       return task;
     }
     if (task.status === 'failed') {
-      throw new Error(`TaskRun failed after UI approval: ${task.error_code ?? ''} ${task.error_message ?? ''}`);
+      throw new Error(
+        `TaskRun failed after UI approval: ${task.error_code ?? ''} ${task.error_message ?? ''}`,
+      );
     }
     await delay(1_000);
   }
   throw new Error(`Timed out waiting for task completion: ${taskRunId}`);
 }
 
-async function postJson<T>(page: PageLike, url: string, payload: unknown, headers: Record<string, string>): Promise<T> {
-  const response = await page.request.post(url, { headers: { ...headers, 'content-type': 'application/json' }, data: payload });
+async function postJson<T>(
+  page: PageLike,
+  url: string,
+  payload: unknown,
+  headers: Record<string, string>,
+): Promise<T> {
+  const response = await page.request.post(url, {
+    headers: { ...headers, 'content-type': 'application/json' },
+    data: payload,
+  });
   return parseStandardResponse<T>(response, 'POST', url);
 }
 
-async function putJson<T>(page: PageLike, url: string, payload: unknown, headers: Record<string, string>): Promise<T> {
-  const response = await page.request.put(url, { headers: { ...headers, 'content-type': 'application/json' }, data: payload });
+async function putJson<T>(
+  page: PageLike,
+  url: string,
+  payload: unknown,
+  headers: Record<string, string>,
+): Promise<T> {
+  const response = await page.request.put(url, {
+    headers: { ...headers, 'content-type': 'application/json' },
+    data: payload,
+  });
   return parseStandardResponse<T>(response, 'PUT', url);
 }
 
@@ -430,13 +584,21 @@ async function runtimeGetJson<T>(page: PageLike, url: string): Promise<T> {
   return parseStandardResponse<T>(response, 'GET', url);
 }
 
-async function getJson<T>(page: PageLike, url: string, headers: Record<string, string>): Promise<T> {
+async function getJson<T>(
+  page: PageLike,
+  url: string,
+  headers: Record<string, string>,
+): Promise<T> {
   const response = await page.request.get(url, { headers });
   return parseStandardResponse<T>(response, 'GET', url);
 }
 
-async function parseStandardResponse<T>(response: ApiResponseLike, method: string, url: string): Promise<T> {
-  const body = await response.json() as StandardResponse<T>;
+async function parseStandardResponse<T>(
+  response: ApiResponseLike,
+  method: string,
+  url: string,
+): Promise<T> {
+  const body = (await response.json()) as StandardResponse<T>;
   if (!response.ok() || body.success !== true) {
     throw new Error(`${method} ${url} failed: ${response.status()} ${JSON.stringify(body)}`);
   }

@@ -39,11 +39,32 @@ export const specStatusTransitionSchema = z.object({
   from: specStatusSchema,
   to: specStatusSchema,
 });
-export const registryResourceTypeSchema = z.enum(['flow', 'route', 'tool', 'agent', 'prompt', 'tenant_runtime_policy', 'model_policy']);
-export const capabilityReleaseActionSchema = z.enum(['publish', 'gray', 'rollback', 'disable', 'deprecate']);
+export const registryResourceTypeSchema = z.enum([
+  'flow',
+  'route',
+  'tool',
+  'agent',
+  'prompt',
+  'tenant_runtime_policy',
+  'model_policy',
+]);
+export const capabilityReleaseActionSchema = z.enum([
+  'publish',
+  'gray',
+  'rollback',
+  'disable',
+  'deprecate',
+]);
 export const modelPolicyStatusSchema = specStatusSchema;
 export const modelGatewayProtocolSchema = z.enum(['dar_generate', 'openai_chat_completions']);
-export const modelCapabilitySchema = z.enum(['text', 'tools', 'json_schema', 'streaming', 'usage', 'tool_choice']);
+export const modelCapabilitySchema = z.enum([
+  'text',
+  'tools',
+  'json_schema',
+  'streaming',
+  'usage',
+  'tool_choice',
+]);
 export const modelToolChoiceModeSchema = z.enum(['auto', 'none', 'required']);
 export const modelResponseFormatSchema = z.enum(['text', 'json_object', 'json_schema']);
 export const modelCallStatusSchema = z.enum([
@@ -229,7 +250,10 @@ export const tenantPolicyDecisionSchema = z.object({
   reason_code: z.string().min(1),
   reason_summary: z.string().min(1),
   snapshot_ref: z.string().min(1).optional(),
-  snapshot_hash: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  snapshot_hash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/u)
+    .optional(),
   matched_rules: z.array(jsonObjectSchema).default([]),
   effective_budget: z.lazy(() => agentBudgetSchema).optional(),
   effective_allowed_tools: z.array(tenantPolicyToolRuleSchema).default([]),
@@ -254,12 +278,15 @@ export const tenantAgentAdmissionSchema = z.object({
   revision: z.number().int().positive().default(1),
 });
 
-const safeModelStringSchema = z.string().min(1).refine((value) => {
-  if (/api[_-]?key|authorization|bearer\s+|secret|password|token|cookie/iu.test(value)) {
-    return false;
-  }
-  return !/^[a-z][a-z0-9+.-]*:\/\//iu.test(value);
-}, 'Model policy fields must not contain credentials or gateway URLs');
+const safeModelStringSchema = z
+  .string()
+  .min(1)
+  .refine((value) => {
+    if (/api[_-]?key|authorization|bearer\s+|secret|password|token|cookie/iu.test(value)) {
+      return false;
+    }
+    return !/^[a-z][a-z0-9+.-]*:\/\//iu.test(value);
+  }, 'Model policy fields must not contain credentials or gateway URLs');
 
 export const modelTargetSchema = z.object({
   target_id: safeModelStringSchema,
@@ -277,7 +304,9 @@ export const modelTargetSchema = z.object({
 
 export const modelRetryPolicySchema = z.object({
   max_attempts_per_target: z.number().int().positive().max(10).default(2),
-  retryable_status_codes: z.array(z.number().int().min(100).max(599)).default([408, 429, 500, 502, 503, 504]),
+  retryable_status_codes: z
+    .array(z.number().int().min(100).max(599))
+    .default([408, 429, 500, 502, 503, 504]),
   retry_on_timeout: z.boolean().default(true),
   retry_on_network_error: z.boolean().default(true),
   backoff_ms: z.number().int().nonnegative().default(250),
@@ -287,20 +316,25 @@ export const modelRetryPolicySchema = z.object({
 export const modelFallbackPolicySchema = z.object({
   enabled: z.boolean().default(false),
   ordered_target_ids: z.array(z.string().min(1)).default([]),
-  eligible_error_classes: z.array(z.string().min(1)).default(['rate_limit', 'timeout', 'network', 'upstream_5xx']),
+  eligible_error_classes: z
+    .array(z.string().min(1))
+    .default(['rate_limit', 'timeout', 'network', 'upstream_5xx']),
   stop_on_auth_error: z.boolean().default(true),
   stop_on_validation_error: z.boolean().default(true),
   stop_on_policy_denial: z.boolean().default(true),
 });
 
-export const modelRequestPolicySchema = z.object({
-  temperature: z.number().min(0).max(2).default(0.2),
-  top_p: z.number().min(0).max(1).default(1),
-  max_output_tokens: z.number().int().positive().default(1000),
-  tool_choice_mode: modelToolChoiceModeSchema.default('auto'),
-  response_format: modelResponseFormatSchema.default('text'),
-  allow_parallel_tool_calls: z.boolean().default(false),
-});
+export const modelRequestPolicySchema = z
+  .object({
+    temperature: z.number().min(0).max(2).default(0.2),
+    top_p: z.number().min(0).max(1).default(1),
+    max_output_tokens: z.number().int().positive().default(1000),
+    initial_tool_choice_mode: modelToolChoiceModeSchema.default('auto'),
+    after_tool_result_tool_choice_mode: modelToolChoiceModeSchema.default('auto'),
+    response_format: modelResponseFormatSchema.default('text'),
+    allow_parallel_tool_calls: z.boolean().default(false),
+  })
+  .strict();
 
 export const modelPolicySchema = z.object({
   model_policy_id: z.string().min(1),
@@ -334,7 +368,10 @@ export const resolvedModelPolicySchema = z.object({
 export const modelPolicyRefSchema = z.object({
   model_policy_id: z.string().min(1),
   model_policy_version: z.number().int().positive(),
-  model_policy_hash: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  model_policy_hash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/u)
+    .optional(),
 });
 
 export const modelUsageSchema = z.object({
@@ -431,7 +468,10 @@ export const modelCallRecordSchema = z.object({
   error_class: z.string().optional(),
   error_code: z.string().optional(),
   request_hash: z.string().regex(/^[a-f0-9]{64}$/u),
-  response_hash: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  response_hash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/u)
+    .optional(),
   safe_response_json: jsonObjectSchema.optional(),
   started_at: z.string().datetime().optional(),
   completed_at: z.string().datetime().optional(),
@@ -442,7 +482,10 @@ export const modelCallRecordSchema = z.object({
 export const modelCallAttemptSchema = z.object({
   attempt_id: z.string().min(1),
   model_call_id: z.string().min(1),
-  attempt_index: z.number().int().nonnegative(),
+  global_attempt_index: z.number().int().nonnegative(),
+  target_attempt_index: z.number().int().nonnegative(),
+  fallback_index: z.number().int().nonnegative(),
+  attempt_index: z.number().int().nonnegative().optional(),
   target_id: z.string().min(1),
   provider: z.string().min(1).optional(),
   model_id: z.string().min(1),
@@ -457,14 +500,16 @@ export const modelCallAttemptSchema = z.object({
 });
 
 export const tenantPolicyCreateDraftRequestSchema = z.object({
-  policy: tenantRuntimePolicySchema.omit({
-    revision: true,
-    created_at: true,
-    updated_at: true,
-    published_at: true,
-  }).extend({
-    status: z.literal('draft').default('draft'),
-  }),
+  policy: tenantRuntimePolicySchema
+    .omit({
+      revision: true,
+      created_at: true,
+      updated_at: true,
+      published_at: true,
+    })
+    .extend({
+      status: z.literal('draft').default('draft'),
+    }),
 });
 
 export const tenantPolicyUpdateDraftRequestSchema = z.object({
@@ -629,12 +674,16 @@ export const modelPolicyUpdateDraftRequestSchema = z.object({
   expected_revision: z.number().int().positive(),
 });
 
-export const modelPolicyValidateResponseSchema = z.object({ validation: registryValidationResultSchema });
+export const modelPolicyValidateResponseSchema = z.object({
+  validation: registryValidationResultSchema,
+});
 export const modelPolicyPublishRequestSchema = publishResourceRequestSchema.extend({
   expected_revision: z.number().int().positive().optional(),
 });
 export const modelPolicyRollbackRequestSchema = rollbackResourceRequestSchema;
-export const modelConnectionTestRequestSchema = z.object({ request_id: z.string().min(1).optional() });
+export const modelConnectionTestRequestSchema = z.object({
+  request_id: z.string().min(1).optional(),
+});
 export const modelConnectionTestResponseSchema = z.object({
   reachable: z.boolean(),
   model: z.string().optional(),
@@ -678,13 +727,18 @@ const allowedSpecStatusTransitions = {
   gray: ['published', 'deprecated', 'disabled'],
   deprecated: [],
   disabled: [],
-} as const satisfies Record<z.infer<typeof specStatusSchema>, readonly z.infer<typeof specStatusSchema>[]>;
+} as const satisfies Record<
+  z.infer<typeof specStatusSchema>,
+  readonly z.infer<typeof specStatusSchema>[]
+>;
 
-export function validateSpecStatusTransition(input: z.infer<typeof specStatusTransitionSchema>):
-  | { ok: true }
-  | { ok: false; error: z.infer<typeof runtimeErrorSchema> } {
+export function validateSpecStatusTransition(
+  input: z.infer<typeof specStatusTransitionSchema>,
+): { ok: true } | { ok: false; error: z.infer<typeof runtimeErrorSchema> } {
   const transition = specStatusTransitionSchema.parse(input);
-  const allowedTargets = allowedSpecStatusTransitions[transition.from] as readonly z.infer<typeof specStatusSchema>[];
+  const allowedTargets = allowedSpecStatusTransitions[transition.from] as readonly z.infer<
+    typeof specStatusSchema
+  >[];
 
   if (allowedTargets.includes(transition.to)) {
     return { ok: true };
@@ -1683,7 +1737,14 @@ export const agentRunRecordSchema = z.object({
 });
 
 export const piDurableAgentWorkflowResultSchema = z.object({
-  status: z.enum(['completed', 'failed', 'cancelled', 'budget_exceeded', 'waiting_user', 'waiting_human']),
+  status: z.enum([
+    'completed',
+    'failed',
+    'cancelled',
+    'budget_exceeded',
+    'waiting_user',
+    'waiting_human',
+  ]),
   agent_run_id: z.string().min(1),
   final_answer: z.string().max(16_000).optional(),
   context_snapshot_ref: piContextSnapshotRefSchema.optional(),
@@ -1741,7 +1802,9 @@ export type ModelCallQuery = z.infer<typeof modelCallQuerySchema>;
 export type TenantPolicyOperation = z.infer<typeof tenantPolicyOperationSchema>;
 export type TenantPolicyDecisionValue = z.infer<typeof tenantPolicyDecisionValueSchema>;
 export type TenantAdmissionStatus = z.infer<typeof tenantAdmissionStatusSchema>;
-export type TenantPolicySnapshotDerivationType = z.infer<typeof tenantPolicySnapshotDerivationTypeSchema>;
+export type TenantPolicySnapshotDerivationType = z.infer<
+  typeof tenantPolicySnapshotDerivationTypeSchema
+>;
 export type TenantPolicyToolRule = z.infer<typeof tenantPolicyToolRuleSchema>;
 export type TenantPolicyModelRule = z.infer<typeof tenantPolicyModelRuleSchema>;
 export type TenantPolicyHandoffRule = z.infer<typeof tenantPolicyHandoffRuleSchema>;
@@ -1804,9 +1867,14 @@ export type TenantContext = z.infer<typeof tenantContextSchema>;
 export type UserContext = z.infer<typeof userContextSchema>;
 export type RuntimeContext = z.infer<typeof runtimeContextSchema>;
 export type RequestContext = z.infer<typeof requestContextSchema>;
-export type StandardSuccessResponse<TData = unknown> = Omit<z.infer<typeof standardSuccessResponseSchema>, 'data'> & { data: TData };
+export type StandardSuccessResponse<TData = unknown> = Omit<
+  z.infer<typeof standardSuccessResponseSchema>,
+  'data'
+> & { data: TData };
 export type StandardErrorResponse = z.infer<typeof standardErrorResponseSchema>;
-export type StandardResponse<TData = unknown> = StandardSuccessResponse<TData> | StandardErrorResponse;
+export type StandardResponse<TData = unknown> =
+  | StandardSuccessResponse<TData>
+  | StandardErrorResponse;
 export type StandardApiResponse<TData = unknown> = StandardResponse<TData>;
 export type FlowSpec = z.infer<typeof flowSpecSchema>;
 export type FlowStep = z.infer<typeof flowStepSchema>;

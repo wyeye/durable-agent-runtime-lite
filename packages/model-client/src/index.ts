@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   modelGatewayRequestSchema,
   modelGatewayResponseSchema,
@@ -72,7 +73,9 @@ export const modelGenerateResponseSchema = rawModelGenerateResponseSchema.transf
   };
   return {
     ...response,
-    content: response.content ?? message.content.flatMap((block) => block.type === 'text' ? [block.text] : []).join('\n'),
+    content:
+      response.content ??
+      message.content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n'),
     message,
     usage: response.usage ?? { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
   };
@@ -119,6 +122,12 @@ export interface ModelGatewayAttemptCompleteEvent extends ModelGatewayAttemptEve
 export interface ModelGatewayCallOptions {
   protocol?: ModelGatewayProtocol;
   target?: Pick<ModelTarget, 'target_id' | 'gateway_profile' | 'model_id'>;
+  toolNameCodec?: ModelToolNameCodec;
+  maxRetries?: number;
+  retryableStatusCodes?: number[];
+  retryOnTimeout?: boolean;
+  retryOnNetworkError?: boolean;
+  retryBackoffMs?: number;
   signal?: AbortSignal;
   onAttemptStart?: (event: ModelGatewayAttemptEvent) => void | Promise<void>;
   onAttemptComplete?: (event: ModelGatewayAttemptCompleteEvent) => void | Promise<void>;
@@ -161,7 +170,10 @@ export class ModelGatewayClient {
     assertTransportAllowed(this.baseUrl, options.allowInsecureHttp ?? isLocalHttp(this.baseUrl));
   }
 
-  async call(payload: ModelGatewayRequest, options: ModelGatewayCallOptions = {}): Promise<ModelGatewayResponse> {
+  async call(
+    payload: ModelGatewayRequest,
+    options: ModelGatewayCallOptions = {},
+  ): Promise<ModelGatewayResponse> {
     const parsed = modelGatewayRequestSchema.parse(payload);
     const protocol = options.protocol ?? this.protocol;
     const target = options.target ?? {
@@ -169,8 +181,13 @@ export class ModelGatewayClient {
       gateway_profile: this.baseUrl.hostname,
       model_id: parsed.model,
     };
+    const maxRetries = Math.min(
+      Math.max(options.maxRetries ?? this.maxRetries, 0),
+      this.maxRetries,
+    );
+    const retryBackoffMs = options.retryBackoffMs ?? this.retryBackoffMs;
     let lastError: unknown;
-    for (let attemptIndex = 0; attemptIndex <= this.maxRetries; attemptIndex += 1) {
+    for (let attemptIndex = 0; attemptIndex <= maxRetries; attemptIndex += 1) {
       const startedAt = Date.now();
       await options.onAttemptStart?.({
         attemptIndex,
@@ -180,7 +197,7 @@ export class ModelGatewayClient {
         modelId: target.model_id,
       });
       try {
-        const response = await this.requestModel(protocol, parsed, target, options.signal);
+        const response = await this.requestModel(protocol, parsed, target, options, options.signal);
         await options.onAttemptComplete?.({
           attemptIndex,
           protocol,
@@ -207,10 +224,14 @@ export class ModelGatewayClient {
           errorCode: normalized.code,
           latencyMs: Date.now() - startedAt,
         });
-        if (!isRetryableModelGatewayError(normalized) || attemptIndex >= this.maxRetries || options.signal?.aborted) {
+        if (
+          !isRetryableModelGatewayError(normalized, options) ||
+          attemptIndex >= maxRetries ||
+          options.signal?.aborted
+        ) {
           throw normalized;
         }
-        await sleep(this.retryBackoffMs * (attemptIndex + 1), options.signal);
+        await sleep(retryBackoffMs * (attemptIndex + 1), options.signal);
       }
     }
     throw lastError instanceof Error ? lastError : new Error('Model Gateway request failed');
@@ -226,7 +247,9 @@ export class ModelGatewayClient {
       tools: [],
       tool_choice: 'auto',
       response_format: 'text',
-      ...(requestPayload.max_tokens !== undefined ? { max_output_tokens: requestPayload.max_tokens } : {}),
+      ...(requestPayload.max_tokens !== undefined
+        ? { max_output_tokens: requestPayload.max_tokens }
+        : {}),
       ...(requestPayload.request_id ? { request_id: requestPayload.request_id } : {}),
       ...(requestPayload.task_run_id ? { task_run_id: requestPayload.task_run_id } : {}),
       ...(requestPayload.agent_run_id ? { agent_run_id: requestPayload.agent_run_id } : {}),
@@ -249,13 +272,14 @@ export class ModelGatewayClient {
     protocol: ModelGatewayProtocol,
     payload: ModelGatewayRequest,
     target: Pick<ModelTarget, 'target_id' | 'gateway_profile' | 'model_id'>,
+    options: ModelGatewayCallOptions,
     signal?: AbortSignal,
   ): Promise<ModelGatewayResponse> {
     switch (protocol) {
       case 'dar_generate':
         return this.requestDarGenerate(payload, target, signal);
       case 'openai_chat_completions':
-        return this.requestOpenAiChatCompletions(payload, target, signal);
+        return this.requestOpenAiChatCompletions(payload, target, options, signal);
     }
   }
 
@@ -264,19 +288,24 @@ export class ModelGatewayClient {
     target: Pick<ModelTarget, 'target_id' | 'gateway_profile' | 'model_id'>,
     signal?: AbortSignal,
   ): Promise<ModelGatewayResponse> {
-    const raw = await this.postJson('/v1/generate', {
-      model: target.model_id,
-      messages: payload.messages.map((message) => ({
-        role: message.role,
-        content: messageContentToText(message.content),
-        ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
-        ...(message.name ? { name: message.name } : {}),
-      })),
-      max_tokens: payload.max_output_tokens,
-      request_id: payload.request_id ?? payload.model_request_key,
-      task_run_id: payload.task_run_id,
-      agent_run_id: payload.agent_run_id,
-    }, payload.model_request_key, signal);
+    const raw = await this.postJson(
+      '/v1/generate',
+      {
+        model: target.model_id,
+        messages: payload.messages.map((message) => ({
+          role: message.role,
+          content: messageContentToText(message.content),
+          ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
+          ...(message.name ? { name: message.name } : {}),
+        })),
+        max_tokens: payload.max_output_tokens,
+        request_id: payload.request_id ?? payload.model_request_key,
+        task_run_id: payload.task_run_id,
+        agent_run_id: payload.agent_run_id,
+      },
+      payload.model_request_key,
+      signal,
+    );
     const parsed = modelGenerateResponseSchema.parse(raw.body);
     return modelGatewayResponseSchema.parse({
       response_id: parsed.id,
@@ -291,21 +320,37 @@ export class ModelGatewayClient {
   private async requestOpenAiChatCompletions(
     payload: ModelGatewayRequest,
     target: Pick<ModelTarget, 'target_id' | 'gateway_profile' | 'model_id'>,
+    options: ModelGatewayCallOptions,
     signal?: AbortSignal,
   ): Promise<ModelGatewayResponse> {
-    const raw = await this.postJson('/v1/chat/completions', {
-      model: target.model_id,
-      messages: payload.messages.map(openAiMessageFromGatewayMessage),
-      ...(payload.tools.length > 0 ? { tools: payload.tools.map(openAiToolFromGatewayTool) } : {}),
-      ...(payload.tools.length > 0 ? { tool_choice: openAiToolChoice(payload.tool_choice) } : {}),
-      ...(payload.parallel_tool_calls !== undefined ? { parallel_tool_calls: payload.parallel_tool_calls } : {}),
-      ...(payload.response_format !== 'text' ? { response_format: { type: 'json_object' } } : {}),
-      ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),
-      ...(payload.top_p !== undefined ? { top_p: payload.top_p } : {}),
-      ...(payload.max_output_tokens !== undefined ? { max_tokens: payload.max_output_tokens } : {}),
-    }, payload.model_request_key, signal);
+    const toolNameCodec = options.toolNameCodec ?? ModelToolNameCodec.fromTools(payload.tools);
+    validateToolRoundTripMessages(payload.messages);
+    const raw = await this.postJson(
+      '/v1/chat/completions',
+      {
+        model: target.model_id,
+        messages: payload.messages.map((message) =>
+          openAiMessageFromGatewayMessage(message, toolNameCodec),
+        ),
+        ...(payload.tools.length > 0
+          ? { tools: payload.tools.map((tool) => openAiToolFromGatewayTool(tool, toolNameCodec)) }
+          : {}),
+        ...(payload.tools.length > 0 ? { tool_choice: openAiToolChoice(payload.tool_choice) } : {}),
+        ...(payload.parallel_tool_calls !== undefined
+          ? { parallel_tool_calls: payload.parallel_tool_calls }
+          : {}),
+        ...(payload.response_format !== 'text' ? { response_format: { type: 'json_object' } } : {}),
+        ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),
+        ...(payload.top_p !== undefined ? { top_p: payload.top_p } : {}),
+        ...(payload.max_output_tokens !== undefined
+          ? { max_tokens: payload.max_output_tokens }
+          : {}),
+      },
+      payload.model_request_key,
+      signal,
+    );
 
-    return openAiResponseToGatewayResponse(raw.body, target);
+    return openAiResponseToGatewayResponse(raw.body, target, toolNameCodec);
   }
 
   private async postJson(
@@ -332,10 +377,14 @@ export class ModelGatewayClient {
 
       const text = await response.body.text();
       if (Buffer.byteLength(text, 'utf8') > this.maxResponseBytes) {
-        throw new ModelGatewayError('MODEL_GATEWAY_RESPONSE_TOO_LARGE', 'Model Gateway response exceeded size limit', {
-          errorClass: 'response_too_large',
-          httpStatus: response.statusCode,
-        });
+        throw new ModelGatewayError(
+          'MODEL_GATEWAY_RESPONSE_TOO_LARGE',
+          'Model Gateway response exceeded size limit',
+          {
+            errorClass: 'response_too_large',
+            httpStatus: response.statusCode,
+          },
+        );
       }
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw errorFromStatus(response.statusCode);
@@ -363,16 +412,92 @@ export class ModelGatewayError extends Error {
   }
 }
 
+const PROVIDER_SAFE_TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]+$/u;
+const PROVIDER_SAFE_TOOL_NAME_MAX_LENGTH = 64;
+
+export class ModelToolNameCodec {
+  private readonly canonicalToProvider = new Map<string, string>();
+  private readonly providerToCanonical = new Map<string, string>();
+
+  static fromTools(tools: ModelGatewayToolDefinition[]): ModelToolNameCodec {
+    return new ModelToolNameCodec(tools.map((tool) => tool.name));
+  }
+
+  constructor(canonicalNames: string[]) {
+    for (const canonicalName of canonicalNames) {
+      this.register(canonicalName);
+    }
+  }
+
+  encode(canonicalName: string): string {
+    const providerName = this.canonicalToProvider.get(canonicalName);
+    if (!providerName) {
+      throw new ModelGatewayError(
+        'MODEL_GATEWAY_UNKNOWN_TOOL_NAME',
+        `Tool is not registered for this model request: ${canonicalName}`,
+        {
+          errorClass: 'validation',
+        },
+      );
+    }
+    return providerName;
+  }
+
+  decode(providerName: string): string {
+    const canonicalName = this.providerToCanonical.get(providerName);
+    if (!canonicalName) {
+      throw new ModelGatewayError(
+        'MODEL_GATEWAY_UNKNOWN_TOOL_ALIAS',
+        `Provider returned an unknown tool alias: ${providerName}`,
+        {
+          errorClass: 'validation',
+        },
+      );
+    }
+    return canonicalName;
+  }
+
+  private register(canonicalName: string): void {
+    if (this.canonicalToProvider.has(canonicalName)) {
+      throw new ModelGatewayError(
+        'MODEL_GATEWAY_DUPLICATE_TOOL_NAME',
+        `Duplicate tool name in model request: ${canonicalName}`,
+        {
+          errorClass: 'validation',
+        },
+      );
+    }
+    const providerName = providerSafeToolName(canonicalName);
+    const existing = this.providerToCanonical.get(providerName);
+    if (existing && existing !== canonicalName) {
+      throw new ModelGatewayError(
+        'MODEL_GATEWAY_TOOL_ALIAS_CONFLICT',
+        `Tool alias conflict: ${existing} and ${canonicalName} both map to ${providerName}`,
+        {
+          errorClass: 'validation',
+        },
+      );
+    }
+    this.canonicalToProvider.set(canonicalName, providerName);
+    this.providerToCanonical.set(providerName, canonicalName);
+  }
+}
+
 function openAiResponseToGatewayResponse(
   value: unknown,
   target: Pick<ModelTarget, 'gateway_profile' | 'model_id'>,
+  toolNameCodec: ModelToolNameCodec,
 ): ModelGatewayResponse {
   const parsed = openAiChatCompletionResponseSchema.parse(value);
   const choice = parsed.choices[0];
   if (!choice) {
-    throw new ModelGatewayError('MODEL_GATEWAY_INVALID_RESPONSE', 'OpenAI-compatible response did not include a choice', {
-      errorClass: 'validation',
-    });
+    throw new ModelGatewayError(
+      'MODEL_GATEWAY_INVALID_RESPONSE',
+      'OpenAI-compatible response did not include a choice',
+      {
+        errorClass: 'validation',
+      },
+    );
   }
   const content: ModelGatewayContentBlock[] = [];
   if (choice.message.content) {
@@ -382,7 +507,7 @@ function openAiResponseToGatewayResponse(
     content.push({
       type: 'tool_call',
       id: toolCall.id,
-      name: toolCall.function.name,
+      name: toolNameCodec.decode(toolCall.function.name),
       arguments: parseToolArguments(toolCall.function.arguments),
     });
   }
@@ -405,42 +530,92 @@ function openAiResponseToGatewayResponse(
 const openAiChatCompletionResponseSchema = z.object({
   id: z.string().optional(),
   model: z.string().optional(),
-  choices: z.array(z.object({
-    finish_reason: z.string().nullable().optional(),
-    message: z.object({
-      role: z.string().optional(),
-      content: z.string().nullable().optional(),
-      tool_calls: z.array(z.object({
-        id: z.string().min(1),
-        type: z.literal('function').optional(),
-        function: z.object({
-          name: z.string().min(1),
-          arguments: z.string().default('{}'),
-        }),
-      })).optional(),
+  choices: z.array(
+    z.object({
+      finish_reason: z.string().nullable().optional(),
+      message: z.object({
+        role: z.string().optional(),
+        content: z.string().nullable().optional(),
+        tool_calls: z
+          .array(
+            z.object({
+              id: z.string().min(1),
+              type: z.literal('function').optional(),
+              function: z.object({
+                name: z.string().min(1),
+                arguments: z.string().default('{}'),
+              }),
+            }),
+          )
+          .optional(),
+      }),
     }),
-  })),
-  usage: z.object({
-    prompt_tokens: z.number().int().nonnegative().optional(),
-    completion_tokens: z.number().int().nonnegative().optional(),
-    total_tokens: z.number().int().nonnegative().optional(),
-  }).optional(),
+  ),
+  usage: z
+    .object({
+      prompt_tokens: z.number().int().nonnegative().optional(),
+      completion_tokens: z.number().int().nonnegative().optional(),
+      total_tokens: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
 });
 
-function openAiMessageFromGatewayMessage(message: ModelGatewayRequest['messages'][number]): Record<string, unknown> {
+function openAiMessageFromGatewayMessage(
+  message: ModelGatewayRequest['messages'][number],
+  toolNameCodec: ModelToolNameCodec,
+): Record<string, unknown> {
+  if (message.role === 'assistant') {
+    const contentBlocks = Array.isArray(message.content) ? message.content : [];
+    const toolCalls = contentBlocks.filter((block) => block.type === 'tool_call');
+    if (toolCalls.length > 0) {
+      assertUniqueToolCallIds(toolCalls.map((toolCall) => toolCall.id));
+      return {
+        role: 'assistant',
+        content: messageContentToText(message.content) || null,
+        tool_calls: toolCalls.map((toolCall) => ({
+          id: toolCall.id,
+          type: 'function',
+          function: {
+            name: toolNameCodec.encode(toolCall.name),
+            arguments: JSON.stringify(toolCall.arguments),
+          },
+        })),
+      };
+    }
+  }
+
+  if (message.role === 'tool') {
+    if (!message.tool_call_id) {
+      throw new ModelGatewayError(
+        'MODEL_GATEWAY_TOOL_RESULT_ID_REQUIRED',
+        'Tool result messages must include tool_call_id',
+        {
+          errorClass: 'validation',
+        },
+      );
+    }
+    return {
+      role: 'tool',
+      tool_call_id: message.tool_call_id,
+      content: messageContentToText(message.content),
+    };
+  }
+
   return {
     role: message.role,
     content: messageContentToText(message.content),
-    ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
     ...(message.name ? { name: message.name } : {}),
   };
 }
 
-function openAiToolFromGatewayTool(tool: ModelGatewayToolDefinition): Record<string, unknown> {
+function openAiToolFromGatewayTool(
+  tool: ModelGatewayToolDefinition,
+  toolNameCodec: ModelToolNameCodec,
+): Record<string, unknown> {
   return {
     type: 'function',
     function: {
-      name: tool.name,
+      name: toolNameCodec.encode(tool.name),
       ...(tool.description ? { description: tool.description } : {}),
       parameters: tool.input_schema,
     },
@@ -451,7 +626,9 @@ function openAiToolChoice(mode: ModelGatewayRequest['tool_choice']): 'auto' | 'n
   return mode;
 }
 
-function finishReasonFromOpenAi(reason: string | null | undefined): ModelGatewayResponse['finish_reason'] {
+function finishReasonFromOpenAi(
+  reason: string | null | undefined,
+): ModelGatewayResponse['finish_reason'] {
   switch (reason) {
     case 'tool_calls':
     case 'function_call':
@@ -476,24 +653,118 @@ function parseToolArguments(value: string): Record<string, unknown> {
   } catch {
     // Throw below with a stable normalized error.
   }
-  throw new ModelGatewayError('MODEL_GATEWAY_INVALID_TOOL_ARGUMENTS', 'OpenAI-compatible tool call arguments must be a JSON object', {
-    errorClass: 'validation',
-  });
+  throw new ModelGatewayError(
+    'MODEL_GATEWAY_INVALID_TOOL_ARGUMENTS',
+    'OpenAI-compatible tool call arguments must be a JSON object',
+    {
+      errorClass: 'validation',
+    },
+  );
 }
 
 function messageContentToText(content: ModelGatewayRequest['messages'][number]['content']): string {
   if (typeof content === 'string') {
     return content;
   }
-  return content.flatMap((block) => block.type === 'text' ? [block.text] : []).join('\n');
+  return content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n');
+}
+
+function providerSafeToolName(canonicalName: string): string {
+  if (
+    PROVIDER_SAFE_TOOL_NAME_PATTERN.test(canonicalName) &&
+    canonicalName.length <= PROVIDER_SAFE_TOOL_NAME_MAX_LENGTH
+  ) {
+    return canonicalName;
+  }
+  const slug =
+    canonicalName
+      .replace(/[^A-Za-z0-9_-]+/gu, '_')
+      .replace(/^_+|_+$/gu, '')
+      .slice(0, 40) || 'tool';
+  const hash = createHash('sha256').update(canonicalName).digest('hex').slice(0, 12);
+  return `tool_${slug}_${hash}`.slice(0, PROVIDER_SAFE_TOOL_NAME_MAX_LENGTH);
+}
+
+function assertUniqueToolCallIds(ids: string[]): void {
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (seen.has(id)) {
+      throw new ModelGatewayError(
+        'MODEL_GATEWAY_DUPLICATE_TOOL_CALL_ID',
+        `Duplicate assistant tool_call id: ${id}`,
+        {
+          errorClass: 'validation',
+        },
+      );
+    }
+    seen.add(id);
+  }
+}
+
+function validateToolRoundTripMessages(messages: ModelGatewayRequest['messages']): void {
+  const assistantToolCallIds = new Set<string>();
+  const toolResultIds = new Set<string>();
+  for (const message of messages) {
+    if (message.role === 'assistant' && Array.isArray(message.content)) {
+      for (const block of message.content) {
+        if (block.type !== 'tool_call') {
+          continue;
+        }
+        if (assistantToolCallIds.has(block.id)) {
+          throw new ModelGatewayError(
+            'MODEL_GATEWAY_DUPLICATE_TOOL_CALL_ID',
+            `Duplicate assistant tool_call id: ${block.id}`,
+            {
+              errorClass: 'validation',
+            },
+          );
+        }
+        assistantToolCallIds.add(block.id);
+      }
+    }
+    if (message.role === 'tool') {
+      if (!message.tool_call_id) {
+        throw new ModelGatewayError(
+          'MODEL_GATEWAY_TOOL_RESULT_ID_REQUIRED',
+          'Tool result messages must include tool_call_id',
+          {
+            errorClass: 'validation',
+          },
+        );
+      }
+      if (!assistantToolCallIds.has(message.tool_call_id)) {
+        throw new ModelGatewayError(
+          'MODEL_GATEWAY_UNKNOWN_TOOL_RESULT_ID',
+          `Tool result does not match an assistant tool_call: ${message.tool_call_id}`,
+          {
+            errorClass: 'validation',
+          },
+        );
+      }
+      if (toolResultIds.has(message.tool_call_id)) {
+        throw new ModelGatewayError(
+          'MODEL_GATEWAY_DUPLICATE_TOOL_RESULT',
+          `Duplicate tool result for tool_call_id: ${message.tool_call_id}`,
+          {
+            errorClass: 'validation',
+          },
+        );
+      }
+      toolResultIds.add(message.tool_call_id);
+    }
+  }
 }
 
 function errorFromStatus(statusCode: number): ModelGatewayError {
   if (statusCode === 401 || statusCode === 403) {
-    return new ModelGatewayError('MODEL_GATEWAY_AUTH_FAILED', 'Model Gateway authentication failed', {
-      errorClass: 'auth',
-      httpStatus: statusCode,
-    });
+    return new ModelGatewayError(
+      'MODEL_GATEWAY_AUTH_FAILED',
+      'Model Gateway authentication failed',
+      {
+        errorClass: 'auth',
+        httpStatus: statusCode,
+      },
+    );
   }
   if (statusCode === 408 || statusCode === 504) {
     return new ModelGatewayError('MODEL_GATEWAY_TIMEOUT', 'Model Gateway request timed out', {
@@ -502,10 +773,14 @@ function errorFromStatus(statusCode: number): ModelGatewayError {
     });
   }
   if (statusCode === 429) {
-    return new ModelGatewayError('MODEL_GATEWAY_RATE_LIMITED', 'Model Gateway rate limited request', {
-      errorClass: 'rate_limit',
-      httpStatus: statusCode,
-    });
+    return new ModelGatewayError(
+      'MODEL_GATEWAY_RATE_LIMITED',
+      'Model Gateway rate limited request',
+      {
+        errorClass: 'rate_limit',
+        httpStatus: statusCode,
+      },
+    );
   }
   if (statusCode >= 500) {
     return new ModelGatewayError('MODEL_GATEWAY_UPSTREAM_FAILED', 'Model Gateway upstream failed', {
@@ -524,30 +799,59 @@ function normalizeModelGatewayError(error: unknown): ModelGatewayError {
     return error;
   }
   if (error instanceof DOMException && error.name === 'AbortError') {
-    return new ModelGatewayError('MODEL_GATEWAY_ABORTED', 'Model Gateway request was aborted', { errorClass: 'aborted' });
-  }
-  if (error instanceof Error && error.name === 'AbortError') {
-    return new ModelGatewayError('MODEL_GATEWAY_ABORTED', 'Model Gateway request was aborted', { errorClass: 'aborted' });
-  }
-  if (error instanceof Error && /timeout|timed out/iu.test(error.message)) {
-    return new ModelGatewayError('MODEL_GATEWAY_TIMEOUT', 'Model Gateway request timed out', { errorClass: 'timeout' });
-  }
-  if (error instanceof z.ZodError || error instanceof SyntaxError) {
-    return new ModelGatewayError('MODEL_GATEWAY_INVALID_RESPONSE', 'Model Gateway response did not match the expected schema', {
-      errorClass: 'validation',
+    return new ModelGatewayError('MODEL_GATEWAY_ABORTED', 'Model Gateway request was aborted', {
+      errorClass: 'aborted',
     });
   }
-  if (error instanceof Error) {
-    return new ModelGatewayError('MODEL_GATEWAY_NETWORK_ERROR', 'Model Gateway network request failed', { errorClass: 'network' });
+  if (error instanceof Error && error.name === 'AbortError') {
+    return new ModelGatewayError('MODEL_GATEWAY_ABORTED', 'Model Gateway request was aborted', {
+      errorClass: 'aborted',
+    });
   }
-  return new ModelGatewayError('MODEL_GATEWAY_UNKNOWN_ERROR', 'Model Gateway request failed', { errorClass: 'unknown' });
+  if (error instanceof Error && /timeout|timed out/iu.test(error.message)) {
+    return new ModelGatewayError('MODEL_GATEWAY_TIMEOUT', 'Model Gateway request timed out', {
+      errorClass: 'timeout',
+    });
+  }
+  if (error instanceof z.ZodError || error instanceof SyntaxError) {
+    return new ModelGatewayError(
+      'MODEL_GATEWAY_INVALID_RESPONSE',
+      'Model Gateway response did not match the expected schema',
+      {
+        errorClass: 'validation',
+      },
+    );
+  }
+  if (error instanceof Error) {
+    return new ModelGatewayError(
+      'MODEL_GATEWAY_NETWORK_ERROR',
+      'Model Gateway network request failed',
+      { errorClass: 'network' },
+    );
+  }
+  return new ModelGatewayError('MODEL_GATEWAY_UNKNOWN_ERROR', 'Model Gateway request failed', {
+    errorClass: 'unknown',
+  });
 }
 
-function isRetryableModelGatewayError(error: ModelGatewayError): boolean {
-  return error.errorClass === 'rate_limit'
-    || error.errorClass === 'timeout'
-    || error.errorClass === 'network'
-    || error.errorClass === 'upstream_5xx';
+function isRetryableModelGatewayError(
+  error: ModelGatewayError,
+  options: ModelGatewayCallOptions,
+): boolean {
+  if (
+    error.httpStatus !== undefined &&
+    options.retryableStatusCodes &&
+    !options.retryableStatusCodes.includes(error.httpStatus)
+  ) {
+    return false;
+  }
+  if (error.errorClass === 'timeout') {
+    return options.retryOnTimeout ?? true;
+  }
+  if (error.errorClass === 'network') {
+    return options.retryOnNetworkError ?? true;
+  }
+  return error.errorClass === 'rate_limit' || error.errorClass === 'upstream_5xx';
 }
 
 function assertTransportAllowed(url: URL, allowInsecureHttp: boolean): void {
@@ -557,9 +861,13 @@ function assertTransportAllowed(url: URL, allowInsecureHttp: boolean): void {
   if (url.protocol === 'http:' && allowInsecureHttp) {
     return;
   }
-  throw new ModelGatewayError('MODEL_GATEWAY_INSECURE_TRANSPORT', 'Model Gateway base URL must use HTTPS unless local insecure HTTP is explicitly allowed', {
-    errorClass: 'policy',
-  });
+  throw new ModelGatewayError(
+    'MODEL_GATEWAY_INSECURE_TRANSPORT',
+    'Model Gateway base URL must use HTTPS unless local insecure HTTP is explicitly allowed',
+    {
+      errorClass: 'policy',
+    },
+  );
 }
 
 function isLocalHttp(url: URL): boolean {
@@ -572,10 +880,18 @@ async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   }
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(resolve, ms);
-    signal?.addEventListener('abort', () => {
-      clearTimeout(timer);
-      reject(new ModelGatewayError('MODEL_GATEWAY_ABORTED', 'Model Gateway request was aborted', { errorClass: 'aborted' }));
-    }, { once: true });
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        reject(
+          new ModelGatewayError('MODEL_GATEWAY_ABORTED', 'Model Gateway request was aborted', {
+            errorClass: 'aborted',
+          }),
+        );
+      },
+      { once: true },
+    );
   });
 }
 

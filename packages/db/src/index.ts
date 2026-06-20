@@ -379,6 +379,9 @@ export interface ModelCallLogTable {
 export interface ModelCallAttemptTable {
   attempt_id: string;
   model_call_id: string;
+  global_attempt_index: number;
+  target_attempt_index: number;
+  fallback_index: number;
   attempt_index: number;
   target_id: string;
   provider: string | null;

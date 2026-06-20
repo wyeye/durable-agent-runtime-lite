@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
-import type { AgentRunRecord, AgentStepRecord, HumanTask, ModelGatewayProtocol, StandardResponse, TaskRun } from '@dar/contracts';
+import type {
+  AgentRunRecord,
+  AgentStepRecord,
+  HumanTask,
+  ModelGatewayProtocol,
+  StandardResponse,
+  TaskRun,
+} from '@dar/contracts';
+import { tenantRuntimePolicySchema } from '@dar/contracts';
 import {
   AgentExecutionPlanRepository,
   FlowExecutionPlanRepository,
   FlowDefinitionRepository,
   ModelPolicyRepository,
+  TenantRuntimePolicyRepository,
   ToolManifestRepository,
   buildExecutionPlanRef,
   closeDb,
@@ -18,13 +27,21 @@ import {
 } from '@dar/db';
 
 const runtimeApiUrl = trimTrailingSlash(process.env.RUNTIME_API_URL ?? 'http://localhost:3000');
-const databaseUrl = process.env.DATABASE_URL ?? 'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime';
-const tenantId = process.env.SMOKE_TENANT_ID ?? 'default';
-const userId = process.env.SMOKE_USER_ID ?? 'pi_smoke_user';
+const databaseUrl =
+  process.env.DATABASE_URL ??
+  'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime';
 const scenario = process.env.PI_SMOKE_SCENARIO ?? 'readonly_tool';
-const mode = process.env.PI_SMOKE_MODE ?? (scenario === 'model_gateway' ? 'model_gateway' : 'deterministic');
-const modelGatewayProtocol = (process.env.MODEL_GATEWAY_PROTOCOL ?? 'openai_chat_completions') as ModelGatewayProtocol;
+const mode =
+  process.env.PI_SMOKE_MODE ?? (scenario === 'model_gateway' ? 'model_gateway' : 'deterministic');
+const runId = Date.now();
+const tenantId =
+  process.env.SMOKE_TENANT_ID ??
+  (mode === 'model_gateway' ? `pi_smoke_${scenario}_${runId}` : 'default');
+const userId = process.env.SMOKE_USER_ID ?? 'pi_smoke_user';
+const modelGatewayProtocol = (process.env.MODEL_GATEWAY_PROTOCOL ??
+  'openai_chat_completions') as ModelGatewayProtocol;
 const modelGatewayModel = process.env.MODEL_GATEWAY_MODEL ?? 'dar-local-model';
+const modelGatewayProvider = process.env.MODEL_GATEWAY_PROVIDER ?? 'local-mock';
 const requestId = `pi_smoke_${scenario}_${Date.now()}`;
 const runtimeHeaders = authHeaders(`${requestId}_runtime`);
 
@@ -34,21 +51,26 @@ async function main() {
     const agentExecutionPlanRef = await seedAgentPlan(db);
     await checkHealth(`${runtimeApiUrl}/healthz`, 'runtime-api');
 
-    const task = await postJson<{ task_run_id: string; workflow_id: string; workflow_start?: { mode: string; started: boolean } }>(
-      `${runtimeApiUrl}/v1/agent-tasks`,
-      {
-        tenant_id: tenantId,
-        user_id: userId,
-        request_id: `${requestId}_task`,
-        agent_execution_plan_ref: agentExecutionPlanRef,
-        input: { text: `${scenario} smoke request` },
-      },
-    );
+    const task = await postJson<{
+      task_run_id: string;
+      workflow_id: string;
+      workflow_start?: { mode: string; started: boolean };
+    }>(`${runtimeApiUrl}/v1/agent-tasks`, {
+      tenant_id: tenantId,
+      user_id: userId,
+      request_id: `${requestId}_task`,
+      agent_execution_plan_ref: agentExecutionPlanRef,
+      input: { text: inputTextForScenario(scenario, mode) },
+    });
     assert.equal(task.workflow_start?.started, true);
     assert.equal(task.workflow_start?.mode, 'temporal');
 
     const finalTask = await pollTask(task.task_run_id);
-    assert.equal(finalTask.status, 'completed', finalTask.error_message ?? 'Pi task should complete');
+    assert.equal(
+      finalTask.status,
+      'completed',
+      finalTask.error_message ?? 'Pi task should complete',
+    );
     const agentRuns = await getJson<{ agent_runs: AgentRunRecord[] }>(
       `${runtimeApiUrl}/v1/agent-runs?tenant_id=${encodeURIComponent(tenantId)}&task_run_id=${encodeURIComponent(task.task_run_id)}&page_size=10`,
     );
@@ -62,7 +84,7 @@ async function main() {
       `${runtimeApiUrl}/v1/agent-runs/${encodeURIComponent(agentRun.agent_run_id)}/steps?tenant_id=${encodeURIComponent(tenantId)}&page_size=20`,
     );
     assert.ok(steps.agent_steps.length >= 1, 'AgentStep records should exist');
-    if (['readonly_tool', 'l3_tool', 'model_gateway'].includes(scenario)) {
+    if (expectsToolResult(scenario)) {
       assert.ok(
         steps.agent_steps.some((step) => step.tool_result_refs.length > 0),
         'Tool smoke should record authoritative tool_result_refs',
@@ -75,16 +97,22 @@ async function main() {
       );
     }
 
-    console.log(JSON.stringify({
-      ok: true,
-      scenario,
-      mode,
-      task_run_id: task.task_run_id,
-      workflow_id: task.workflow_id,
-      agent_run_id: agentRun.agent_run_id,
-      agent_status: agentRun.status,
-      step_count: steps.agent_steps.length,
-    }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          scenario,
+          mode,
+          task_run_id: task.task_run_id,
+          workflow_id: task.workflow_id,
+          agent_run_id: agentRun.agent_run_id,
+          agent_status: agentRun.status,
+          step_count: steps.agent_steps.length,
+        },
+        null,
+        2,
+      ),
+    );
   } finally {
     await closeDb(db);
   }
@@ -93,96 +121,177 @@ async function main() {
 async function seedAgentPlan(db: ReturnType<typeof createDb>): Promise<string> {
   const promptId = `pi_smoke_prompt_${scenario}_${mode}`;
   const agentId = `pi_smoke_agent_${scenario}_${mode}`;
-  const modelPolicy = mode === 'model_gateway' ? `model_gateway:${scenario}` : `deterministic:${deterministicScenario(scenario)}`;
-  const modelPolicyId = `pi_smoke_model_${scenario}_${mode}`;
+  const modelPolicy =
+    mode === 'model_gateway'
+      ? `model_gateway:${scenario}`
+      : `deterministic:${deterministicScenario(scenario)}`;
+  const modelPolicyId =
+    mode === 'model_gateway'
+      ? `pi_smoke_model_${scenario}_${mode}_${safeId(modelGatewayProvider)}_${hashJson(modelGatewayModel).slice(0, 8)}`
+      : `pi_smoke_model_${scenario}_${mode}`;
   const publishedModelPolicy = await seedModelPolicy(db, modelPolicyId, modelPolicy);
   const modelPolicyHash = hashModelPolicy(publishedModelPolicy);
   await seedTools(db);
   if (scenario === 'handoff') {
     await seedHandoffTarget(db);
   }
-  await upsertPromptDefinition(db, {
-    prompt_id: promptId,
-    version: 1,
-    name: `Pi smoke prompt ${scenario}`,
-    content: `You are a Pi smoke agent. Scenario: ${scenario}.`,
-    variables: [],
-    status: 'published',
-  }, { tenantId, status: 'published', createdBy: 'pi-smoke' });
-  await upsertAgentSpec(db, {
-    agent_id: agentId,
-    version: 1,
-    prompt_ref: `${promptId}@1`,
-    model_policy: modelPolicy,
-    model_policy_ref: {
-      model_policy_id: publishedModelPolicy.model_policy_id,
-      model_policy_version: publishedModelPolicy.version,
-      model_policy_hash: modelPolicyHash,
+  await upsertPromptDefinition(
+    db,
+    {
+      prompt_id: promptId,
+      version: 1,
+      name: `Pi smoke prompt ${scenario}`,
+      content: systemPromptForScenario(scenario, mode),
+      variables: [],
+      status: 'published',
     },
-    allowed_tools: ['knowledge.search@1.0.0', 'record.write.mock@1.0.0'],
-    allowed_handoffs: scenario === 'handoff' ? ['db://flow-execution-plan/plan_handoff'] : [],
-    max_steps: scenario === 'restart_resume' ? 6 : 4,
-    max_tokens: 2000,
-    output_schema: 'pi_smoke_result_v1',
-    status: 'published',
-  }, { tenantId, status: 'published', createdBy: 'pi-smoke' });
+    { tenantId, status: 'published', createdBy: 'pi-smoke' },
+  );
+  await upsertAgentSpec(
+    db,
+    {
+      agent_id: agentId,
+      version: 1,
+      prompt_ref: `${promptId}@1`,
+      model_policy: modelPolicy,
+      model_policy_ref: {
+        model_policy_id: publishedModelPolicy.model_policy_id,
+        model_policy_version: publishedModelPolicy.version,
+        model_policy_hash: modelPolicyHash,
+      },
+      allowed_tools: ['knowledge.search@1.0.0', 'record.write.mock@1.0.0'],
+      allowed_handoffs: scenario === 'handoff' ? ['db://flow-execution-plan/plan_handoff'] : [],
+      max_steps: scenario === 'restart_resume' ? 6 : 4,
+      max_tokens: 2000,
+      output_schema: 'pi_smoke_result_v1',
+      status: 'published',
+    },
+    { tenantId, status: 'published', createdBy: 'pi-smoke' },
+  );
   const plan = await new AgentExecutionPlanRepository(db).createForAgent({
     tenantId,
     agentId,
     agentVersion: 1,
     operatorId: 'pi-smoke',
   });
+  if (mode === 'model_gateway') {
+    await seedTenantPolicy(db, modelPolicy, modelGatewayModel);
+  }
   return plan.execution_plan_ref;
 }
 
-async function seedModelPolicy(db: ReturnType<typeof createDb>, modelPolicyId: string, displayPolicy: string) {
+async function seedTenantPolicy(
+  db: ReturnType<typeof createDb>,
+  modelPolicy: string,
+  modelId: string,
+): Promise<void> {
+  const repository = new TenantRuntimePolicyRepository(db);
+  const existing = await repository.getLatestPublished(tenantId);
+  if (existing) {
+    return;
+  }
+  const policy = tenantRuntimePolicySchema.parse({
+    tenant_id: tenantId,
+    version: 1,
+    status: 'draft',
+    allowed_tools: [
+      {
+        tool_name: 'knowledge.search',
+        versions: ['1.0.0'],
+        allowed_operations: ['invoke'],
+        max_risk_level: 'L1',
+      },
+      {
+        tool_name: 'record.write.mock',
+        versions: ['1.0.0'],
+        allowed_operations: ['invoke', 'preview', 'commit'],
+        max_risk_level: 'L3',
+      },
+    ],
+    denied_tools: [],
+    allowed_models: [{ model_id: modelPolicy }, { model_id: modelId }],
+    denied_models: [],
+    allowed_handoffs: [],
+    denied_handoffs: [],
+    budget_cap: {
+      max_segments: 4,
+      max_model_turns: 4,
+      max_tool_calls: 2,
+      max_total_tokens: 4000,
+      max_duration_ms: 300000,
+      max_handoffs: 0,
+      max_context_bytes: 262144,
+    },
+    max_concurrent_agent_runs: 2,
+  });
+  await repository.createDraft(policy, { tenantId, operatorId: 'pi-smoke' });
+  await repository.publish(tenantId, policy.version, {
+    tenantId,
+    operatorId: 'pi-smoke',
+    releaseNote: 'pi model-gateway smoke policy',
+  });
+}
+
+async function seedModelPolicy(
+  db: ReturnType<typeof createDb>,
+  modelPolicyId: string,
+  displayPolicy: string,
+) {
   const repository = new ModelPolicyRepository(db);
   const existing = await repository.getByIdAndVersion(modelPolicyId, 1, { tenantId });
   if (existing?.status === 'published' || existing?.status === 'gray') {
     return existing;
   }
   if (existing) {
-    throw new Error(`ModelPolicy ${modelPolicyId}@1 already exists with non-executable status ${existing.status}`);
+    throw new Error(
+      `ModelPolicy ${modelPolicyId}@1 already exists with non-executable status ${existing.status}`,
+    );
   }
-  await repository.createDraft({
-    model_policy_id: modelPolicyId,
-    version: 1,
-    status: 'draft',
-    protocol: mode === 'model_gateway' ? modelGatewayProtocol : 'dar_generate',
-    targets: [{
-      target_id: `${modelPolicyId}_primary`,
-      gateway_profile: 'local-mock',
-      model_id: mode === 'model_gateway' ? modelGatewayModel : displayPolicy,
-      priority: 0,
-      enabled: true,
-      capabilities: ['text', 'tools', 'usage'],
-    }],
-    retry_policy: {
-      max_attempts_per_target: 2,
-      retryable_status_codes: [429, 500, 502, 503, 504],
-      retry_on_timeout: true,
-      retry_on_network_error: true,
-      backoff_ms: 10,
-      max_backoff_ms: 50,
+  await repository.createDraft(
+    {
+      model_policy_id: modelPolicyId,
+      version: 1,
+      status: 'draft',
+      protocol: mode === 'model_gateway' ? modelGatewayProtocol : 'dar_generate',
+      targets: [
+        {
+          target_id: `${modelPolicyId}_primary`,
+          gateway_profile: mode === 'model_gateway' ? modelGatewayProvider : 'local-mock',
+          model_id: mode === 'model_gateway' ? modelGatewayModel : displayPolicy,
+          priority: 0,
+          enabled: true,
+          capabilities: ['text', 'tools', 'usage'],
+        },
+      ],
+      retry_policy: {
+        max_attempts_per_target: 2,
+        retryable_status_codes: [429, 500, 502, 503, 504],
+        retry_on_timeout: true,
+        retry_on_network_error: true,
+        backoff_ms: 10,
+        max_backoff_ms: 50,
+      },
+      fallback_policy: {
+        enabled: false,
+        ordered_target_ids: [],
+        eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
+        stop_on_auth_error: true,
+        stop_on_validation_error: true,
+        stop_on_policy_denial: true,
+      },
+      request_policy: {
+        temperature: 0,
+        top_p: 1,
+        max_output_tokens: 1000,
+        initial_tool_choice_mode: initialToolChoiceForScenario(scenario, mode),
+        after_tool_result_tool_choice_mode: afterToolResultToolChoiceForScenario(mode),
+        response_format: 'text',
+        allow_parallel_tool_calls: false,
+      },
+      revision: 1,
     },
-    fallback_policy: {
-      enabled: false,
-      ordered_target_ids: [],
-      eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
-      stop_on_auth_error: true,
-      stop_on_validation_error: true,
-      stop_on_policy_denial: true,
-    },
-    request_policy: {
-      temperature: 0,
-      top_p: 1,
-      max_output_tokens: 1000,
-      tool_choice_mode: 'auto',
-      response_format: 'text',
-      allow_parallel_tool_calls: false,
-    },
-    revision: 1,
-  }, { tenantId, operatorId: 'pi-smoke' });
+    { tenantId, operatorId: 'pi-smoke' },
+  );
   return repository.publish(modelPolicyId, 1, {
     tenantId,
     operatorId: 'pi-smoke',
@@ -191,10 +300,28 @@ async function seedModelPolicy(db: ReturnType<typeof createDb>, modelPolicyId: s
 }
 
 async function seedTools(db: ReturnType<typeof createDb>) {
-  const knowledge = JSON.parse(await readFile(new URL('../examples/tools/knowledge-search-tool.json', import.meta.url), 'utf8'));
-  const recordWrite = JSON.parse(await readFile(new URL('../examples/tools/record-write-mock-tool.json', import.meta.url), 'utf8'));
-  await new ToolManifestRepository(db).upsert(knowledge, { tenantId, status: 'published', createdBy: 'pi-smoke' });
-  await new ToolManifestRepository(db).upsert(recordWrite, { tenantId, status: 'published', createdBy: 'pi-smoke' });
+  const knowledge = JSON.parse(
+    await readFile(
+      new URL('../examples/tools/knowledge-search-tool.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  const recordWrite = JSON.parse(
+    await readFile(
+      new URL('../examples/tools/record-write-mock-tool.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  await new ToolManifestRepository(db).upsert(knowledge, {
+    tenantId,
+    status: 'published',
+    createdBy: 'pi-smoke',
+  });
+  await new ToolManifestRepository(db).upsert(recordWrite, {
+    tenantId,
+    status: 'published',
+    createdBy: 'pi-smoke',
+  });
 }
 
 async function seedHandoffTarget(db: ReturnType<typeof createDb>) {
@@ -206,7 +333,11 @@ async function seedHandoffTarget(db: ReturnType<typeof createDb>) {
     steps: [{ id: 'normalize', type: 'activity' as const, activity: 'input.normalize' }],
     status: 'published' as const,
   };
-  await new FlowDefinitionRepository(db).upsert(flow, { tenantId, status: 'published', createdBy: 'pi-smoke' });
+  await new FlowDefinitionRepository(db).upsert(flow, {
+    tenantId,
+    status: 'published',
+    createdBy: 'pi-smoke',
+  });
   const planWithoutHash = {
     execution_plan_id: 'plan_handoff',
     execution_plan_ref: buildExecutionPlanRef('plan_handoff'),
@@ -250,6 +381,72 @@ function deterministicScenario(value: string): string {
   return value;
 }
 
+function expectsToolResult(value: string): boolean {
+  return ['readonly_tool', 'l3_tool', 'model_gateway'].includes(value);
+}
+
+function safeId(value: string): string {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/gu, '_')
+      .replace(/^_+|_+$/gu, '')
+      .slice(0, 40) || 'provider'
+  );
+}
+
+function systemPromptForScenario(value: string, selectedMode: string): string {
+  if (selectedMode !== 'model_gateway') {
+    return `You are a Pi smoke agent. Scenario: ${value}.`;
+  }
+  if (value === 'model_gateway_final') {
+    return 'You are a Pi smoke agent. Reply directly and do not call tools.';
+  }
+  if (value === 'readonly_tool') {
+    return 'You are a tool-calling assistant. When tool_choice is required, return exactly one structured tool call and no text.';
+  }
+  if (value === 'l3_tool') {
+    return 'You are a tool-calling assistant. When tool_choice is required, return exactly one structured tool call and no text.';
+  }
+  return `You are a Pi smoke agent. Scenario: ${value}.`;
+}
+
+function inputTextForScenario(value: string, selectedMode: string): string {
+  if (selectedMode !== 'model_gateway') {
+    return `${value} smoke request`;
+  }
+  if (value === 'model_gateway_final') {
+    return 'Reply with the exact text: durable-agent-runtime-lite-ollama-runtime-final-ok';
+  }
+  if (value === 'readonly_tool') {
+    return 'Call the provided search tool exactly once. Query: durable agent runtime ollama readonly smoke.';
+  }
+  if (value === 'l3_tool') {
+    return 'Call the provided record write tool exactly once. Use record.summary: durable agent runtime ollama l3 smoke.';
+  }
+  return `${value} smoke request`;
+}
+
+function initialToolChoiceForScenario(
+  value: string,
+  selectedMode: string,
+): 'none' | 'auto' | 'required' {
+  if (selectedMode !== 'model_gateway') {
+    return 'auto';
+  }
+  if (value === 'model_gateway_final') {
+    return 'none';
+  }
+  if (expectsToolResult(value)) {
+    return 'required';
+  }
+  return 'auto';
+}
+
+function afterToolResultToolChoiceForScenario(selectedMode: string): 'none' | 'auto' {
+  return selectedMode === 'model_gateway' ? 'none' : 'auto';
+}
+
 async function pollTask(taskRunId: string): Promise<TaskRun> {
   const deadline = Date.now() + Number(process.env.SMOKE_TIMEOUT_MS ?? 90_000);
   const handledTasks = new Set<string>();
@@ -262,7 +459,9 @@ async function pollTask(taskRunId: string): Promise<TaskRun> {
     }
     await sleep(1000);
   }
-  throw new Error(`Timed out waiting for ${taskRunId}; last status=${lastTask?.status ?? 'unknown'}`);
+  throw new Error(
+    `Timed out waiting for ${taskRunId}; last status=${lastTask?.status ?? 'unknown'}`,
+  );
 }
 
 async function resolvePendingHumanTasks(taskRunId: string, handledTasks: Set<string>) {
@@ -274,21 +473,27 @@ async function resolvePendingHumanTasks(taskRunId: string, handledTasks: Set<str
       continue;
     }
     if (task.kind === 'user_input') {
-      await postJson(`${runtimeApiUrl}/v1/human-tasks/${encodeURIComponent(task.human_task_id)}/respond`, {
-        tenant_id: tenantId,
-        user_id: userId,
-        request_id: `${requestId}_respond_${task.human_task_id}`,
-        response_idempotency_key: `${requestId}:respond:${task.human_task_id}`,
-        response: { value: 'provided by smoke' },
-      });
+      await postJson(
+        `${runtimeApiUrl}/v1/human-tasks/${encodeURIComponent(task.human_task_id)}/respond`,
+        {
+          tenant_id: tenantId,
+          user_id: userId,
+          request_id: `${requestId}_respond_${task.human_task_id}`,
+          response_idempotency_key: `${requestId}:respond:${task.human_task_id}`,
+          response: { value: 'provided by smoke' },
+        },
+      );
     } else {
-      await postJson(`${runtimeApiUrl}/v1/human-tasks/${encodeURIComponent(task.human_task_id)}/approve`, {
-        tenant_id: tenantId,
-        user_id: userId,
-        request_id: `${requestId}_approve_${task.human_task_id}`,
-        decision_reason: 'Pi smoke approval',
-        payload: { scenario },
-      });
+      await postJson(
+        `${runtimeApiUrl}/v1/human-tasks/${encodeURIComponent(task.human_task_id)}/approve`,
+        {
+          tenant_id: tenantId,
+          user_id: userId,
+          request_id: `${requestId}_approve_${task.human_task_id}`,
+          decision_reason: 'Pi smoke approval',
+          payload: { scenario },
+        },
+      );
     }
     handledTasks.add(task.human_task_id);
   }
@@ -296,7 +501,11 @@ async function resolvePendingHumanTasks(taskRunId: string, handledTasks: Set<str
 
 async function checkHealth(url: string, appName: string): Promise<void> {
   const response = await fetch(url);
-  assert.equal(response.ok, true, `${appName} healthz failed: ${response.status} ${await response.text()}`);
+  assert.equal(
+    response.ok,
+    true,
+    `${appName} healthz failed: ${response.status} ${await response.text()}`,
+  );
 }
 
 async function postJson<T = unknown>(url: string, payload: unknown): Promise<T> {

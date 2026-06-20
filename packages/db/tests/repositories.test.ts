@@ -116,7 +116,7 @@ class FakeQuery {
   }
 
   async executeTakeFirstOrThrow() {
-    const value = this.shouldReturnAll && this.first ? this.first : this.first ?? this.rows[0];
+    const value = this.shouldReturnAll && this.first ? this.first : (this.first ?? this.rows[0]);
     if (!value) {
       throw new Error('missing fake row');
     }
@@ -150,7 +150,15 @@ const flowSpec: FlowSpec = {
   version: 7,
   status: 'published',
   runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
-  steps: [{ id: 'search', type: 'tool', tool: 'knowledge.search', tool_version: '1.0.0', input: { query: '${input.query}' } }],
+  steps: [
+    {
+      id: 'search',
+      type: 'tool',
+      tool: 'knowledge.search',
+      tool_version: '1.0.0',
+      input: { query: '${input.query}' },
+    },
+  ],
 };
 
 const routeSpec: RouteSpec = {
@@ -197,7 +205,9 @@ describe('db repositories', () => {
     expect(parseAgentOutputSchema('agent_run_result_v1')).toEqual({ $ref: 'agent_run_result_v1' });
     expect(parseAgentOutputSchema('{"type":"object"}')).toEqual({ type: 'object' });
     expect(parseAgentOutputSchema(undefined)).toBeUndefined();
-    expect(() => parseAgentOutputSchema('not valid json ref!')).toThrow(/schema ref or JSON object string/u);
+    expect(() => parseAgentOutputSchema('not valid json ref!')).toThrow(
+      /schema ref or JSON object string/u,
+    );
   });
 
   it('loads published FlowSpec, RouteSpec, and ToolManifest from the DB tables', async () => {
@@ -207,12 +217,18 @@ describe('db repositories', () => {
       tool_manifest: [{ spec_json: toolManifest }],
     });
 
-    await expect(new FlowDefinitionRepository(db as never).getPublished('db_route_flow', 7)).resolves.toMatchObject({
+    await expect(
+      new FlowDefinitionRepository(db as never).getPublished('db_route_flow', 7),
+    ).resolves.toMatchObject({
       flow_id: 'db_route_flow',
       version: 7,
     });
-    await expect(new RouteConfigRepository(db as never).listPublished()).resolves.toEqual([routeSpec]);
-    await expect(new ToolManifestRepository(db as never).getPublished('knowledge.search')).resolves.toMatchObject({
+    await expect(new RouteConfigRepository(db as never).listPublished()).resolves.toEqual([
+      routeSpec,
+    ]);
+    await expect(
+      new ToolManifestRepository(db as never).getPublished('knowledge.search'),
+    ).resolves.toMatchObject({
       tool_name: 'knowledge.search',
     });
 
@@ -269,7 +285,11 @@ describe('db repositories', () => {
       ],
     });
 
-    await expect(new FlowExecutionPlanRepository(db as never).getByRef(plan.execution_plan_ref, { tenantId: 'tenant_1' })).resolves.toEqual(plan);
+    await expect(
+      new FlowExecutionPlanRepository(db as never).getByRef(plan.execution_plan_ref, {
+        tenantId: 'tenant_1',
+      }),
+    ).resolves.toEqual(plan);
   });
 
   it('validates tenant runtime policy schema, stable hash, snapshots, and admission stores', async () => {
@@ -277,17 +297,21 @@ describe('db repositories', () => {
       tenant_id: 'tenant_policy_test',
       version: 1,
       status: 'draft',
-      allowed_tools: [{
-        tool_name: 'knowledge.search',
-        versions: ['1.0.0'],
-        allowed_operations: ['invoke', 'preview', 'commit'],
-        max_risk_level: 'L1',
-      }],
-      denied_tools: [{
-        tool_name: 'record.write.mock',
-        allowed_operations: ['invoke', 'preview', 'commit'],
-        reason_code: 'DENY_WRITE',
-      }],
+      allowed_tools: [
+        {
+          tool_name: 'knowledge.search',
+          versions: ['1.0.0'],
+          allowed_operations: ['invoke', 'preview', 'commit'],
+          max_risk_level: 'L1',
+        },
+      ],
+      denied_tools: [
+        {
+          tool_name: 'record.write.mock',
+          allowed_operations: ['invoke', 'preview', 'commit'],
+          reason_code: 'DENY_WRITE',
+        },
+      ],
       allowed_models: [{ model_id: 'deterministic:readonly_tool' }],
       denied_models: [{ model_id: 'deterministic:l3_tool', reason_code: 'DENY_L3_MODEL' }],
       allowed_handoffs: [{ flow_id: 'sample_flow', versions: [1] }],
@@ -295,16 +319,24 @@ describe('db repositories', () => {
       budget_cap: { max_segments: 2, max_tool_calls: 1, max_total_tokens: 1000 },
       max_concurrent_agent_runs: 1,
     });
-    expect(hashTenantRuntimePolicy(policy)).toBe(hashTenantRuntimePolicy({ ...policy, updated_by: 'ignored' }));
+    expect(hashTenantRuntimePolicy(policy)).toBe(
+      hashTenantRuntimePolicy({ ...policy, updated_by: 'ignored' }),
+    );
 
-    const snapshotRepo = new TenantRuntimePolicySnapshotRepository(new FakeDb({
-      tenant_runtime_policy_snapshot: [],
-    }) as never);
-    await expect(snapshotRepo.verifyHash('missing', 'a'.repeat(64), { tenantId: policy.tenant_id })).resolves.toBe(false);
+    const snapshotRepo = new TenantRuntimePolicySnapshotRepository(
+      new FakeDb({
+        tenant_runtime_policy_snapshot: [],
+      }) as never,
+    );
+    await expect(
+      snapshotRepo.verifyHash('missing', 'a'.repeat(64), { tenantId: policy.tenant_id }),
+    ).resolves.toBe(false);
 
-    const admissionRepo = new TenantAgentAdmissionRepository(new FakeDb({
-      tenant_agent_admission: [],
-    }) as never);
+    const admissionRepo = new TenantAgentAdmissionRepository(
+      new FakeDb({
+        tenant_agent_admission: [],
+      }) as never,
+    );
     await expect(admissionRepo.getActiveCount(policy.tenant_id)).resolves.toBe(0);
   });
 
@@ -313,12 +345,14 @@ describe('db repositories', () => {
       tenant_id: 'tenant_policy_lineage_test',
       version: 1,
       status: 'published',
-      allowed_tools: [{
-        tool_name: 'knowledge.search',
-        versions: ['1.0.0'],
-        allowed_operations: ['invoke'],
-        max_risk_level: 'L1',
-      }],
+      allowed_tools: [
+        {
+          tool_name: 'knowledge.search',
+          versions: ['1.0.0'],
+          allowed_operations: ['invoke'],
+          max_risk_level: 'L1',
+        },
+      ],
       denied_tools: [],
       allowed_models: [{ model_id: 'deterministic:readonly_tool' }],
       denied_models: [],
@@ -351,9 +385,11 @@ describe('db repositories', () => {
       },
       max_concurrent_agent_runs: 1,
     };
-    const repository = new TenantRuntimePolicySnapshotRepository(new FakeDb({
-      tenant_runtime_policy_snapshot: [],
-    }) as never);
+    const repository = new TenantRuntimePolicySnapshotRepository(
+      new FakeDb({
+        tenant_runtime_policy_snapshot: [],
+      }) as never,
+    );
 
     const root = await repository.createImmutableSnapshot({
       tenantId: policy.tenant_id,
@@ -412,17 +448,19 @@ describe('db repositories', () => {
     });
     expect(siblingWithDifferentParent.snapshot_hash).not.toBe(child.snapshot_hash);
 
-    await expect(repository.createImmutableSnapshot({
-      tenantId: policy.tenant_id,
-      policy,
-      policyHash,
-      executionPlanRef: 'db://flow-execution-plan/invalid',
-      executionPlanHash: 'c'.repeat(64),
-      executionPlanType: 'flow',
-      parentSnapshotRef: root.snapshot_ref,
-      derivationType: 'root',
-      resolvedPolicy,
-    })).rejects.toThrow(/Root TenantRuntimePolicySnapshot/u);
+    await expect(
+      repository.createImmutableSnapshot({
+        tenantId: policy.tenant_id,
+        policy,
+        policyHash,
+        executionPlanRef: 'db://flow-execution-plan/invalid',
+        executionPlanHash: 'c'.repeat(64),
+        executionPlanType: 'flow',
+        parentSnapshotRef: root.snapshot_ref,
+        derivationType: 'root',
+        resolvedPolicy,
+      }),
+    ).rejects.toThrow(/Root TenantRuntimePolicySnapshot/u);
   });
 
   it('stores and verifies AgentExecutionPlan by immutable ref without adapter secrets', async () => {
@@ -433,14 +471,16 @@ describe('db repositories', () => {
       model_policy_version: 1,
       model_policy_hash: hash,
       protocol: 'dar_generate',
-      resolved_targets: [{
-        target_id: 'deterministic-final-target',
-        gateway_profile: 'local-mock',
-        model_id: 'deterministic:final_only',
-        priority: 0,
-        enabled: true,
-        capabilities: ['text'],
-      }],
+      resolved_targets: [
+        {
+          target_id: 'deterministic-final-target',
+          gateway_profile: 'local-mock',
+          model_id: 'deterministic:final_only',
+          priority: 0,
+          enabled: true,
+          capabilities: ['text'],
+        },
+      ],
       retry_policy: {
         max_attempts_per_target: 1,
         retryable_status_codes: [429, 500],
@@ -461,7 +501,8 @@ describe('db repositories', () => {
         temperature: 0,
         top_p: 1,
         max_output_tokens: 1000,
-        tool_choice_mode: 'auto',
+        initial_tool_choice_mode: 'auto',
+        after_tool_result_tool_choice_mode: 'auto',
         response_format: 'text',
         allow_parallel_tool_calls: false,
       },
@@ -482,14 +523,16 @@ describe('db repositories', () => {
       model_policy_version: resolvedModelPolicy.model_policy_version,
       model_policy_hash: resolvedModelPolicy.model_policy_hash,
       resolved_model_policy: resolvedModelPolicy,
-      allowed_tools: [{
-        tool_name: 'knowledge.search',
-        tool_version: '1.0.0',
-        tool_sha256: hash,
-        description: 'Search',
-        risk_level: 'L1',
-        input_schema: { type: 'object' },
-      }],
+      allowed_tools: [
+        {
+          tool_name: 'knowledge.search',
+          tool_version: '1.0.0',
+          tool_sha256: hash,
+          description: 'Search',
+          risk_level: 'L1',
+          input_schema: { type: 'object' },
+        },
+      ],
       allowed_handoffs: [],
       budget: {
         max_segments: 3,
@@ -515,14 +558,16 @@ describe('db repositories', () => {
         model_policy_version: resolvedModelPolicy.model_policy_version,
         model_policy_hash: resolvedModelPolicy.model_policy_hash,
         resolved_model_policy: resolvedModelPolicy,
-        allowed_tools: [{
-          tool_name: 'knowledge.search',
-          tool_version: '1.0.0',
-          tool_sha256: hash,
-          description: 'Search',
-          risk_level: 'L1',
-          input_schema: { type: 'object' },
-        }],
+        allowed_tools: [
+          {
+            tool_name: 'knowledge.search',
+            tool_version: '1.0.0',
+            tool_sha256: hash,
+            description: 'Search',
+            risk_level: 'L1',
+            input_schema: { type: 'object' },
+          },
+        ],
         allowed_handoffs: [],
         budget: {
           max_segments: 3,
@@ -540,40 +585,72 @@ describe('db repositories', () => {
     };
     const plan = {
       ...planWithoutHash,
-      execution_plan_hash: hashJson(planWithoutHash),
+      execution_plan_hash: hashJson({
+        execution_plan_id: planWithoutHash.execution_plan_id,
+        execution_plan_ref: planWithoutHash.execution_plan_ref,
+        tenant_id: planWithoutHash.tenant_id,
+        agent_id: planWithoutHash.agent_id,
+        agent_version: planWithoutHash.agent_version,
+        agent_sha256: planWithoutHash.agent_sha256,
+        prompt_id: planWithoutHash.prompt_id,
+        prompt_version: planWithoutHash.prompt_version,
+        prompt_sha256: planWithoutHash.prompt_sha256,
+        model_policy: planWithoutHash.model_policy,
+        model_policy_id: planWithoutHash.model_policy_id,
+        model_policy_version: planWithoutHash.model_policy_version,
+        model_policy_hash: planWithoutHash.model_policy_hash,
+        resolved_model_policy: planWithoutHash.resolved_model_policy,
+        allowed_tools: planWithoutHash.allowed_tools,
+        allowed_handoffs: planWithoutHash.allowed_handoffs,
+        budget: planWithoutHash.budget,
+        plan: planWithoutHash.plan,
+        generated_at: planWithoutHash.generated_at,
+      }),
     };
     const db = new FakeDb({
-      agent_execution_plan: [{
-        execution_plan_id: plan.execution_plan_id,
-        execution_plan_ref: plan.execution_plan_ref,
-        tenant_id: plan.tenant_id,
-        agent_id: plan.agent_id,
-        agent_version: plan.agent_version,
-        agent_sha256: plan.agent_sha256,
-        prompt_id: plan.prompt_id,
-        prompt_version: plan.prompt_version,
-        prompt_sha256: plan.prompt_sha256,
-        model_policy_json: { value: plan.model_policy },
-        model_policy_id: plan.model_policy_id,
-        model_policy_version: plan.model_policy_version,
-        model_policy_hash: plan.model_policy_hash,
-        resolved_model_policy_json: plan.resolved_model_policy,
-        allowed_tools_json: plan.allowed_tools,
-        allowed_handoffs_json: plan.allowed_handoffs,
-        output_schema_json: null,
-        budget_json: plan.budget,
-        plan_json: plan,
-        execution_plan_hash: plan.execution_plan_hash,
-        generated_at: now,
-        created_at: now,
-      }],
+      agent_execution_plan: [
+        {
+          execution_plan_id: plan.execution_plan_id,
+          execution_plan_ref: plan.execution_plan_ref,
+          tenant_id: plan.tenant_id,
+          agent_id: plan.agent_id,
+          agent_version: plan.agent_version,
+          agent_sha256: plan.agent_sha256,
+          prompt_id: plan.prompt_id,
+          prompt_version: plan.prompt_version,
+          prompt_sha256: plan.prompt_sha256,
+          model_policy_json: { value: plan.model_policy },
+          model_policy_id: plan.model_policy_id,
+          model_policy_version: plan.model_policy_version,
+          model_policy_hash: plan.model_policy_hash,
+          resolved_model_policy_json: plan.resolved_model_policy,
+          allowed_tools_json: plan.allowed_tools,
+          allowed_handoffs_json: plan.allowed_handoffs,
+          output_schema_json: null,
+          budget_json: plan.budget,
+          plan_json: plan,
+          execution_plan_hash: plan.execution_plan_hash,
+          generated_at: now,
+          created_at: now,
+        },
+      ],
     });
 
-    await expect(new AgentExecutionPlanRepository(db as never).getByRef(executionPlanRef, { tenantId: 'tenant_1' })).resolves.toMatchObject({
+    await expect(
+      new AgentExecutionPlanRepository(db as never).getByRef(executionPlanRef, {
+        tenantId: 'tenant_1',
+      }),
+    ).resolves.toMatchObject({
       execution_plan_ref: executionPlanRef,
       allowed_tools: [{ tool_name: 'knowledge.search' }],
     });
-    await expect(new AgentExecutionPlanRepository(db as never).verifyHash(executionPlanRef, plan.execution_plan_hash, { tenantId: 'tenant_1' })).resolves.toBe(true);
+    await expect(
+      new AgentExecutionPlanRepository(db as never).verifyHash(
+        executionPlanRef,
+        plan.execution_plan_hash,
+        { tenantId: 'tenant_1' },
+      ),
+    ).resolves.toBe(true);
     expect(JSON.stringify(plan.allowed_tools)).not.toMatch(/authorization|api_key|endpoint_ref/i);
   });
 
@@ -584,14 +661,16 @@ describe('db repositories', () => {
       model_policy_version: 1,
       model_policy_hash: hash,
       protocol: 'dar_generate',
-      resolved_targets: [{
-        target_id: 'deterministic-final-target',
-        gateway_profile: 'local-mock',
-        model_id: 'deterministic:final_only',
-        priority: 0,
-        enabled: true,
-        capabilities: ['text'],
-      }],
+      resolved_targets: [
+        {
+          target_id: 'deterministic-final-target',
+          gateway_profile: 'local-mock',
+          model_id: 'deterministic:final_only',
+          priority: 0,
+          enabled: true,
+          capabilities: ['text'],
+        },
+      ],
       retry_policy: {
         max_attempts_per_target: 1,
         retryable_status_codes: [429, 500],
@@ -612,12 +691,16 @@ describe('db repositories', () => {
         temperature: 0,
         top_p: 1,
         max_output_tokens: 1000,
-        tool_choice_mode: 'auto',
+        initial_tool_choice_mode: 'auto',
+        after_tool_result_tool_choice_mode: 'auto',
         response_format: 'text',
         allow_parallel_tool_calls: false,
       },
     };
-    const basePlan: Omit<AgentExecutionPlan, 'execution_plan_id' | 'execution_plan_ref' | 'execution_plan_hash' | 'generated_at'> = {
+    const basePlan: Omit<
+      AgentExecutionPlan,
+      'execution_plan_id' | 'execution_plan_ref' | 'execution_plan_hash' | 'generated_at'
+    > = {
       tenant_id: 'tenant_1',
       agent_id: 'agent_1',
       agent_version: 1,
@@ -695,8 +778,12 @@ describe('db repositories', () => {
     };
 
     expect(firstPlan.execution_plan_hash).not.toBe(regeneratedPlan.execution_plan_hash);
-    expect(agentExecutionPlanContentHash(firstPlan)).toBe(agentExecutionPlanContentHash(regeneratedPlan));
-    expect(agentExecutionPlanContentHash(firstPlan)).not.toBe(agentExecutionPlanContentHash(changedPlan));
+    expect(agentExecutionPlanContentHash(firstPlan)).toBe(
+      agentExecutionPlanContentHash(regeneratedPlan),
+    );
+    expect(agentExecutionPlanContentHash(firstPlan)).not.toBe(
+      agentExecutionPlanContentHash(changedPlan),
+    );
   });
 
   it('returns idempotency replay or conflict from stored request hash', async () => {
@@ -828,56 +915,62 @@ describe('db repositories', () => {
   it('updates AgentStep boundary results without creating a second step', async () => {
     const now = new Date('2025-01-01T00:00:00.000Z').toISOString();
     const db = new FakeDb({
-      agent_step: [{
-        agent_step_id: 'agent_step_1',
-        agent_run_id: 'agent_run_1',
-        segment_index: 0,
-        stable_step_key: 'agent_run_1:0',
-        segment_status: 'waiting_tool',
-        decision_summary: 'Pi requested 1 tool call(s)',
-        proposed_tool_calls_json: [],
-        tool_result_refs_json: [],
-        authoritative_tool_result_refs_json: [],
-        human_task_ids_json: [],
-        context_snapshot_before_ref: null,
-        context_snapshot_after_ref: null,
-        handoff_refs_json: [],
-        context_snapshot_ref: null,
-        output_ref: null,
-        usage_json: {},
-        error_code: null,
-        error_message: null,
-        created_at: now,
-        updated_at: now,
-      }],
+      agent_step: [
+        {
+          agent_step_id: 'agent_step_1',
+          agent_run_id: 'agent_run_1',
+          segment_index: 0,
+          stable_step_key: 'agent_run_1:0',
+          segment_status: 'waiting_tool',
+          decision_summary: 'Pi requested 1 tool call(s)',
+          proposed_tool_calls_json: [],
+          tool_result_refs_json: [],
+          authoritative_tool_result_refs_json: [],
+          human_task_ids_json: [],
+          context_snapshot_before_ref: null,
+          context_snapshot_after_ref: null,
+          handoff_refs_json: [],
+          context_snapshot_ref: null,
+          output_ref: null,
+          usage_json: {},
+          error_code: null,
+          error_message: null,
+          created_at: now,
+          updated_at: now,
+        },
+      ],
     });
 
-    await expect(new AgentStepRepository(db as never).updateBoundaryResult({
-      stableStepKey: 'agent_run_1:0',
-      segmentStatus: 'tool_resolved',
-      authoritativeToolResultRefs: [{
-        tool_call_id: 'call_1',
-        tool_name: 'knowledge.search',
-        tool_version: '1.0.0',
-        result_ref: 'tool-call:tool_call_1',
-        status: 'succeeded',
-        is_error: false,
-      }],
-      contextSnapshotAfter: {
-        snapshot_id: 'snapshot_after',
-        schema_version: 'pi-context/v1',
-        snapshot_hash: 'a'.repeat(64),
-        message_count: 4,
-        byte_size: 512,
-      },
-      contextSnapshotRef: {
-        snapshot_id: 'snapshot_after',
-        schema_version: 'pi-context/v1',
-        snapshot_hash: 'a'.repeat(64),
-        message_count: 4,
-        byte_size: 512,
-      },
-    })).resolves.toMatchObject({
+    await expect(
+      new AgentStepRepository(db as never).updateBoundaryResult({
+        stableStepKey: 'agent_run_1:0',
+        segmentStatus: 'tool_resolved',
+        authoritativeToolResultRefs: [
+          {
+            tool_call_id: 'call_1',
+            tool_name: 'knowledge.search',
+            tool_version: '1.0.0',
+            result_ref: 'tool-call:tool_call_1',
+            status: 'succeeded',
+            is_error: false,
+          },
+        ],
+        contextSnapshotAfter: {
+          snapshot_id: 'snapshot_after',
+          schema_version: 'pi-context/v1',
+          snapshot_hash: 'a'.repeat(64),
+          message_count: 4,
+          byte_size: 512,
+        },
+        contextSnapshotRef: {
+          snapshot_id: 'snapshot_after',
+          schema_version: 'pi-context/v1',
+          snapshot_hash: 'a'.repeat(64),
+          message_count: 4,
+          byte_size: 512,
+        },
+      }),
+    ).resolves.toMatchObject({
       stable_step_key: 'agent_run_1:0',
       segment_status: 'tool_resolved',
       tool_result_refs: [{ result_ref: 'tool-call:tool_call_1' }],
@@ -934,21 +1027,23 @@ describe('db repositories', () => {
     const db = new FakeDb({ audit_event: [] });
     const repository = new AuditEventRepository(db as never);
 
-    await expect(repository.append({
-      event_key: 'agent.admission.reconciled:tenant_1:admission_1',
-      tenant_id: 'tenant_1',
-      actor_id: 'system:admission-reconcile',
-      action: 'agent.admission.reconciled',
-      target_type: 'tenant_agent_admission',
-      target_id: 'admission_1',
-      result: 'succeeded',
-      reason: 'workflow_completed',
-      payload: {
+    await expect(
+      repository.append({
+        event_key: 'agent.admission.reconciled:tenant_1:admission_1',
         tenant_id: 'tenant_1',
-        task_run_id: 'task_1',
-        tenant_admission_id: 'admission_1',
-      },
-    })).resolves.toMatchObject({
+        actor_id: 'system:admission-reconcile',
+        action: 'agent.admission.reconciled',
+        target_type: 'tenant_agent_admission',
+        target_id: 'admission_1',
+        result: 'succeeded',
+        reason: 'workflow_completed',
+        payload: {
+          tenant_id: 'tenant_1',
+          task_run_id: 'task_1',
+          tenant_admission_id: 'admission_1',
+        },
+      }),
+    ).resolves.toMatchObject({
       event_key: 'agent.admission.reconciled:tenant_1:admission_1',
       action: 'agent.admission.reconciled',
       payload: { tenant_admission_id: 'admission_1' },

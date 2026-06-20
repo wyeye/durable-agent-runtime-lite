@@ -5,16 +5,16 @@
 R0/AR-2A 状态：
 
 - AR-1 Platform Core 已冻结为 `0.8.0`，见 `docs/PLATFORM_CORE_BASELINE.md`。
-- AR-2A 当前为 `PARTIAL`：ModelPolicy、OpenAI-compatible client、ledger 和本地 mock 回归已接入；真实外部模型的完整 runtime live smoke 仍需要凭据环境。
+- AR-2A 当前为 `PARTIAL`：ModelPolicy、OpenAI-compatible client、tool-call round-trip、ledger 和本地 Ollama probe/runtime smoke 已接入；本机已通过宿主当前代码 + Docker DB/Temporal/Tool Gateway 的本地 Ollama runtime smokes，完整 Docker image rebuild 和 containerized Ollama runtime smoke 尚未完成。
 
 Durable Agent Runtime Lite 是一个四应用通用 Agent Runtime 骨架：
 
-| App | 责任 |
-|---|---|
-| `apps/control-plane` | 能力运营端，Registry 管理 API、运营查询 BFF、OpenAPI、Vite 静态资源托管 |
-| `apps/runtime-api` | 统一运行入口，规则 Router、TaskRun、Workflow Starter |
+| App                   | 责任                                                                                                 |
+| --------------------- | ---------------------------------------------------------------------------------------------------- |
+| `apps/control-plane`  | 能力运营端，Registry 管理 API、运营查询 BFF、OpenAPI、Vite 静态资源托管                              |
+| `apps/runtime-api`    | 统一运行入口，规则 Router、TaskRun、Workflow Starter                                                 |
 | `apps/runtime-worker` | Temporal Worker 入口、ConfigDrivenWorkflow、GenericAgentWorkflow、Activity、Pi Agent Core 分段运行时 |
-| `apps/tool-gateway` | 工具唯一出口，Manifest、Schema 校验、幂等、审计、mock adapter |
+| `apps/tool-gateway`   | 工具唯一出口，Manifest、Schema 校验、幂等、审计、mock adapter                                        |
 
 核心约束：生产 app 只能是以上 4 个；工具调用必须经 `tool-gateway`；`runtime-worker` 不直连业务系统；Temporal Workflow 只保留确定性编排。
 
@@ -101,15 +101,15 @@ docker compose -f infra/docker-compose.yml up -d tool-gateway runtime-worker run
 
 为避免和本机常见 PostgreSQL / Redis 冲突，Docker Compose 默认将 PostgreSQL 映射到 `15432`、Valkey 映射到 `16380`；可通过 `.env` 中的 `POSTGRES_HOST_PORT`、`VALKEY_HOST_PORT` 等变量调整。
 
-| Service | URL |
-|---|---|
-| control-plane | http://localhost:3100 |
-| runtime-api | http://localhost:3000 |
-| tool-gateway | http://localhost:3200 |
+| Service        | URL                   |
+| -------------- | --------------------- |
+| control-plane  | http://localhost:3100 |
+| runtime-api    | http://localhost:3000 |
+| tool-gateway   | http://localhost:3200 |
 | runtime-worker | http://localhost:3300 |
-| Temporal UI | http://localhost:8233 |
-| PostgreSQL | localhost:15432 |
-| Valkey | localhost:16380 |
+| Temporal UI    | http://localhost:8233 |
+| PostgreSQL     | localhost:15432       |
+| Valkey         | localhost:16380       |
 
 Docker Compose 中真实 smoke 相关环境变量：
 
@@ -165,6 +165,20 @@ corepack pnpm smoke:model-gateway-live-final-e2e
 ```
 
 `smoke:model-gateway-live-readonly-e2e` 和 `smoke:model-gateway-live-l3-e2e` 会要求真实 OpenAI-compatible provider 返回结构化 tool call。未设置 `LIVE_MODEL_GATEWAY_ENABLED=true` 时这些命令输出 `skipped: true`，不会伪装成 live pass。
+
+本地 Ollama 真实模型验证分两层：
+
+```bash
+ollama list
+ollama show qwen2.5:7b-instruct-q4_K_M
+corepack pnpm ollama:probe
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.ollama.yml config
+corepack pnpm smoke:ollama-runtime-final-e2e
+corepack pnpm smoke:ollama-runtime-readonly-e2e
+corepack pnpm smoke:ollama-runtime-l3-e2e
+```
+
+`ollama:probe` 只验证宿主机 Ollama OpenAI-compatible API、精确模型 `qwen2.5:7b-instruct-q4_K_M`、final 文本、结构化 tool call、tool result 后续轮次、JSON object 和 abort。三个 `smoke:ollama-runtime-*` 命令走 `/v1/agent-tasks` 的真实 runtime 路径，要求 DB、Temporal、runtime-worker、runtime-api 和 tool-gateway 使用等效的 Ollama Model Gateway 配置运行；它们不是裸模型 probe。
 
 `smoke:pi-worker-crash-resume-e2e` 会真实 `SIGKILL` compose 里的
 `runtime-worker`，在 worker 停止期间通过 runtime-api 写入 waiting-user /

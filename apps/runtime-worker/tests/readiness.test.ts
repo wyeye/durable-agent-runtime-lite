@@ -123,6 +123,36 @@ describe('runtime-worker readiness', () => {
 
     await server.close();
   });
+
+  it('reports not_ready when production Model Gateway uses local Ollama profile', async () => {
+    const server = buildServer({
+      mode: 'temporal',
+      state: { status: 'running', ready: true },
+    }, {
+      ...config(),
+      NODE_ENV: 'production',
+      APP_ENV: 'production',
+      PI_AGENT_MODE: 'model_gateway',
+      MODEL_GATEWAY_MODE: 'openai_compatible',
+      MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions',
+      MODEL_GATEWAY_PROFILE_ID: 'local-ollama',
+      MODEL_GATEWAY_BASE_URL: 'http://localhost:11434/v1',
+      MODEL_GATEWAY_API_KEY: 'ollama',
+      MODEL_GATEWAY_ALLOW_INSECURE_HTTP: true,
+    });
+
+    const response = await server.inject({ method: 'GET', url: '/readyz' });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      status: 'not_ready',
+      checks: {
+        model_gateway_profile: 'local-ollama',
+        pi_error: 'local-ollama Model Gateway profile is development/test only',
+      },
+    });
+
+    await server.close();
+  });
 });
 
 function config(): RuntimeConfig {
@@ -138,11 +168,13 @@ function config(): RuntimeConfig {
     MODEL_GATEWAY_BASE_URL: 'http://localhost:4100',
     MODEL_GATEWAY_API_KEY: 'dev-only-placeholder',
     MODEL_GATEWAY_MODEL: 'dar-local-model',
+    MODEL_GATEWAY_PROFILE_ID: 'local-dev',
     MODEL_GATEWAY_MODE: 'disabled',
     MODEL_GATEWAY_PROTOCOL: 'dar_generate',
     MODEL_GATEWAY_TIMEOUT_MS: 30_000,
     MODEL_GATEWAY_MAX_RETRIES: 1,
     MODEL_GATEWAY_MAX_RESPONSE_BYTES: 1_000_000,
+    MODEL_CALL_LEDGER_MAX_RESPONSE_BYTES: 1_048_576,
     MODEL_GATEWAY_ALLOW_INSECURE_HTTP: true,
     MODEL_GATEWAY_IDEMPOTENCY_HEADER: 'Idempotency-Key',
     MODEL_GATEWAY_USER_AGENT: 'durable-agent-runtime-lite/runtime-worker',

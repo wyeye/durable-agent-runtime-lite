@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import type { AgentSpec, FlowSpec, ModelPolicy, PromptDefinition, RouteSpec, ToolManifest } from '@dar/contracts';
+import type {
+  AgentSpec,
+  FlowSpec,
+  ModelPolicy,
+  PromptDefinition,
+  RouteSpec,
+  ToolManifest,
+} from '@dar/contracts';
 import {
   AgentSpecRepository,
   closeDb,
@@ -27,11 +34,11 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
     const tenantId = `tenant_${randomUUID()}`;
     const operatorId = 'operator_release_test';
     const flowId = `flow_${randomUUID()}`;
-      const routeId = `route_${randomUUID()}`;
-      const promptId = `prompt_${randomUUID()}`;
-      const agentId = `agent_${randomUUID()}`;
-      const modelPolicyId = `model_policy_${randomUUID()}`;
-      const toolName = `tool.${randomUUID()}`;
+    const routeId = `route_${randomUUID()}`;
+    const promptId = `prompt_${randomUUID()}`;
+    const agentId = `agent_${randomUUID()}`;
+    const modelPolicyId = `model_policy_${randomUUID()}`;
+    const toolName = `tool.${randomUUID()}`;
 
     try {
       const flows = new FlowDefinitionRepository(db);
@@ -40,7 +47,11 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
       const agents = new AgentSpecRepository(db);
       const prompts = new PromptDefinitionRepository(db);
       const validation = new RegistryValidationService({ flows, routes, tools, agents, prompts });
-      const releaseService = new RegistryReleaseService(db, { flows, routes, tools, agents, prompts }, validation);
+      const releaseService = new RegistryReleaseService(
+        db,
+        { flows, routes, tools, agents, prompts },
+        validation,
+      );
 
       const prompt: PromptDefinition = {
         prompt_id: promptId,
@@ -66,14 +77,16 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
         version: 1,
         status: 'published',
         protocol: 'dar_generate',
-        targets: [{
-          target_id: `${modelPolicyId}_primary`,
-          gateway_profile: 'local-test',
-          model_id: 'mock',
-          priority: 0,
-          enabled: true,
-          capabilities: ['text', 'tools', 'usage'],
-        }],
+        targets: [
+          {
+            target_id: `${modelPolicyId}_primary`,
+            gateway_profile: 'local-test',
+            model_id: 'mock',
+            priority: 0,
+            enabled: true,
+            capabilities: ['text', 'tools', 'usage'],
+          },
+        ],
         retry_policy: {
           max_attempts_per_target: 1,
           retryable_status_codes: [429, 500, 502, 503, 504],
@@ -94,7 +107,8 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
           temperature: 0,
           top_p: 1,
           max_output_tokens: 1000,
-          tool_choice_mode: 'auto',
+          initial_tool_choice_mode: 'auto',
+          after_tool_result_tool_choice_mode: 'auto',
           response_format: 'text',
           allow_parallel_tool_calls: false,
         },
@@ -117,8 +131,16 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
         status: 'published',
       };
 
-      await upsertPromptDefinition(db, prompt, { tenantId, status: 'published', createdBy: operatorId });
-      await new ToolManifestRepository(db).upsert(tool, { tenantId, status: 'published', createdBy: operatorId });
+      await upsertPromptDefinition(db, prompt, {
+        tenantId,
+        status: 'published',
+        createdBy: operatorId,
+      });
+      await new ToolManifestRepository(db).upsert(tool, {
+        tenantId,
+        status: 'published',
+        createdBy: operatorId,
+      });
       const modelPolicies = new ModelPolicyRepository(db);
       await modelPolicies.createDraft(modelPolicy, { tenantId, operatorId });
       await modelPolicies.publish(modelPolicy.model_policy_id, modelPolicy.version, {
@@ -134,15 +156,27 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
         status: 'draft',
         runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
         steps: [
-          { id: 'tool', type: 'tool', tool: toolName, tool_version: '1.0.0', input: { query: '${input.text}' } },
+          {
+            id: 'tool',
+            type: 'tool',
+            tool: toolName,
+            tool_version: '1.0.0',
+            input: { query: '${input.text}' },
+          },
           { id: 'agent', type: 'agent', agent_id: agentId, input: { agent_version: 1 } },
         ],
       };
       await flows.createDraft(flowV1, { tenantId, operatorId });
-      const release = await releaseService.publish('flow', flowId, 1, { tenantId, operatorId, releaseNote: 'publish v1' });
+      const release = await releaseService.publish('flow', flowId, 1, {
+        tenantId,
+        operatorId,
+        releaseNote: 'publish v1',
+      });
       expect(release.action).toBe('publish');
       expect((await flows.getByIdAndVersion(flowId, 1, { tenantId }))?.status).toBe('published');
-      const plan = await new FlowExecutionPlanRepository(db).getLatestForFlow(flowId, 1, { tenantId });
+      const plan = await new FlowExecutionPlanRepository(db).getLatestForFlow(flowId, 1, {
+        tenantId,
+      });
       expect(plan).toMatchObject({
         flow_id: flowId,
         flow_version: 1,
@@ -151,10 +185,20 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
       });
 
       await flows.cloneVersion(flowId, 1, { tenantId, operatorId });
-      await releaseService.publish('flow', flowId, 2, { tenantId, operatorId, releaseNote: 'publish v2' });
+      await releaseService.publish('flow', flowId, 2, {
+        tenantId,
+        operatorId,
+        releaseNote: 'publish v2',
+      });
       const beforeRollbackSpec = (await flows.getByIdAndVersion(flowId, 1, { tenantId }))?.spec;
-      await releaseService.rollback('flow', flowId, 1, { tenantId, operatorId, releaseNote: 'rollback v1' });
-      expect((await flows.getByIdAndVersion(flowId, 1, { tenantId }))?.spec).toEqual(beforeRollbackSpec);
+      await releaseService.rollback('flow', flowId, 1, {
+        tenantId,
+        operatorId,
+        releaseNote: 'rollback v1',
+      });
+      expect((await flows.getByIdAndVersion(flowId, 1, { tenantId }))?.spec).toEqual(
+        beforeRollbackSpec,
+      );
       expect((await flows.getByIdAndVersion(flowId, 2, { tenantId }))?.status).toBe('deprecated');
       expect(await flows.listReleaseHistory(flowId, { tenantId })).toHaveLength(3);
 
@@ -163,21 +207,40 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
         flow_id: flowId,
         version: 1,
         status: 'draft',
-        route: { keywords: ['joint-release'], examples: [], negative_examples: [], supported_channels: [], role_constraints: [], priority: 50, confidence_threshold: 0.7, ambiguous_threshold: 0.5 },
+        route: {
+          keywords: ['joint-release'],
+          examples: [],
+          negative_examples: [],
+          supported_channels: [],
+          role_constraints: [],
+          priority: 50,
+          confidence_threshold: 0.7,
+          ambiguous_threshold: 0.5,
+        },
       };
       await routes.createDraft(flowRoute, { tenantId, operatorId });
-      await releaseService.publishFlowWithRoute(flowId, 1, routeId, 1, { tenantId, operatorId, releaseNote: 'joint publish' });
+      await releaseService.publishFlowWithRoute(flowId, 1, routeId, 1, {
+        tenantId,
+        operatorId,
+        releaseNote: 'joint publish',
+      });
       expect((await routes.getByIdAndVersion(routeId, 1, { tenantId }))?.status).toBe('published');
 
       await flows.cloneVersion(flowId, 1, { tenantId, operatorId });
-      await releaseService.publish('flow', flowId, 3, { tenantId, operatorId, releaseNote: 'publish fallback v3' });
+      await releaseService.publish('flow', flowId, 3, {
+        tenantId,
+        operatorId,
+        releaseNote: 'publish fallback v3',
+      });
       await releaseService.setGray('flow', flowId, 1, {
         tenantId,
         operatorId,
         tenantAllowlist: [tenantId],
         userAllowlist: ['user_1'],
       });
-      expect((await flows.selectVersionForRequest(flowId, { tenantId, userId: 'user_1' }))?.status).toBe('gray');
+      expect(
+        (await flows.selectVersionForRequest(flowId, { tenantId, userId: 'user_1' }))?.status,
+      ).toBe('gray');
     } finally {
       await closeDb(db);
     }

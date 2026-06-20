@@ -45,6 +45,7 @@ export const runtimeConfigSchema = z.object({
   MODEL_GATEWAY_BASE_URL: urlSchema('http://localhost:4100'),
   MODEL_GATEWAY_API_KEY: stringSchema('dev-only-placeholder'),
   MODEL_GATEWAY_MODEL: stringSchema('dar-local-model'),
+  MODEL_GATEWAY_PROFILE_ID: stringSchema('local-dev'),
   MODEL_GATEWAY_MODE: z.preprocess(
     emptyToUndefined,
     z.enum(['disabled', 'mock', 'openai_compatible']).default('disabled'),
@@ -54,9 +55,16 @@ export const runtimeConfigSchema = z.object({
     z.enum(['dar_generate', 'openai_chat_completions']).default('dar_generate'),
   ),
   MODEL_GATEWAY_TIMEOUT_MS: positiveIntSchema(30_000),
-  MODEL_GATEWAY_MAX_RETRIES: z.preprocess(emptyToUndefined, z.coerce.number().int().min(0).max(5).default(1)),
+  MODEL_GATEWAY_MAX_RETRIES: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().min(0).max(5).default(1),
+  ),
   MODEL_GATEWAY_MAX_RESPONSE_BYTES: positiveIntSchema(1_000_000),
-  MODEL_GATEWAY_ALLOW_INSECURE_HTTP: z.preprocess(emptyToUndefined, z.coerce.boolean().default(true)),
+  MODEL_CALL_LEDGER_MAX_RESPONSE_BYTES: positiveIntSchema(1_048_576),
+  MODEL_GATEWAY_ALLOW_INSECURE_HTTP: z.preprocess(
+    emptyToUndefined,
+    z.coerce.boolean().default(true),
+  ),
   MODEL_GATEWAY_IDEMPOTENCY_HEADER: stringSchema('Idempotency-Key'),
   MODEL_GATEWAY_USER_AGENT: stringSchema('durable-agent-runtime-lite/runtime-worker'),
   PI_AGENT_MODE: z.preprocess(
@@ -89,8 +97,14 @@ export const runtimeConfigSchema = z.object({
     emptyToUndefined,
     z.enum(['mock', 'temporal']).default('mock'),
   ),
-  RUNTIME_API_ROUTE_SOURCE: z.preprocess(emptyToUndefined, z.enum(['db', 'memory']).default('memory')),
-  TOOL_GATEWAY_REGISTRY_SOURCE: z.preprocess(emptyToUndefined, z.enum(['db', 'memory']).default('memory')),
+  RUNTIME_API_ROUTE_SOURCE: z.preprocess(
+    emptyToUndefined,
+    z.enum(['db', 'memory']).default('memory'),
+  ),
+  TOOL_GATEWAY_REGISTRY_SOURCE: z.preprocess(
+    emptyToUndefined,
+    z.enum(['db', 'memory']).default('memory'),
+  ),
   TOOL_GATEWAY_AUTH_MODE: z.preprocess(
     emptyToUndefined,
     z.enum(['service_token', 'disabled']).default('disabled'),
@@ -99,11 +113,20 @@ export const runtimeConfigSchema = z.object({
     emptyToUndefined,
     z.enum(['required', 'optional']).default('optional'),
   ),
-  TENANT_POLICY_CACHE_TTL_MS: z.preprocess(emptyToUndefined, z.coerce.number().int().nonnegative().default(5_000)),
-  TENANT_ADMISSION_RECONCILE_ENABLED: z.preprocess(emptyToUndefined, z.coerce.boolean().default(false)),
+  TENANT_POLICY_CACHE_TTL_MS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().nonnegative().default(5_000),
+  ),
+  TENANT_ADMISSION_RECONCILE_ENABLED: z.preprocess(
+    emptyToUndefined,
+    z.coerce.boolean().default(false),
+  ),
   TENANT_ADMISSION_STALE_AFTER_MS: positiveIntSchema(300_000),
   TENANT_ADMISSION_MAX_RECONCILE_BATCH: positiveIntSchema(50),
-  TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED: z.preprocess(emptyToUndefined, z.coerce.boolean().default(false)),
+  TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED: z.preprocess(
+    emptyToUndefined,
+    z.coerce.boolean().default(false),
+  ),
   TOOL_GATEWAY_RUNTIME_WORKER_TOKEN: optionalStringSchema,
   TOOL_GATEWAY_CONTROL_PLANE_TOKEN: optionalStringSchema,
   RUNTIME_WORKER_TOOL_GATEWAY_TOKEN: optionalStringSchema,
@@ -112,10 +135,7 @@ export const runtimeConfigSchema = z.object({
     emptyToUndefined,
     z.enum(['header', 'disabled']).default('header'),
   ),
-  CONTROL_PLANE_SWAGGER_ENABLED: z.preprocess(
-    emptyToUndefined,
-    z.coerce.boolean().default(true),
-  ),
+  CONTROL_PLANE_SWAGGER_ENABLED: z.preprocess(emptyToUndefined, z.coerce.boolean().default(true)),
 });
 
 export type AppName = z.infer<typeof appNameSchema>;

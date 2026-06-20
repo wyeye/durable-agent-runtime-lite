@@ -100,7 +100,8 @@ function resolvedModelPolicyFixture(hash: string, policyId = 'test-model-policy'
       temperature: 0,
       top_p: 1,
       max_output_tokens: 500,
-      tool_choice_mode: 'auto',
+      initial_tool_choice_mode: 'auto',
+      after_tool_result_tool_choice_mode: 'auto',
       response_format: 'text',
       allow_parallel_tool_calls: false,
     },
@@ -111,153 +112,199 @@ describe('contracts schemas', () => {
   it('validates registry lifecycle statuses and transitions', () => {
     expect(validateSpecStatusTransition({ from: 'draft', to: 'validated' })).toEqual({ ok: true });
     expect(validateSpecStatusTransition({ from: 'validated', to: 'draft' })).toEqual({ ok: true });
-    expect(validateSpecStatusTransition({ from: 'validated', to: 'published' })).toEqual({ ok: true });
+    expect(validateSpecStatusTransition({ from: 'validated', to: 'published' })).toEqual({
+      ok: true,
+    });
     expect(validateSpecStatusTransition({ from: 'published', to: 'gray' })).toEqual({ ok: true });
     expect(validateSpecStatusTransition({ from: 'gray', to: 'published' })).toEqual({ ok: true });
-    expect(validateSpecStatusTransition({ from: 'published', to: 'deprecated' })).toEqual({ ok: true });
+    expect(validateSpecStatusTransition({ from: 'published', to: 'deprecated' })).toEqual({
+      ok: true,
+    });
     expect(validateSpecStatusTransition({ from: 'gray', to: 'deprecated' })).toEqual({ ok: true });
     expect(validateSpecStatusTransition({ from: 'published', to: 'draft' })).toMatchObject({
       ok: false,
       error: { code: 'INVALID_SPEC_STATUS_TRANSITION' },
     });
-    expect(() => flowSpecSchema.parse({
-      flow_id: 'archived_flow',
-      version: 1,
-      status: 'archived',
-      runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
-      steps: [{ id: 'one', type: 'activity', activity: 'noop' }],
-    })).toThrow();
+    expect(() =>
+      flowSpecSchema.parse({
+        flow_id: 'archived_flow',
+        version: 1,
+        status: 'archived',
+        runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
+        steps: [{ id: 'one', type: 'activity', activity: 'noop' }],
+      }),
+    ).toThrow();
   });
 
   it('validates core MVP specs and runtime DTOs', () => {
-    expect(flowSpecSchema.parse({
-      flow_id: 'sample_flow',
-      version: 1,
-      runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
-      steps: [{ id: 'normalize', type: 'activity', activity: 'input.normalize' }],
-    }).flow_id).toBe('sample_flow');
+    expect(
+      flowSpecSchema.parse({
+        flow_id: 'sample_flow',
+        version: 1,
+        runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
+        steps: [{ id: 'normalize', type: 'activity', activity: 'input.normalize' }],
+      }).flow_id,
+    ).toBe('sample_flow');
 
-    expect(routeSpecSchema.parse({
-      flow_id: 'sample_flow',
-      version: 1,
-      route: { keywords: ['mvp'] },
-    }).route.priority).toBe(50);
+    expect(
+      routeSpecSchema.parse({
+        flow_id: 'sample_flow',
+        version: 1,
+        route: { keywords: ['mvp'] },
+      }).route.priority,
+    ).toBe(50);
 
-    expect(toolManifestSchema.parse({
-      tool_name: 'knowledge.search',
-      version: '1.0.0',
-      risk_level: 'L1',
-      side_effect: false,
-      adapter: { type: 'mock' },
-    }).tool_name).toBe('knowledge.search');
+    expect(
+      toolManifestSchema.parse({
+        tool_name: 'knowledge.search',
+        version: '1.0.0',
+        risk_level: 'L1',
+        side_effect: false,
+        adapter: { type: 'mock' },
+      }).tool_name,
+    ).toBe('knowledge.search');
 
-    expect(promptDefinitionSchema.parse({
-      prompt_id: 'sample_prompt',
-      version: 1,
-      name: 'Sample',
-      content: 'hello',
-    }).variables).toEqual([]);
+    expect(
+      promptDefinitionSchema.parse({
+        prompt_id: 'sample_prompt',
+        version: 1,
+        name: 'Sample',
+        content: 'hello',
+      }).variables,
+    ).toEqual([]);
 
-    expect(runtimeContextSchema.parse({
-      request_id: 'req_1',
-      tenant: { tenant_id: 'tenant_1' },
-      user: { user_id: 'user_1' },
-    }).user.roles).toEqual([]);
+    expect(
+      runtimeContextSchema.parse({
+        request_id: 'req_1',
+        tenant: { tenant_id: 'tenant_1' },
+        user: { user_id: 'user_1' },
+      }).user.roles,
+    ).toEqual([]);
 
-    expect(workflowStartRequestSchema.parse({
-      tenant_id: 'tenant_1',
-      user_id: 'user_1',
-      task_run_id: 'task_1',
-      workflow_type: 'GenericAgentWorkflow',
-      workflow_id: 'wf_1',
-      agent_id: 'sample_agent',
-      input: { text: 'hello' },
-      request_id: 'req_1',
-    }).workflow_type).toBe('GenericAgentWorkflow');
+    expect(
+      workflowStartRequestSchema.parse({
+        tenant_id: 'tenant_1',
+        user_id: 'user_1',
+        task_run_id: 'task_1',
+        workflow_type: 'GenericAgentWorkflow',
+        workflow_id: 'wf_1',
+        agent_id: 'sample_agent',
+        input: { text: 'hello' },
+        request_id: 'req_1',
+      }).workflow_type,
+    ).toBe('GenericAgentWorkflow');
 
-    expect(agentRunRequestSchema.parse({
-      tenant_id: 'tenant_1',
-      user_id: 'user_1',
-      task_run_id: 'task_1',
-      agent_id: 'sample_agent',
-      allowed_tools: [],
-    }).allowed_tools).toEqual([]);
+    expect(
+      agentRunRequestSchema.parse({
+        tenant_id: 'tenant_1',
+        user_id: 'user_1',
+        task_run_id: 'task_1',
+        agent_id: 'sample_agent',
+        allowed_tools: [],
+      }).allowed_tools,
+    ).toEqual([]);
 
-    expect(agentRunResultSchema.parse({ status: 'final', final_answer: 'ok' }).status).toBe('final');
+    expect(agentRunResultSchema.parse({ status: 'final', final_answer: 'ok' }).status).toBe(
+      'final',
+    );
   });
 
   it('validates checked-in MVP examples', async () => {
-    expect(flowSpecSchema.parse(await readJson('examples/flows/sample-flow.json')).flow_id).toBe('sample_flow');
-    expect(routeSpecSchema.parse(await readJson('examples/routes/sample-route.json')).flow_id).toBe('sample_flow');
-    expect(agentRunResultSchema.parse({ status: 'final', final_answer: 'example' }).status).toBe('final');
-    expect(toolManifestSchema.parse(await readJson('examples/tools/knowledge-search-tool.json')).tool_name).toBe('knowledge.search');
-    expect(toolManifestSchema.parse(await readJson('examples/tools/record-write-mock-tool.json')).risk_level).toBe('L3');
+    expect(flowSpecSchema.parse(await readJson('examples/flows/sample-flow.json')).flow_id).toBe(
+      'sample_flow',
+    );
+    expect(routeSpecSchema.parse(await readJson('examples/routes/sample-route.json')).flow_id).toBe(
+      'sample_flow',
+    );
+    expect(agentRunResultSchema.parse({ status: 'final', final_answer: 'example' }).status).toBe(
+      'final',
+    );
+    expect(
+      toolManifestSchema.parse(await readJson('examples/tools/knowledge-search-tool.json'))
+        .tool_name,
+    ).toBe('knowledge.search');
+    expect(
+      toolManifestSchema.parse(await readJson('examples/tools/record-write-mock-tool.json'))
+        .risk_level,
+    ).toBe('L3');
   });
 
   it('validates L3 tool governance DTOs', () => {
-    expect(policyEvaluationResultSchema.parse({
-      decision: 'require_human_confirm',
-      risk_level: 'L3',
-      reason: 'side_effect_requires_human_confirm',
-      requires_human_confirm: true,
-    }).decision).toBe('require_human_confirm');
-
-    expect(toolPreviewRequestSchema.parse({
-      tool_name: 'record.write.mock',
-      tool_version: '1.0.0',
-      tenant_id: 'tenant_1',
-      user_context: { user_id: 'user_1' },
-      task_context: { task_run_id: 'task_1', workflow_id: 'wf_1' },
-      arguments: { record: { title: 'demo' } },
-      idempotency_key: 'task_1:record.write.mock:preview',
-    }).tool_name).toBe('record.write.mock');
-
-    expect(toolPreviewResponseSchema.parse({
-      tool_call_id: 'tool_call_1',
-      tool_name: 'record.write.mock',
-      tool_version: '1.0.0',
-      mode: 'preview',
-      status: 'pending_confirmation',
-      policy: {
+    expect(
+      policyEvaluationResultSchema.parse({
         decision: 'require_human_confirm',
         risk_level: 'L3',
         reason: 'side_effect_requires_human_confirm',
         requires_human_confirm: true,
-      },
-      preview: { planned: true },
-      audit_event_id: 'audit_1',
-      idempotency_key: 'task_1:record.write.mock:preview',
-    }).status).toBe('pending_confirmation');
+      }).decision,
+    ).toBe('require_human_confirm');
 
-    expect(toolCommitRequestSchema.parse({
-      tool_call_id: 'tool_call_1',
-      tool_name: 'record.write.mock',
-      tool_version: '1.0.0',
-      tenant_id: 'tenant_1',
-      user_context: { user_id: 'user_1' },
-      task_context: { task_run_id: 'task_1' },
-      arguments: { record: { title: 'demo' } },
-      idempotency_key: 'task_1:record.write.mock:commit',
-    }).tool_version).toBe('1.0.0');
+    expect(
+      toolPreviewRequestSchema.parse({
+        tool_name: 'record.write.mock',
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_1', workflow_id: 'wf_1' },
+        arguments: { record: { title: 'demo' } },
+        idempotency_key: 'task_1:record.write.mock:preview',
+      }).tool_name,
+    ).toBe('record.write.mock');
 
-    expect(() => toolCommitRequestSchema.parse({
-      tool_call_id: 'tool_call_1',
-      tool_name: 'record.write.mock',
-      tenant_id: 'tenant_1',
-      arguments: { record: { title: 'demo' } },
-      idempotency_key: 'task_1:record.write.mock:commit',
-    })).toThrow();
+    expect(
+      toolPreviewResponseSchema.parse({
+        tool_call_id: 'tool_call_1',
+        tool_name: 'record.write.mock',
+        tool_version: '1.0.0',
+        mode: 'preview',
+        status: 'pending_confirmation',
+        policy: {
+          decision: 'require_human_confirm',
+          risk_level: 'L3',
+          reason: 'side_effect_requires_human_confirm',
+          requires_human_confirm: true,
+        },
+        preview: { planned: true },
+        audit_event_id: 'audit_1',
+        idempotency_key: 'task_1:record.write.mock:preview',
+      }).status,
+    ).toBe('pending_confirmation');
 
-    expect(toolCommitResponseSchema.parse({
-      tool_call_id: 'tool_call_1',
-      tool_name: 'record.write.mock',
-      tool_version: '1.0.0',
-      mode: 'commit',
-      status: 'committed',
-      result: { written: true },
-      audit_event_id: 'audit_2',
-      idempotency_key: 'task_1:record.write.mock:commit',
-    }).status).toBe('committed');
+    expect(
+      toolCommitRequestSchema.parse({
+        tool_call_id: 'tool_call_1',
+        tool_name: 'record.write.mock',
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_1' },
+        arguments: { record: { title: 'demo' } },
+        idempotency_key: 'task_1:record.write.mock:commit',
+      }).tool_version,
+    ).toBe('1.0.0');
+
+    expect(() =>
+      toolCommitRequestSchema.parse({
+        tool_call_id: 'tool_call_1',
+        tool_name: 'record.write.mock',
+        tenant_id: 'tenant_1',
+        arguments: { record: { title: 'demo' } },
+        idempotency_key: 'task_1:record.write.mock:commit',
+      }),
+    ).toThrow();
+
+    expect(
+      toolCommitResponseSchema.parse({
+        tool_call_id: 'tool_call_1',
+        tool_name: 'record.write.mock',
+        tool_version: '1.0.0',
+        mode: 'commit',
+        status: 'committed',
+        result: { written: true },
+        audit_event_id: 'audit_2',
+        idempotency_key: 'task_1:record.write.mock:commit',
+      }).status,
+    ).toBe('committed');
 
     const humanTask = {
       human_task_id: 'human_1',
@@ -273,40 +320,55 @@ describe('contracts schemas', () => {
       decision_reason: 'looks good',
     };
 
-    expect(humanTaskCreateRequestSchema.parse({
-      tenant_id: 'tenant_1',
-      user_id: 'user_1',
-      task_run_id: 'task_1',
-      workflow_id: 'wf_1',
-      tool_call_id: 'tool_call_1',
-      payload: { preview: true },
-    }).candidate_groups).toEqual([]);
+    expect(
+      humanTaskCreateRequestSchema.parse({
+        tenant_id: 'tenant_1',
+        user_id: 'user_1',
+        task_run_id: 'task_1',
+        workflow_id: 'wf_1',
+        tool_call_id: 'tool_call_1',
+        payload: { preview: true },
+      }).candidate_groups,
+    ).toEqual([]);
     expect(humanTaskListRequestSchema.parse({ tenant_id: 'tenant_1', user_id: 'user_1' })).toEqual({
       tenant_id: 'tenant_1',
       user_id: 'user_1',
       page: 1,
       page_size: 20,
     });
-    expect(humanTaskGetRequestSchema.parse({ tenant_id: 'tenant_1', user_id: 'user_1' }).tenant_id).toBe('tenant_1');
-    expect(humanTaskDecisionRequestSchema.parse({ tenant_id: 'tenant_1', user_id: 'approver_1' }).payload).toEqual({});
-    expect(humanTaskDecisionResponseSchema.parse({ human_task: humanTask }).human_task.status).toBe('approved');
-    expect(humanTaskListResponseSchema.parse({ human_tasks: [humanTask] }).human_tasks).toHaveLength(1);
-    expect(humanTaskGetResponseSchema.parse({ human_task: humanTask }).human_task.human_task_id).toBe('human_1');
+    expect(
+      humanTaskGetRequestSchema.parse({ tenant_id: 'tenant_1', user_id: 'user_1' }).tenant_id,
+    ).toBe('tenant_1');
+    expect(
+      humanTaskDecisionRequestSchema.parse({ tenant_id: 'tenant_1', user_id: 'approver_1' })
+        .payload,
+    ).toEqual({});
+    expect(humanTaskDecisionResponseSchema.parse({ human_task: humanTask }).human_task.status).toBe(
+      'approved',
+    );
+    expect(
+      humanTaskListResponseSchema.parse({ human_tasks: [humanTask] }).human_tasks,
+    ).toHaveLength(1);
+    expect(
+      humanTaskGetResponseSchema.parse({ human_task: humanTask }).human_task.human_task_id,
+    ).toBe('human_1');
 
-    expect(toolCallLogSchema.parse({
-      tool_call_id: 'tool_call_1',
-      task_run_id: 'task_1',
-      workflow_id: 'wf_1',
-      tenant_id: 'tenant_1',
-      user_id: 'user_1',
-      tool_name: 'record.write.mock',
-      tool_version: '1.0.0',
-      risk_level: 'L3',
-      policy_decision: 'require_human_confirm',
-      status: 'pending_confirmation',
-      mode: 'preview',
-      idempotency_key: 'task_1:record.write.mock:preview',
-    }).risk_level).toBe('L3');
+    expect(
+      toolCallLogSchema.parse({
+        tool_call_id: 'tool_call_1',
+        task_run_id: 'task_1',
+        workflow_id: 'wf_1',
+        tenant_id: 'tenant_1',
+        user_id: 'user_1',
+        tool_name: 'record.write.mock',
+        tool_version: '1.0.0',
+        risk_level: 'L3',
+        policy_decision: 'require_human_confirm',
+        status: 'pending_confirmation',
+        mode: 'preview',
+        idempotency_key: 'task_1:record.write.mock:preview',
+      }).risk_level,
+    ).toBe('L3');
   });
 
   it('validates immutable FlowExecutionPlan schema', () => {
@@ -369,7 +431,12 @@ describe('contracts schemas', () => {
 
   it('validates Pi agent runtime DTOs without hidden reasoning fields', () => {
     const hash = 'b'.repeat(64);
-    const budget = agentBudgetSchema.parse({ max_segments: 3, max_model_turns: 6, max_tool_calls: 2, max_total_tokens: 1000 });
+    const budget = agentBudgetSchema.parse({
+      max_segments: 3,
+      max_model_turns: 6,
+      max_tool_calls: 2,
+      max_total_tokens: 1000,
+    });
     const resolvedModelPolicy = resolvedModelPolicyFixture(hash, 'readonly-policy');
     const allowedTool = {
       tool_name: 'knowledge.search',
@@ -377,7 +444,11 @@ describe('contracts schemas', () => {
       tool_sha256: hash,
       description: 'Search knowledge',
       risk_level: 'L1',
-      input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+      input_schema: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+      },
     };
     const plan = resolvedAgentPlanSchema.parse({
       agent_id: 'agent_1',
@@ -418,41 +489,12 @@ describe('contracts schemas', () => {
       generated_at: '2026-01-01T00:00:00.000Z',
       execution_plan_hash: hash,
     });
-    expect(JSON.stringify(executionPlan)).not.toMatch(/api[_-]?key|authorization|chain_of_thought|hidden_reasoning|internal_reasoning/i);
+    expect(JSON.stringify(executionPlan)).not.toMatch(
+      /api[_-]?key|authorization|chain_of_thought|hidden_reasoning|internal_reasoning/i,
+    );
 
-    expect(proposedToolCallSchema.parse({
-      call_id: 'call_1',
-      tool_name: 'knowledge.search',
-      tool_version: '1.0.0',
-      tool_sha256: hash,
-      arguments: { query: 'durable runtime' },
-      risk_level: 'L1',
-      requires_confirmation: false,
-      source_order: 0,
-    }).arguments).toEqual({ query: 'durable runtime' });
-    expect(() => proposedToolCallSchema.parse({
-      call_id: 'call_1',
-      tool_name: 'knowledge.search',
-      tool_version: '1.0.0',
-      tool_sha256: hash,
-      arguments: 'not-object',
-      risk_level: 'L1',
-      source_order: 0,
-    })).toThrow();
-    expect(() => proposedToolCallSchema.parse({
-      call_id: 'call_1',
-      tool_name: 'knowledge.search',
-      tool_version: '1.0.0',
-      tool_sha256: hash,
-      arguments: {},
-      reason_summary: 'x'.repeat(2001),
-      risk_level: 'L1',
-      source_order: 0,
-    })).toThrow();
-
-    expect(piSegmentResultSchema.parse({
-      status: 'tool_requested',
-      proposed_tool_calls: [{
+    expect(
+      proposedToolCallSchema.parse({
         call_id: 'call_1',
         tool_name: 'knowledge.search',
         tool_version: '1.0.0',
@@ -461,59 +503,108 @@ describe('contracts schemas', () => {
         risk_level: 'L1',
         requires_confirmation: false,
         source_order: 0,
-      }],
-      context_snapshot_ref: {
-        snapshot_id: 'snapshot_1',
-        schema_version: 'pi-context/v1',
-        snapshot_hash: hash,
-        message_count: 3,
-        byte_size: 400,
-      },
-      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-      model_turn_count: 1,
-    }).status).toBe('tool_requested');
-
-    expect(agentRunRecordSchema.parse({
-      agent_run_id: 'agent_run_1',
-      tenant_id: 'tenant_1',
-      user_id: 'user_1',
-      task_run_id: 'task_1',
-      workflow_id: 'wf_1',
-      execution_plan_ref: executionPlan.execution_plan_ref,
-      execution_plan_hash: hash,
-      agent_id: 'agent_1',
-      agent_version: 1,
-      prompt_id: 'prompt_1',
-      prompt_version: 1,
-      model: 'deterministic:readonly_tool',
-      execution_mode: 'mediated_tool_call',
-      status: 'running',
-    }).current_segment_index).toBe(0);
-
-    expect(agentStepRecordSchema.parse({
-      agent_step_id: 'step_1',
-      agent_run_id: 'agent_run_1',
-      segment_index: 0,
-      stable_step_key: 'agent_run_1:0',
-      segment_status: 'waiting_tool',
-      decision_summary: 'Need a read-only lookup.',
-      proposed_tool_calls: [{
+      }).arguments,
+    ).toEqual({ query: 'durable runtime' });
+    expect(() =>
+      proposedToolCallSchema.parse({
         call_id: 'call_1',
         tool_name: 'knowledge.search',
         tool_version: '1.0.0',
         tool_sha256: hash,
-        arguments: { query: 'durable runtime' },
+        arguments: 'not-object',
         risk_level: 'L1',
         source_order: 0,
-      }],
-    }).segment_status).toBe('waiting_tool');
+      }),
+    ).toThrow();
+    expect(() =>
+      proposedToolCallSchema.parse({
+        call_id: 'call_1',
+        tool_name: 'knowledge.search',
+        tool_version: '1.0.0',
+        tool_sha256: hash,
+        arguments: {},
+        reason_summary: 'x'.repeat(2001),
+        risk_level: 'L1',
+        source_order: 0,
+      }),
+    ).toThrow();
 
-    expect(humanTaskRespondRequestSchema.parse({
-      tenant_id: 'tenant_1',
-      user_id: 'user_1',
-      response_idempotency_key: 'response_1',
-      response: { answer: 'yes' },
-    }).response).toEqual({ answer: 'yes' });
+    expect(
+      piSegmentResultSchema.parse({
+        status: 'tool_requested',
+        proposed_tool_calls: [
+          {
+            call_id: 'call_1',
+            tool_name: 'knowledge.search',
+            tool_version: '1.0.0',
+            tool_sha256: hash,
+            arguments: { query: 'durable runtime' },
+            risk_level: 'L1',
+            requires_confirmation: false,
+            source_order: 0,
+          },
+        ],
+        context_snapshot_ref: {
+          snapshot_id: 'snapshot_1',
+          schema_version: 'pi-context/v1',
+          snapshot_hash: hash,
+          message_count: 3,
+          byte_size: 400,
+        },
+        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+        model_turn_count: 1,
+      }).status,
+    ).toBe('tool_requested');
+
+    expect(
+      agentRunRecordSchema.parse({
+        agent_run_id: 'agent_run_1',
+        tenant_id: 'tenant_1',
+        user_id: 'user_1',
+        task_run_id: 'task_1',
+        workflow_id: 'wf_1',
+        execution_plan_ref: executionPlan.execution_plan_ref,
+        execution_plan_hash: hash,
+        agent_id: 'agent_1',
+        agent_version: 1,
+        prompt_id: 'prompt_1',
+        prompt_version: 1,
+        model: 'deterministic:readonly_tool',
+        execution_mode: 'mediated_tool_call',
+        status: 'running',
+      }).current_segment_index,
+    ).toBe(0);
+
+    expect(
+      agentStepRecordSchema.parse({
+        agent_step_id: 'step_1',
+        agent_run_id: 'agent_run_1',
+        segment_index: 0,
+        stable_step_key: 'agent_run_1:0',
+        segment_status: 'waiting_tool',
+        decision_summary: 'Need a read-only lookup.',
+        proposed_tool_calls: [
+          {
+            call_id: 'call_1',
+            tool_name: 'knowledge.search',
+            tool_version: '1.0.0',
+            tool_sha256: hash,
+            arguments: { query: 'durable runtime' },
+            risk_level: 'L1',
+            source_order: 0,
+          },
+        ],
+      }).segment_status,
+    ).toBe('waiting_tool');
+
+    expect(
+      humanTaskRespondRequestSchema.parse({
+        tenant_id: 'tenant_1',
+        user_id: 'user_1',
+        response_idempotency_key: 'response_1',
+        response: { answer: 'yes' },
+      }).response,
+    ).toEqual({ answer: 'yes' });
   });
 
   it('validates tenant runtime policy DTOs', () => {
@@ -522,74 +613,94 @@ describe('contracts schemas', () => {
       tenant_id: 'tenant_1',
       version: 1,
       status: 'draft',
-      allowed_tools: [{
-        tool_name: 'knowledge.search',
-        versions: ['1.0.0'],
-        allowed_operations: ['invoke'],
-        max_risk_level: 'L1',
-      }],
-      denied_tools: [{
-        tool_name: 'record.write.mock',
-        allowed_operations: ['preview', 'commit'],
-        reason_code: 'DENY_WRITE',
-      }],
+      allowed_tools: [
+        {
+          tool_name: 'knowledge.search',
+          versions: ['1.0.0'],
+          allowed_operations: ['invoke'],
+          max_risk_level: 'L1',
+        },
+      ],
+      denied_tools: [
+        {
+          tool_name: 'record.write.mock',
+          allowed_operations: ['preview', 'commit'],
+          reason_code: 'DENY_WRITE',
+        },
+      ],
       allowed_models: [{ model_id: 'deterministic:readonly_tool' }],
       denied_models: [{ model_id: 'deterministic:l3_tool' }],
-      allowed_handoffs: [{ flow_id: 'sample_flow', versions: [1], execution_plan_refs: ['db://flow-execution-plan/plan_1'] }],
+      allowed_handoffs: [
+        {
+          flow_id: 'sample_flow',
+          versions: [1],
+          execution_plan_refs: ['db://flow-execution-plan/plan_1'],
+        },
+      ],
       denied_handoffs: [],
       budget_cap: { max_segments: 2, max_tool_calls: 1, max_total_tokens: 1000 },
       max_concurrent_agent_runs: 1,
     });
     expect(policy.allowed_tools[0]?.allowed_operations).toEqual(['invoke']);
-    expect(() => tenantRuntimePolicySchema.parse({ ...policy, max_concurrent_agent_runs: 0 })).toThrow();
-    expect(() => tenantRuntimePolicySchema.parse({ ...policy, budget_cap: { max_segments: 0 } })).toThrow();
+    expect(() =>
+      tenantRuntimePolicySchema.parse({ ...policy, max_concurrent_agent_runs: 0 }),
+    ).toThrow();
+    expect(() =>
+      tenantRuntimePolicySchema.parse({ ...policy, budget_cap: { max_segments: 0 } }),
+    ).toThrow();
 
-    expect(tenantRuntimePolicySnapshotSchema.parse({
-	      snapshot_id: 'snapshot_1',
-	      snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
-	      tenant_id: 'tenant_1',
-	      root_snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
-	      derivation_type: 'root',
-	      lineage_depth: 0,
-	      source_policy_version: 1,
-      source_policy_hash: hash,
-      execution_plan_ref: 'db://agent-execution-plan/agent_plan_1',
-      execution_plan_hash: hash,
-      execution_plan_type: 'agent',
-      resolved_allowed_tools: policy.allowed_tools,
-      resolved_denied_tools: policy.denied_tools,
-      resolved_allowed_models: policy.allowed_models,
-      resolved_allowed_handoffs: policy.allowed_handoffs,
-      resolved_budget: {
-        max_segments: 2,
-        max_model_turns: 2,
-        max_tool_calls: 1,
-        max_total_tokens: 1000,
-        max_duration_ms: 300000,
-        max_handoffs: 1,
-        max_context_bytes: 262144,
-      },
-      max_concurrent_agent_runs: 1,
-      snapshot_hash: hash,
-      created_at: '2025-01-01T00:00:00.000Z',
-    }).tenant_id).toBe('tenant_1');
+    expect(
+      tenantRuntimePolicySnapshotSchema.parse({
+        snapshot_id: 'snapshot_1',
+        snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
+        tenant_id: 'tenant_1',
+        root_snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
+        derivation_type: 'root',
+        lineage_depth: 0,
+        source_policy_version: 1,
+        source_policy_hash: hash,
+        execution_plan_ref: 'db://agent-execution-plan/agent_plan_1',
+        execution_plan_hash: hash,
+        execution_plan_type: 'agent',
+        resolved_allowed_tools: policy.allowed_tools,
+        resolved_denied_tools: policy.denied_tools,
+        resolved_allowed_models: policy.allowed_models,
+        resolved_allowed_handoffs: policy.allowed_handoffs,
+        resolved_budget: {
+          max_segments: 2,
+          max_model_turns: 2,
+          max_tool_calls: 1,
+          max_total_tokens: 1000,
+          max_duration_ms: 300000,
+          max_handoffs: 1,
+          max_context_bytes: 262144,
+        },
+        max_concurrent_agent_runs: 1,
+        snapshot_hash: hash,
+        created_at: '2025-01-01T00:00:00.000Z',
+      }).tenant_id,
+    ).toBe('tenant_1');
 
-    expect(tenantPolicyDecisionSchema.parse({
-      decision: 'deny',
-      reason_code: 'TOOL_DENIED_BY_TENANT_POLICY',
-      reason_summary: 'denied',
-      matched_rules: [],
-    }).decision).toBe('deny');
+    expect(
+      tenantPolicyDecisionSchema.parse({
+        decision: 'deny',
+        reason_code: 'TOOL_DENIED_BY_TENANT_POLICY',
+        reason_summary: 'denied',
+        matched_rules: [],
+      }).decision,
+    ).toBe('deny');
 
-    expect(tenantAgentAdmissionSchema.parse({
-      admission_id: 'admission_1',
-      tenant_id: 'tenant_1',
-      task_run_id: 'task_1',
-      policy_snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
-      status: 'reserved',
-      acquired_at: '2025-01-01T00:00:00.000Z',
-      updated_at: '2025-01-01T00:00:00.000Z',
-    }).status).toBe('reserved');
+    expect(
+      tenantAgentAdmissionSchema.parse({
+        admission_id: 'admission_1',
+        tenant_id: 'tenant_1',
+        task_run_id: 'task_1',
+        policy_snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
+        status: 'reserved',
+        acquired_at: '2025-01-01T00:00:00.000Z',
+        updated_at: '2025-01-01T00:00:00.000Z',
+      }).status,
+    ).toBe('reserved');
   });
 
   it('validates control-plane management API DTOs', () => {
@@ -602,10 +713,12 @@ describe('contracts schemas', () => {
     expect(createDraftRequestSchema.parse({ spec: { prompt_id: 'prompt_1' } }).spec).toMatchObject({
       prompt_id: 'prompt_1',
     });
-    expect(updateDraftRequestSchema.parse({
-      spec: { prompt_id: 'prompt_1' },
-      expected_revision: 3,
-    }).expected_revision).toBe(3);
+    expect(
+      updateDraftRequestSchema.parse({
+        spec: { prompt_id: 'prompt_1' },
+        expected_revision: 3,
+      }).expected_revision,
+    ).toBe(3);
     expect(() => updateDraftRequestSchema.parse({ spec: {} })).toThrow();
     expect(cloneVersionRequestSchema.parse({ version: 2 }).version).toBe(2);
     expect(validateResourceRequestSchema.parse({})).toEqual({ include_warnings: true });
@@ -618,15 +731,21 @@ describe('contracts schemas', () => {
       dependency_graph: { nodes: [], edges: [] },
     };
     expect(validateResourceResponseSchema.parse({ validation }).validation.can_publish).toBe(true);
-    expect(publishResourceRequestSchema.parse({ release_note: 'publish v1' }).metadata_json).toEqual({});
-    expect(grayResourceRequestSchema.parse({
-      release_note: 'gray v2',
-      tenant_allowlist: ['tenant_1'],
-    }).tenant_allowlist).toEqual(['tenant_1']);
-    expect(rollbackResourceRequestSchema.parse({
-      target_version: 1,
-      release_note: 'rollback v1',
-    }).target_version).toBe(1);
+    expect(
+      publishResourceRequestSchema.parse({ release_note: 'publish v1' }).metadata_json,
+    ).toEqual({});
+    expect(
+      grayResourceRequestSchema.parse({
+        release_note: 'gray v2',
+        tenant_allowlist: ['tenant_1'],
+      }).tenant_allowlist,
+    ).toEqual(['tenant_1']);
+    expect(
+      rollbackResourceRequestSchema.parse({
+        target_version: 1,
+        release_note: 'rollback v1',
+      }).target_version,
+    ).toBe(1);
 
     const release = {
       release_id: 'release_1',
@@ -641,47 +760,61 @@ describe('contracts schemas', () => {
       metadata_json: {},
     };
     expect(capabilityReleaseResponseSchema.parse({ release }).release.action).toBe('publish');
-    expect(releaseListRequestSchema.parse({
-      resource_type: 'flow',
-      page: 1,
-      page_size: 20,
-    }).resource_type).toBe('flow');
+    expect(
+      releaseListRequestSchema.parse({
+        resource_type: 'flow',
+        page: 1,
+        page_size: 20,
+      }).resource_type,
+    ).toBe('flow');
   });
 
   it('validates operation query and standard API response DTOs', () => {
-    expect(operationAuditQuerySchema.parse({
-      tenant_id: 'tenant_1',
-      event_type: 'tool.invoke',
-      page_size: '5',
-    }).page_size).toBe(5);
-    expect(toolCallQuerySchema.parse({ tenant_id: 'tenant_1', status: 'committed' }).status).toBe('committed');
-    expect(taskRunQuerySchema.parse({ tenant_id: 'tenant_1', status: 'running' }).status).toBe('running');
-    expect(dashboardSummaryResponseSchema.parse({
-      registry_counts: {
-        flows_published: 1,
-        routes_published: 1,
-        tools_published: 1,
-        agents_published: 1,
-        prompts_published: 1,
-      },
-      pending_human_task_count: 0,
-      running_task_count: 0,
-      waiting_human_task_count: 0,
-      failed_task_count: 0,
-      recent_releases: [],
-      recent_failed_tasks: [],
-    }).registry_counts.flows_published).toBe(1);
-    expect(standardErrorResponseSchema.parse({
-      success: false,
-      data: null,
-      error: { code: 'FORBIDDEN', message: 'Permission denied' },
-      trace_id: 'req_1',
-    }).error.code).toBe('FORBIDDEN');
-    expect(standardApiResponseSchema.parse({
-      success: true,
-      data: { ok: true },
-      error: null,
-    }).success).toBe(true);
+    expect(
+      operationAuditQuerySchema.parse({
+        tenant_id: 'tenant_1',
+        event_type: 'tool.invoke',
+        page_size: '5',
+      }).page_size,
+    ).toBe(5);
+    expect(toolCallQuerySchema.parse({ tenant_id: 'tenant_1', status: 'committed' }).status).toBe(
+      'committed',
+    );
+    expect(taskRunQuerySchema.parse({ tenant_id: 'tenant_1', status: 'running' }).status).toBe(
+      'running',
+    );
+    expect(
+      dashboardSummaryResponseSchema.parse({
+        registry_counts: {
+          flows_published: 1,
+          routes_published: 1,
+          tools_published: 1,
+          agents_published: 1,
+          prompts_published: 1,
+        },
+        pending_human_task_count: 0,
+        running_task_count: 0,
+        waiting_human_task_count: 0,
+        failed_task_count: 0,
+        recent_releases: [],
+        recent_failed_tasks: [],
+      }).registry_counts.flows_published,
+    ).toBe(1);
+    expect(
+      standardErrorResponseSchema.parse({
+        success: false,
+        data: null,
+        error: { code: 'FORBIDDEN', message: 'Permission denied' },
+        trace_id: 'req_1',
+      }).error.code,
+    ).toBe('FORBIDDEN');
+    expect(
+      standardApiResponseSchema.parse({
+        success: true,
+        data: { ok: true },
+        error: null,
+      }).success,
+    ).toBe(true);
   });
 
   it('validates ModelPolicy, model call ledger, and exact execution-plan lock fields', () => {
@@ -725,20 +858,38 @@ describe('contracts schemas', () => {
         temperature: 0,
         top_p: 1,
         max_output_tokens: 500,
-        tool_choice_mode: 'required',
+        initial_tool_choice_mode: 'required',
+        after_tool_result_tool_choice_mode: 'none',
         response_format: 'text',
         allow_parallel_tool_calls: false,
       },
     });
     expect(policy.targets[0]?.capabilities).toContain('tools');
-    expect(() => modelPolicySchema.parse({
-      ...policy,
-      targets: [{ ...policy.targets[0], gateway_profile: 'https://provider.example/v1' }],
-    })).toThrow();
-    expect(() => modelPolicySchema.parse({
-      ...policy,
-      targets: [{ ...policy.targets[0], model_id: 'api_key:secret-value' }],
-    })).toThrow();
+    expect(() =>
+      modelPolicySchema.parse({
+        ...policy,
+        request_policy: {
+          temperature: 0,
+          top_p: 1,
+          max_output_tokens: 500,
+          tool_choice_mode: 'auto',
+          response_format: 'text',
+          allow_parallel_tool_calls: false,
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      modelPolicySchema.parse({
+        ...policy,
+        targets: [{ ...policy.targets[0], gateway_profile: 'https://provider.example/v1' }],
+      }),
+    ).toThrow();
+    expect(() =>
+      modelPolicySchema.parse({
+        ...policy,
+        targets: [{ ...policy.targets[0], model_id: 'api_key:secret-value' }],
+      }),
+    ).toThrow();
 
     const response = modelGatewayResponseSchema.parse({
       response_id: 'resp_1',
@@ -747,47 +898,73 @@ describe('contracts schemas', () => {
       message: {
         role: 'assistant',
         content: [
-          { type: 'tool_call', id: 'call_1', name: 'knowledge.search', arguments: { query: 'target' } },
+          {
+            type: 'tool_call',
+            id: 'call_1',
+            name: 'knowledge.search',
+            arguments: { query: 'target' },
+          },
         ],
       },
       finish_reason: 'tool_call',
-      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15, estimated_total_cost: 0.00005 },
+      usage: {
+        input_tokens: 10,
+        output_tokens: 5,
+        total_tokens: 15,
+        estimated_total_cost: 0.00005,
+      },
     });
-    expect(response.message.content[0]).toMatchObject({ type: 'tool_call', name: 'knowledge.search' });
-    expect(() => modelGatewayResponseSchema.parse({
-      message: { role: 'assistant', content: [{ type: 'tool_call', id: 'call_bad', name: 'knowledge.search', arguments: 'nope' }] },
-    })).toThrow();
+    expect(response.message.content[0]).toMatchObject({
+      type: 'tool_call',
+      name: 'knowledge.search',
+    });
+    expect(() =>
+      modelGatewayResponseSchema.parse({
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'tool_call', id: 'call_bad', name: 'knowledge.search', arguments: 'nope' },
+          ],
+        },
+      }),
+    ).toThrow();
 
-    expect(modelCallRecordSchema.parse({
-      model_call_id: 'model_call_1',
-      model_request_key: 'model:agent_run_1:segment:0:turn:0',
-      tenant_id: 'tenant_1',
-      agent_run_id: 'agent_run_1',
-      segment_index: 0,
-      model_turn_index: 0,
-      model_policy_id: policy.model_policy_id,
-      model_policy_version: policy.version,
-      model_policy_hash: hash,
-      target_id: 'primary',
-      provider: 'openai-compatible',
-      model_id: 'gpt-test-2026-06-19',
-      protocol: 'openai_chat_completions',
-      status: 'succeeded',
-      request_hash: hash,
-      safe_response_json: { response_id: 'resp_1', message: response.message },
-    }).status).toBe('succeeded');
+    expect(
+      modelCallRecordSchema.parse({
+        model_call_id: 'model_call_1',
+        model_request_key: 'model:agent_run_1:segment:0:turn:0',
+        tenant_id: 'tenant_1',
+        agent_run_id: 'agent_run_1',
+        segment_index: 0,
+        model_turn_index: 0,
+        model_policy_id: policy.model_policy_id,
+        model_policy_version: policy.version,
+        model_policy_hash: hash,
+        target_id: 'primary',
+        provider: 'openai-compatible',
+        model_id: 'gpt-test-2026-06-19',
+        protocol: 'openai_chat_completions',
+        status: 'succeeded',
+        request_hash: hash,
+        safe_response_json: { response_id: 'resp_1', message: response.message },
+      }).status,
+    ).toBe('succeeded');
 
-    expect(modelCallAttemptSchema.parse({
-      attempt_id: 'attempt_1',
-      model_call_id: 'model_call_1',
-      attempt_index: 0,
-      target_id: 'primary',
-      provider: 'openai-compatible',
-      model_id: 'gpt-test-2026-06-19',
-      status: 'succeeded',
-      http_status: 200,
-      response_id: 'resp_1',
-    }).status).toBe('succeeded');
+    expect(
+      modelCallAttemptSchema.parse({
+        attempt_id: 'attempt_1',
+        model_call_id: 'model_call_1',
+        global_attempt_index: 0,
+        target_attempt_index: 0,
+        fallback_index: 0,
+        target_id: 'primary',
+        provider: 'openai-compatible',
+        model_id: 'gpt-test-2026-06-19',
+        status: 'succeeded',
+        http_status: 200,
+        response_id: 'resp_1',
+      }).status,
+    ).toBe('succeeded');
 
     const executionPlan = agentExecutionPlanSchema.parse({
       execution_plan_id: 'agent_plan_model_1',
@@ -846,6 +1023,8 @@ describe('contracts schemas', () => {
       execution_plan_hash: hash,
     });
     expect(executionPlan.model_policy_id).toBe('readonly-policy');
-    expect(JSON.stringify(executionPlan)).not.toMatch(/api[_-]?key|authorization|hidden_reasoning/i);
+    expect(JSON.stringify(executionPlan)).not.toMatch(
+      /api[_-]?key|authorization|hidden_reasoning/i,
+    );
   });
 });

@@ -52,8 +52,20 @@ async function main(): Promise<void> {
   await checkHealth(`${controlPlaneUrl}/healthz`, 'control-plane');
   await checkHealth(`${controlPlaneUrl}/readyz`, 'control-plane readyz');
 
-  await expectStatus('POST', `${controlPlaneUrl}/api/v1/prompts`, undefined, { spec: promptSpec(ids, 1) }, 401);
-  await expectStatus('POST', `${controlPlaneUrl}/api/v1/prompts`, auditorHeaders, { spec: promptSpec(ids, 1) }, 403);
+  await expectStatus(
+    'POST',
+    `${controlPlaneUrl}/api/v1/prompts`,
+    undefined,
+    { spec: promptSpec(ids, 1) },
+    401,
+  );
+  await expectStatus(
+    'POST',
+    `${controlPlaneUrl}/api/v1/prompts`,
+    auditorHeaders,
+    { spec: promptSpec(ids, 1) },
+    403,
+  );
 
   const prompt = await createDraft<PromptDefinition>('prompts', promptSpec(ids, 1));
   const tool = await createDraft<ToolManifest>('tools', toolSpec(ids, '1.0.0'));
@@ -66,10 +78,16 @@ async function main(): Promise<void> {
   await publishResource('tools', ids.tool, 1, 'publish smoke tool v1');
   await publishResource('model-policies', ids.modelPolicy, 1, 'publish smoke model policy v1');
   await cloneResource<PromptDefinition>('prompts', ids.prompt, 1);
-  await updateDraft<PromptDefinition>('prompts', ids.prompt, 2, {
-    ...promptSpec(ids, 2),
-    content: 'Return a concise structured result for {{input}} in v2.',
-  }, 1);
+  await updateDraft<PromptDefinition>(
+    'prompts',
+    ids.prompt,
+    2,
+    {
+      ...promptSpec(ids, 2),
+      content: 'Return a concise structured result for {{input}} in v2.',
+    },
+    1,
+  );
   await publishResource('prompts', ids.prompt, 2, 'publish smoke prompt v2 fallback');
   const grayPrompt = await postJson<CapabilityRelease>(
     `${controlPlaneUrl}/api/v1/prompts/${encodeURIComponent(ids.prompt)}/versions/1/gray`,
@@ -103,7 +121,10 @@ async function main(): Promise<void> {
     `${controlPlaneUrl}/api/v1/flows/${encodeURIComponent(ids.flow)}/releases`,
     auditorHeaders,
   );
-  assert.ok(releaseHistory.some((release) => release.action === 'publish'), 'flow release history should include publish');
+  assert.ok(
+    releaseHistory.some((release) => release.action === 'publish'),
+    'flow release history should include publish',
+  );
 
   const previewV1 = await previewRoute(ids.keywordV1);
   assert.equal(previewV1.route_decision.decision, 'matched');
@@ -130,7 +151,13 @@ async function main(): Promise<void> {
   );
 
   const clonedRoute = await cloneResource<RouteSpec>('routes', ids.route, 1);
-  await updateDraft<RouteSpec>('routes', ids.route, 2, routeSpec(ids, 2, ids.keywordV2), clonedRoute.revision);
+  await updateDraft<RouteSpec>(
+    'routes',
+    ids.route,
+    2,
+    routeSpec(ids, 2, ids.keywordV2),
+    clonedRoute.revision,
+  );
 
   await postJson<{ flow_release: CapabilityRelease; route_release: CapabilityRelease }>(
     `${controlPlaneUrl}/api/v1/releases/flow-route`,
@@ -169,22 +196,40 @@ async function main(): Promise<void> {
     `${controlPlaneUrl}/api/v1/releases?resource_type=route&resource_id=${encodeURIComponent(ids.route)}&page=1&page_size=10`,
     auditorHeaders,
   );
-  assert.ok(releases.items.some((release) => release.action === 'rollback'), 'release list should include rollback');
+  assert.ok(
+    releases.items.some((release) => release.action === 'rollback'),
+    'release list should include rollback',
+  );
 
-  await getJson(`${controlPlaneUrl}/api/v1/operations/human-tasks?page=1&page_size=5`, auditorHeaders);
-  await getJson(`${controlPlaneUrl}/api/v1/operations/audit-events?page=1&page_size=5`, auditorHeaders);
-  await getJson(`${controlPlaneUrl}/api/v1/operations/tool-calls?page=1&page_size=5`, auditorHeaders);
+  await getJson(
+    `${controlPlaneUrl}/api/v1/operations/human-tasks?page=1&page_size=5`,
+    auditorHeaders,
+  );
+  await getJson(
+    `${controlPlaneUrl}/api/v1/operations/audit-events?page=1&page_size=5`,
+    auditorHeaders,
+  );
+  await getJson(
+    `${controlPlaneUrl}/api/v1/operations/tool-calls?page=1&page_size=5`,
+    auditorHeaders,
+  );
 
-  console.log(JSON.stringify({
-    ok: true,
-    prompt: `${prompt.resource_id}@${prompt.version}`,
-    tool: `${tool.resource_id}@${tool.version}`,
-    model_policy: `${modelPolicy.resource_id}@${modelPolicy.version}`,
-    agent: `${agent.resource_id}@${agent.version}`,
-    flow: `${ids.flow}@1`,
-    route: `${ids.route}@1`,
-    release_count: releases.items.length,
-  }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        prompt: `${prompt.resource_id}@${prompt.version}`,
+        tool: `${tool.resource_id}@${tool.version}`,
+        model_policy: `${modelPolicy.resource_id}@${modelPolicy.version}`,
+        agent: `${agent.resource_id}@${agent.version}`,
+        flow: `${ids.flow}@1`,
+        route: `${ids.route}@1`,
+        release_count: releases.items.length,
+      },
+      null,
+      2,
+    ),
+  );
 }
 
 function promptSpec(ids: { prompt: string }, version: number): PromptDefinition {
@@ -225,14 +270,16 @@ function modelPolicySpec(ids: { modelPolicy: string }, version: number): ModelPo
     version,
     status: 'draft',
     protocol: 'dar_generate',
-    targets: [{
-      target_id: `${ids.modelPolicy}_primary`,
-      gateway_profile: 'local-smoke',
-      model_id: 'mock',
-      priority: 0,
-      enabled: true,
-      capabilities: ['text', 'tools', 'usage'],
-    }],
+    targets: [
+      {
+        target_id: `${ids.modelPolicy}_primary`,
+        gateway_profile: 'local-smoke',
+        model_id: 'mock',
+        priority: 0,
+        enabled: true,
+        capabilities: ['text', 'tools', 'usage'],
+      },
+    ],
     retry_policy: {
       max_attempts_per_target: 1,
       retryable_status_codes: [429, 500, 502, 503, 504],
@@ -253,7 +300,8 @@ function modelPolicySpec(ids: { modelPolicy: string }, version: number): ModelPo
       temperature: 0,
       top_p: 1,
       max_output_tokens: 1000,
-      tool_choice_mode: 'auto',
+      initial_tool_choice_mode: 'auto',
+      after_tool_result_tool_choice_mode: 'auto',
       response_format: 'text',
       allow_parallel_tool_calls: false,
     },
@@ -261,7 +309,11 @@ function modelPolicySpec(ids: { modelPolicy: string }, version: number): ModelPo
   };
 }
 
-function agentSpec(ids: { agent: string; prompt: string; tool: string }, version: number, modelPolicy: ModelPolicy): AgentSpec {
+function agentSpec(
+  ids: { agent: string; prompt: string; tool: string },
+  version: number,
+  modelPolicy: ModelPolicy,
+): AgentSpec {
   return {
     agent_id: ids.agent,
     version,
@@ -305,7 +357,11 @@ function flowSpec(ids: { flow: string; tool: string; agent: string }, version: n
   };
 }
 
-function routeSpec(ids: { route: string; flow: string }, version: number, keyword: string): RouteSpec {
+function routeSpec(
+  ids: { route: string; flow: string },
+  version: number,
+  keyword: string,
+): RouteSpec {
   return {
     route_id: ids.route,
     flow_id: ids.flow,
@@ -325,7 +381,11 @@ function routeSpec(ids: { route: string; flow: string }, version: number, keywor
 }
 
 async function createDraft<TSpec>(plural: string, spec: TSpec): Promise<RegistryRecord<TSpec>> {
-  return postJson<RegistryRecord<TSpec>>(`${controlPlaneUrl}/api/v1/${plural}`, { spec }, operatorHeaders);
+  return postJson<RegistryRecord<TSpec>>(
+    `${controlPlaneUrl}/api/v1/${plural}`,
+    { spec },
+    operatorHeaders,
+  );
 }
 
 async function updateDraft<TSpec>(
@@ -343,7 +403,11 @@ async function updateDraft<TSpec>(
   );
 }
 
-async function cloneResource<TSpec>(plural: string, resourceId: string, version: number): Promise<RegistryRecord<TSpec>> {
+async function cloneResource<TSpec>(
+  plural: string,
+  resourceId: string,
+  version: number,
+): Promise<RegistryRecord<TSpec>> {
   return postJson<RegistryRecord<TSpec>>(
     `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}/clone`,
     {},
@@ -351,16 +415,29 @@ async function cloneResource<TSpec>(plural: string, resourceId: string, version:
   );
 }
 
-async function validateResource(plural: string, resourceId: string, version: number): Promise<void> {
+async function validateResource(
+  plural: string,
+  resourceId: string,
+  version: number,
+): Promise<void> {
   const result = await postJson<{ validation: { can_publish: boolean; errors: unknown[] } }>(
     `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}/validate`,
     {},
     operatorHeaders,
   );
-  assert.equal(result.validation.can_publish, true, `${plural}:${resourceId}@${version} should validate`);
+  assert.equal(
+    result.validation.can_publish,
+    true,
+    `${plural}:${resourceId}@${version} should validate`,
+  );
 }
 
-async function publishResource(plural: string, resourceId: string, version: number, releaseNote: string): Promise<CapabilityRelease> {
+async function publishResource(
+  plural: string,
+  resourceId: string,
+  version: number,
+  releaseNote: string,
+): Promise<CapabilityRelease> {
   return postJson<CapabilityRelease>(
     `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}/publish`,
     { release_note: releaseNote },
@@ -369,13 +446,17 @@ async function publishResource(plural: string, resourceId: string, version: numb
 }
 
 async function previewRoute(keyword: string): Promise<RouterPreviewResponse> {
-  return postJson<RouterPreviewResponse>(`${runtimeApiUrl}/v1/router/preview`, {
-    tenant_id: tenantId,
-    user_id: userId,
-    request_id: `${requestPrefix}_preview_${keyword}`,
-    channel: 'api',
-    input: { text: `please run ${keyword}` },
-  }, operatorHeaders);
+  return postJson<RouterPreviewResponse>(
+    `${runtimeApiUrl}/v1/router/preview`,
+    {
+      tenant_id: tenantId,
+      user_id: userId,
+      request_id: `${requestPrefix}_preview_${keyword}`,
+      channel: 'api',
+      input: { text: `please run ${keyword}` },
+    },
+    operatorHeaders,
+  );
 }
 
 async function checkHealth(url: string, label: string): Promise<void> {
@@ -422,7 +503,11 @@ async function expectStatus(
     headers: { ...(headers ?? {}), 'content-type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  assert.equal(response.status, statusCode, `${method} ${url} should return ${statusCode}: ${await response.text()}`);
+  assert.equal(
+    response.status,
+    statusCode,
+    `${method} ${url} should return ${statusCode}: ${await response.text()}`,
+  );
 }
 
 function authHeaders(role: string, requestId: string): Record<string, string> {

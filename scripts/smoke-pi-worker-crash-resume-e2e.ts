@@ -4,7 +4,14 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
-import type { AgentRunRecord, AgentStepRecord, HumanTask, StandardResponse, TaskRun, ToolCallLog } from '@dar/contracts';
+import type {
+  AgentRunRecord,
+  AgentStepRecord,
+  HumanTask,
+  StandardResponse,
+  TaskRun,
+  ToolCallLog,
+} from '@dar/contracts';
 import {
   AgentExecutionPlanRepository,
   ModelPolicyRepository,
@@ -135,12 +142,18 @@ interface ToolCallRow {
 }
 
 const runtimeApiUrl = trimTrailingSlash(process.env.RUNTIME_API_URL ?? 'http://localhost:3000');
-const runtimeWorkerUrl = trimTrailingSlash(process.env.RUNTIME_WORKER_URL ?? 'http://localhost:3300');
-const databaseUrl = process.env.DATABASE_URL ?? 'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime';
+const runtimeWorkerUrl = trimTrailingSlash(
+  process.env.RUNTIME_WORKER_URL ?? 'http://localhost:3300',
+);
+const databaseUrl =
+  process.env.DATABASE_URL ??
+  'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime';
 const tenantId = process.env.SMOKE_TENANT_ID ?? 'default';
 const userId = process.env.SMOKE_USER_ID ?? 'pi_crash_smoke_user';
 const timeoutMs = Number(process.env.SMOKE_TIMEOUT_MS ?? 180_000);
-const composeFiles = (process.env.PI_CRASH_COMPOSE_FILES ?? 'infra/docker-compose.yml,infra/docker-compose.pi-smoke.yml')
+const composeFiles = (
+  process.env.PI_CRASH_COMPOSE_FILES ?? 'infra/docker-compose.yml,infra/docker-compose.pi-smoke.yml'
+)
   .split(',')
   .map((file) => file.trim())
   .filter(Boolean);
@@ -191,14 +204,21 @@ async function runWaitingUserRecovery(db: Db) {
   await killWorker();
   await assertWorkerStopped();
 
-  await postJson(`${runtimeApiUrl}/v1/human-tasks/${encodeURIComponent(humanTask.human_task_id)}/respond`, {
-    request_id: `${requestPrefix}_${scenario}_respond`,
-    response_idempotency_key: `${requestPrefix}:${scenario}:respond:${humanTask.human_task_id}`,
-    response: { value: 'provided during worker downtime' },
-  });
+  await postJson(
+    `${runtimeApiUrl}/v1/human-tasks/${encodeURIComponent(humanTask.human_task_id)}/respond`,
+    {
+      request_id: `${requestPrefix}_${scenario}_respond`,
+      response_idempotency_key: `${requestPrefix}:${scenario}:respond:${humanTask.human_task_id}`,
+      response: { value: 'provided during worker downtime' },
+    },
+  );
   const respondedTask = await waitForHumanTaskById(db, humanTask.human_task_id, 'resolved');
   const interimTask = await getTaskRun(db, task.task_run_id);
-  assert.notEqual(interimTask?.status, 'completed', 'TaskRun must not complete while worker is stopped');
+  assert.notEqual(
+    interimTask?.status,
+    'completed',
+    'TaskRun must not complete while worker is stopped',
+  );
 
   await startWorker();
   await checkReady(`${runtimeWorkerUrl}/readyz`, 'runtime-worker');
@@ -207,18 +227,36 @@ async function runWaitingUserRecovery(db: Db) {
   const finalSteps = await listSteps(db, finalRun.agent_run_id);
   const humanTasks = await listHumanTasks(db, task.task_run_id);
   const snapshots = await listSnapshots(db, finalRun.agent_run_id);
-  const respondedEvents = await countAuditEvents(db, 'human_task.respond', respondedTask.human_task_id, task.task_run_id);
+  const respondedEvents = await countAuditEvents(
+    db,
+    'human_task.respond',
+    respondedTask.human_task_id,
+    task.task_run_id,
+  );
 
   assert.equal(finalRun.agent_run_id, agentRun.agent_run_id, 'AgentRun ID must remain stable');
   assert.equal(finalRun.workflow_id, agentRun.workflow_id, 'Agent workflow ID must remain stable');
   assert.equal(completedTask.workflow_id, task.workflow_id, 'Task workflow ID must remain stable');
   assert.equal(finalRun.status, 'completed', 'AgentRun should complete after worker restart');
   assert.equal(completedTask.status, 'completed', 'TaskRun should complete after worker restart');
-  assert.equal(humanTasks.filter((entry) => entry.kind === 'user_input').length, 1, 'Human Task must not duplicate');
+  assert.equal(
+    humanTasks.filter((entry) => entry.kind === 'user_input').length,
+    1,
+    'Human Task must not duplicate',
+  );
   assert.equal(respondedEvents, 1, 'human_task.respond audit should be written once');
-  assertNoDuplicate(finalSteps.map((step) => step.stable_step_key), 'AgentStep stable_step_key');
-  assert.ok(stepKeysBefore.size <= finalSteps.length, 'AgentStep count should only advance after resume');
-  assert.ok(snapshots.some((entry) => entry.previous_snapshot_id === snapshot.snapshot_id), 'Context Snapshot chain should continue from pre-crash snapshot');
+  assertNoDuplicate(
+    finalSteps.map((step) => step.stable_step_key),
+    'AgentStep stable_step_key',
+  );
+  assert.ok(
+    stepKeysBefore.size <= finalSteps.length,
+    'AgentStep count should only advance after resume',
+  );
+  assert.ok(
+    snapshots.some((entry) => entry.previous_snapshot_id === snapshot.snapshot_id),
+    'Context Snapshot chain should continue from pre-crash snapshot',
+  );
 
   return {
     task_run_id: task.task_run_id,
@@ -240,19 +278,30 @@ async function runL3Recovery(db: Db) {
   const task = await createAgentTask(planRef, scenario);
   const agentRun = await waitForAgentRun(db, task.task_run_id, 'waiting_human');
   const humanTask = await waitForHumanTask(db, task.task_run_id, 'approval', 'pending');
-  const previewCall = await waitForToolCall(db, task.task_run_id, ['pending_confirmation', 'previewed']);
-  const auditPreviewCount = await countAuditEvents(db, 'tool.preview', previewCall.tool_name, task.task_run_id);
+  const previewCall = await waitForToolCall(db, task.task_run_id, [
+    'pending_confirmation',
+    'previewed',
+  ]);
+  const auditPreviewCount = await countAuditEvents(
+    db,
+    'tool.preview',
+    previewCall.tool_name,
+    task.task_run_id,
+  );
   const idempotencyBefore = await countIdempotencyRecords(db, previewCall.idempotency_key);
   const stepsBefore = await listSteps(db, agentRun.agent_run_id);
 
   await killWorker();
   await assertWorkerStopped();
 
-  await postJson(`${runtimeApiUrl}/v1/human-tasks/${encodeURIComponent(humanTask.human_task_id)}/approve`, {
-    request_id: `${requestPrefix}_${scenario}_approve`,
-    decision_reason: 'Crash smoke approval while worker is down',
-    payload: { scenario },
-  });
+  await postJson(
+    `${runtimeApiUrl}/v1/human-tasks/${encodeURIComponent(humanTask.human_task_id)}/approve`,
+    {
+      request_id: `${requestPrefix}_${scenario}_approve`,
+      decision_reason: 'Crash smoke approval while worker is down',
+      payload: { scenario },
+    },
+  );
   await waitForHumanTaskById(db, humanTask.human_task_id, 'approved');
   await assertNoCommittedToolCall(db, previewCall.tool_call_id);
 
@@ -262,38 +311,64 @@ async function runL3Recovery(db: Db) {
   const finalRun = await getSingleAgentRun(db, task.task_run_id);
   const finalSteps = await listSteps(db, finalRun.agent_run_id);
   const finalToolCall = await getToolCall(db, previewCall.tool_call_id);
-  const commitEvents = await countAuditEvents(db, 'tool.commit', previewCall.tool_name, task.task_run_id);
-  const commitIdempotency = await countIdempotencyRecords(db, agentToolGatewayStoreKey({
-    tenantId,
-    toolName: previewCall.tool_name,
-    operation: 'commit',
-    agentRunId: finalRun.agent_run_id,
-    segmentIndex: 0,
-    callId: 'call_l3_1',
-    toolVersion: previewCall.tool_version,
-  }));
+  const commitEvents = await countAuditEvents(
+    db,
+    'tool.commit',
+    previewCall.tool_name,
+    task.task_run_id,
+  );
+  const commitIdempotency = await countIdempotencyRecords(
+    db,
+    agentToolGatewayStoreKey({
+      tenantId,
+      toolName: previewCall.tool_name,
+      operation: 'commit',
+      agentRunId: finalRun.agent_run_id,
+      segmentIndex: 0,
+      callId: 'call_l3_1',
+      toolVersion: previewCall.tool_version,
+    }),
+  );
   const snapshots = await listSnapshots(db, finalRun.agent_run_id);
 
   assert.equal(finalRun.agent_run_id, agentRun.agent_run_id, 'AgentRun ID must remain stable');
   assert.equal(finalRun.workflow_id, agentRun.workflow_id, 'Agent workflow ID must remain stable');
   assert.equal(completedTask.workflow_id, task.workflow_id, 'Task workflow ID must remain stable');
   assert.equal(finalRun.status, 'completed', 'AgentRun should complete after L3 worker restart');
-  assert.equal(completedTask.status, 'completed', 'TaskRun should complete after L3 worker restart');
+  assert.equal(
+    completedTask.status,
+    'completed',
+    'TaskRun should complete after L3 worker restart',
+  );
   assert.equal(finalToolCall.status, 'committed', 'ToolCallLog should be committed after restart');
   assert.equal(commitEvents, 1, 'tool.commit audit should be written once');
-  assert.equal(commitIdempotency, 1, 'commit idempotency record should have one authoritative result');
+  assert.equal(
+    commitIdempotency,
+    1,
+    'commit idempotency record should have one authoritative result',
+  );
   assert.ok(idempotencyBefore <= 1, 'preview idempotency should not duplicate before approval');
   assert.ok(auditPreviewCount >= 1, 'preview audit must exist');
-  assertNoDuplicate(finalSteps.map((step) => step.stable_step_key), 'AgentStep stable_step_key');
+  assertNoDuplicate(
+    finalSteps.map((step) => step.stable_step_key),
+    'AgentStep stable_step_key',
+  );
   assert.ok(finalSteps.length >= stepsBefore.length, 'AgentStep count should not shrink');
   assert.ok(
-    snapshots.some((entry) => JSON.stringify(entry.sanitized_messages_json).includes('authoritative_tool_result')),
+    snapshots.some((entry) =>
+      JSON.stringify(entry.sanitized_messages_json).includes('authoritative_tool_result'),
+    ),
     'Context Snapshot should include authoritative tool result once after commit',
   );
   const authoritativeMentions = snapshots
     .map((entry) => JSON.stringify(entry.sanitized_messages_json))
-    .filter((text) => text.includes('authoritative_tool_result') && text.includes(previewCall.tool_name));
-  assert.ok(authoritativeMentions.length >= 1, 'Tool Result should appear in authoritative replacement snapshots');
+    .filter(
+      (text) => text.includes('authoritative_tool_result') && text.includes(previewCall.tool_name),
+    );
+  assert.ok(
+    authoritativeMentions.length >= 1,
+    'Tool Result should appear in authoritative replacement snapshots',
+  );
   const finalSnapshotText = JSON.stringify(snapshots.at(-1)?.sanitized_messages_json ?? {});
   assert.equal(
     countSubstring(finalSnapshotText, 'authoritative_tool_result'),
@@ -323,31 +398,39 @@ async function seedAgentPlan(db: Db, scenario: 'need_user' | 'l3_tool'): Promise
   const publishedModelPolicy = await seedModelPolicy(db, modelPolicyId, displayPolicy);
   const modelPolicyHash = hashModelPolicy(publishedModelPolicy);
   await seedTools(db);
-  await upsertPromptDefinition(db, {
-    prompt_id: promptId,
-    version: 1,
-    name: `Pi crash smoke prompt ${scenario}`,
-    content: `You are a Pi crash smoke agent. Scenario: ${scenario}.`,
-    variables: [],
-    status: 'published',
-  }, { tenantId, status: 'published', createdBy: 'pi-crash-smoke' });
-  await upsertAgentSpec(db, {
-    agent_id: agentId,
-    version: 1,
-    prompt_ref: `${promptId}@1`,
-    model_policy: displayPolicy,
-    model_policy_ref: {
-      model_policy_id: publishedModelPolicy.model_policy_id,
-      model_policy_version: publishedModelPolicy.version,
-      model_policy_hash: modelPolicyHash,
+  await upsertPromptDefinition(
+    db,
+    {
+      prompt_id: promptId,
+      version: 1,
+      name: `Pi crash smoke prompt ${scenario}`,
+      content: `You are a Pi crash smoke agent. Scenario: ${scenario}.`,
+      variables: [],
+      status: 'published',
     },
-    allowed_tools: ['knowledge.search@1.0.0', 'record.write.mock@1.0.0'],
-    allowed_handoffs: [],
-    max_steps: 6,
-    max_tokens: 2000,
-    output_schema: 'pi_crash_smoke_result_v1',
-    status: 'published',
-  }, { tenantId, status: 'published', createdBy: 'pi-crash-smoke' });
+    { tenantId, status: 'published', createdBy: 'pi-crash-smoke' },
+  );
+  await upsertAgentSpec(
+    db,
+    {
+      agent_id: agentId,
+      version: 1,
+      prompt_ref: `${promptId}@1`,
+      model_policy: displayPolicy,
+      model_policy_ref: {
+        model_policy_id: publishedModelPolicy.model_policy_id,
+        model_policy_version: publishedModelPolicy.version,
+        model_policy_hash: modelPolicyHash,
+      },
+      allowed_tools: ['knowledge.search@1.0.0', 'record.write.mock@1.0.0'],
+      allowed_handoffs: [],
+      max_steps: 6,
+      max_tokens: 2000,
+      output_schema: 'pi_crash_smoke_result_v1',
+      status: 'published',
+    },
+    { tenantId, status: 'published', createdBy: 'pi-crash-smoke' },
+  );
   const plan = await new AgentExecutionPlanRepository(db).createForAgent({
     tenantId,
     agentId,
@@ -364,47 +447,55 @@ async function seedModelPolicy(db: Db, modelPolicyId: string, displayPolicy: str
     return existing;
   }
   if (existing) {
-    throw new Error(`ModelPolicy ${modelPolicyId}@1 already exists with non-executable status ${existing.status}`);
+    throw new Error(
+      `ModelPolicy ${modelPolicyId}@1 already exists with non-executable status ${existing.status}`,
+    );
   }
-  await repository.createDraft({
-    model_policy_id: modelPolicyId,
-    version: 1,
-    status: 'draft',
-    protocol: 'dar_generate',
-    targets: [{
-      target_id: `${modelPolicyId}_primary`,
-      gateway_profile: 'local-deterministic',
-      model_id: displayPolicy,
-      priority: 0,
-      enabled: true,
-      capabilities: ['text', 'tools', 'usage'],
-    }],
-    retry_policy: {
-      max_attempts_per_target: 1,
-      retryable_status_codes: [429, 500, 502, 503, 504],
-      retry_on_timeout: true,
-      retry_on_network_error: true,
-      backoff_ms: 10,
-      max_backoff_ms: 50,
+  await repository.createDraft(
+    {
+      model_policy_id: modelPolicyId,
+      version: 1,
+      status: 'draft',
+      protocol: 'dar_generate',
+      targets: [
+        {
+          target_id: `${modelPolicyId}_primary`,
+          gateway_profile: 'local-deterministic',
+          model_id: displayPolicy,
+          priority: 0,
+          enabled: true,
+          capabilities: ['text', 'tools', 'usage'],
+        },
+      ],
+      retry_policy: {
+        max_attempts_per_target: 1,
+        retryable_status_codes: [429, 500, 502, 503, 504],
+        retry_on_timeout: true,
+        retry_on_network_error: true,
+        backoff_ms: 10,
+        max_backoff_ms: 50,
+      },
+      fallback_policy: {
+        enabled: false,
+        ordered_target_ids: [],
+        eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
+        stop_on_auth_error: true,
+        stop_on_validation_error: true,
+        stop_on_policy_denial: true,
+      },
+      request_policy: {
+        temperature: 0,
+        top_p: 1,
+        max_output_tokens: 1000,
+        initial_tool_choice_mode: 'auto',
+        after_tool_result_tool_choice_mode: 'auto',
+        response_format: 'text',
+        allow_parallel_tool_calls: false,
+      },
+      revision: 1,
     },
-    fallback_policy: {
-      enabled: false,
-      ordered_target_ids: [],
-      eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
-      stop_on_auth_error: true,
-      stop_on_validation_error: true,
-      stop_on_policy_denial: true,
-    },
-    request_policy: {
-      temperature: 0,
-      top_p: 1,
-      max_output_tokens: 1000,
-      tool_choice_mode: 'auto',
-      response_format: 'text',
-      allow_parallel_tool_calls: false,
-    },
-    revision: 1,
-  }, { tenantId, operatorId: 'pi-crash-smoke' });
+    { tenantId, operatorId: 'pi-crash-smoke' },
+  );
   return repository.publish(modelPolicyId, 1, {
     tenantId,
     operatorId: 'pi-crash-smoke',
@@ -413,21 +504,40 @@ async function seedModelPolicy(db: Db, modelPolicyId: string, displayPolicy: str
 }
 
 async function seedTools(db: Db) {
-  const knowledge = JSON.parse(await readFile(new URL('../examples/tools/knowledge-search-tool.json', import.meta.url), 'utf8'));
-  const recordWrite = JSON.parse(await readFile(new URL('../examples/tools/record-write-mock-tool.json', import.meta.url), 'utf8'));
-  await new ToolManifestRepository(db).upsert(knowledge, { tenantId, status: 'published', createdBy: 'pi-crash-smoke' });
-  await new ToolManifestRepository(db).upsert(recordWrite, { tenantId, status: 'published', createdBy: 'pi-crash-smoke' });
+  const knowledge = JSON.parse(
+    await readFile(
+      new URL('../examples/tools/knowledge-search-tool.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  const recordWrite = JSON.parse(
+    await readFile(
+      new URL('../examples/tools/record-write-mock-tool.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  await new ToolManifestRepository(db).upsert(knowledge, {
+    tenantId,
+    status: 'published',
+    createdBy: 'pi-crash-smoke',
+  });
+  await new ToolManifestRepository(db).upsert(recordWrite, {
+    tenantId,
+    status: 'published',
+    createdBy: 'pi-crash-smoke',
+  });
 }
 
 async function createAgentTask(agentExecutionPlanRef: string, scenario: string) {
-  const task = await postJson<{ task_run_id: string; workflow_id: string; workflow_start?: { mode: string; started: boolean; run_id?: string } }>(
-    `${runtimeApiUrl}/v1/agent-tasks`,
-    {
-      request_id: `${requestPrefix}_${scenario}_task`,
-      agent_execution_plan_ref: agentExecutionPlanRef,
-      input: { text: `${scenario} crash smoke request` },
-    },
-  );
+  const task = await postJson<{
+    task_run_id: string;
+    workflow_id: string;
+    workflow_start?: { mode: string; started: boolean; run_id?: string };
+  }>(`${runtimeApiUrl}/v1/agent-tasks`, {
+    request_id: `${requestPrefix}_${scenario}_task`,
+    agent_execution_plan_ref: agentExecutionPlanRef,
+    input: { text: `${scenario} crash smoke request` },
+  });
   assert.equal(task.workflow_start?.started, true);
   assert.equal(task.workflow_start?.mode, 'temporal');
   return task;
@@ -460,7 +570,11 @@ async function assertWorkerStopped(): Promise<void> {
   }
   try {
     const response = await fetch(`${runtimeWorkerUrl}/readyz`);
-    assert.equal(response.ok, false, 'runtime-worker /readyz should be unavailable or not ready after SIGKILL');
+    assert.equal(
+      response.ok,
+      false,
+      'runtime-worker /readyz should be unavailable or not ready after SIGKILL',
+    );
   } catch {
     return;
   }
@@ -477,9 +591,17 @@ async function getTaskRunFromApi(taskRunId: string): Promise<TaskRun> {
   return getJson<TaskRun>(`${runtimeApiUrl}/v1/tasks/${encodeURIComponent(taskRunId)}`);
 }
 
-async function waitForAgentRun(db: Db, taskRunId: string, status: AgentRunRecord['status']): Promise<AgentRunRecord> {
+async function waitForAgentRun(
+  db: Db,
+  taskRunId: string,
+  status: AgentRunRecord['status'],
+): Promise<AgentRunRecord> {
   return poll(async () => {
-    const rows = await db.selectFrom('agent_run').selectAll().where('task_run_id', '=', taskRunId).execute();
+    const rows = await db
+      .selectFrom('agent_run')
+      .selectAll()
+      .where('task_run_id', '=', taskRunId)
+      .execute();
     if (rows.length === 0) {
       return undefined;
     }
@@ -490,7 +612,11 @@ async function waitForAgentRun(db: Db, taskRunId: string, status: AgentRunRecord
 }
 
 async function getSingleAgentRun(db: Db, taskRunId: string): Promise<AgentRunRecord> {
-  const rows = await db.selectFrom('agent_run').selectAll().where('task_run_id', '=', taskRunId).execute();
+  const rows = await db
+    .selectFrom('agent_run')
+    .selectAll()
+    .where('task_run_id', '=', taskRunId)
+    .execute();
   assert.equal(rows.length, 1, `Expected exactly one AgentRun for ${taskRunId}`);
   const row = rows[0]!;
   return agentRunFromRow(row);
@@ -538,16 +664,29 @@ function agentRunFromRow(row: AgentRunRow): AgentRunRecord {
   });
 }
 
-async function waitForHumanTask(db: Db, taskRunId: string, kind: HumanTask['kind'], status: HumanTask['status']): Promise<HumanTask> {
+async function waitForHumanTask(
+  db: Db,
+  taskRunId: string,
+  kind: HumanTask['kind'],
+  status: HumanTask['status'],
+): Promise<HumanTask> {
   return poll(async () => {
     const tasks = await listHumanTasks(db, taskRunId);
     return tasks.find((task) => task.kind === kind && task.status === status);
   }, `HumanTask ${kind}/${status} for ${taskRunId}`);
 }
 
-async function waitForHumanTaskById(db: Db, humanTaskId: string, status: HumanTask['status']): Promise<HumanTask> {
+async function waitForHumanTaskById(
+  db: Db,
+  humanTaskId: string,
+  status: HumanTask['status'],
+): Promise<HumanTask> {
   return poll(async () => {
-    const row = await db.selectFrom('human_task').selectAll().where('human_task_id', '=', humanTaskId).executeTakeFirst();
+    const row = await db
+      .selectFrom('human_task')
+      .selectAll()
+      .where('human_task_id', '=', humanTaskId)
+      .executeTakeFirst();
     if (!row || row.status !== status) {
       return undefined;
     }
@@ -556,7 +695,12 @@ async function waitForHumanTaskById(db: Db, humanTaskId: string, status: HumanTa
 }
 
 async function listHumanTasks(db: Db, taskRunId: string): Promise<HumanTask[]> {
-  const rows = await db.selectFrom('human_task').selectAll().where('task_run_id', '=', taskRunId).orderBy('created_at', 'asc').execute();
+  const rows = await db
+    .selectFrom('human_task')
+    .selectAll()
+    .where('task_run_id', '=', taskRunId)
+    .orderBy('created_at', 'asc')
+    .execute();
   return rows.map(humanTaskFromRow);
 }
 
@@ -610,49 +754,85 @@ function agentStepFromRow(row: AgentStepRow): AgentStepRecord {
     segment_index: row.segment_index,
     stable_step_key: row.stable_step_key,
     segment_status: row.segment_status as AgentStepRecord['segment_status'],
-    proposed_tool_calls: Array.isArray(row.proposed_tool_calls_json) ? row.proposed_tool_calls_json : [],
-    tool_result_refs: Array.isArray(row.tool_result_refs_json) ? row.tool_result_refs_json as AgentStepRecord['tool_result_refs'] : [],
-    authoritative_tool_result_refs: Array.isArray(row.authoritative_tool_result_refs_json) ? row.authoritative_tool_result_refs_json as AgentStepRecord['authoritative_tool_result_refs'] : [],
-    human_task_ids: Array.isArray(row.human_task_ids_json) ? row.human_task_ids_json.map(String) : [],
-    handoff_refs: Array.isArray(row.handoff_refs_json) ? row.handoff_refs_json as Array<Record<string, unknown>> : [],
+    proposed_tool_calls: Array.isArray(row.proposed_tool_calls_json)
+      ? row.proposed_tool_calls_json
+      : [],
+    tool_result_refs: Array.isArray(row.tool_result_refs_json)
+      ? (row.tool_result_refs_json as AgentStepRecord['tool_result_refs'])
+      : [],
+    authoritative_tool_result_refs: Array.isArray(row.authoritative_tool_result_refs_json)
+      ? (row.authoritative_tool_result_refs_json as AgentStepRecord['authoritative_tool_result_refs'])
+      : [],
+    human_task_ids: Array.isArray(row.human_task_ids_json)
+      ? row.human_task_ids_json.map(String)
+      : [],
+    handoff_refs: Array.isArray(row.handoff_refs_json)
+      ? (row.handoff_refs_json as Array<Record<string, unknown>>)
+      : [],
     usage: usageFromJson(row.usage_json),
     created_at: new Date(row.created_at).toISOString(),
     updated_at: new Date(row.updated_at).toISOString(),
-    context_snapshot_before: safeRecord(row.context_snapshot_before_ref) as AgentStepRecord['context_snapshot_before'] | undefined,
-    context_snapshot_after: safeRecord(row.context_snapshot_after_ref) as AgentStepRecord['context_snapshot_after'] | undefined,
-    context_snapshot_ref: safeRecord(row.context_snapshot_ref) as AgentStepRecord['context_snapshot_ref'] | undefined,
+    context_snapshot_before: safeRecord(row.context_snapshot_before_ref) as
+      | AgentStepRecord['context_snapshot_before']
+      | undefined,
+    context_snapshot_after: safeRecord(row.context_snapshot_after_ref) as
+      | AgentStepRecord['context_snapshot_after']
+      | undefined,
+    context_snapshot_ref: safeRecord(row.context_snapshot_ref) as
+      | AgentStepRecord['context_snapshot_ref']
+      | undefined,
     output_ref: row.output_ref ?? undefined,
     error_code: row.error_code ?? undefined,
     error_message: row.error_message ?? undefined,
   });
 }
 
-async function waitForToolCall(db: Db, taskRunId: string, statuses: ToolCallLog['status'] | ToolCallLog['status'][]): Promise<ToolCallLog> {
+async function waitForToolCall(
+  db: Db,
+  taskRunId: string,
+  statuses: ToolCallLog['status'] | ToolCallLog['status'][],
+): Promise<ToolCallLog> {
   const expectedStatuses = Array.isArray(statuses) ? statuses : [statuses];
-  return poll(async () => {
-    const rows = await db
-      .selectFrom('tool_call_log')
-      .selectAll()
-      .where('task_run_id', '=', taskRunId)
-      .where('status', 'in', expectedStatuses)
-      .execute();
-    const row = rows[0];
-    return row ? toolCallFromRow(row) : undefined;
-  }, `ToolCall ${expectedStatuses.join('/')} for ${taskRunId}`);
+  return poll(
+    async () => {
+      const rows = await db
+        .selectFrom('tool_call_log')
+        .selectAll()
+        .where('task_run_id', '=', taskRunId)
+        .where('status', 'in', expectedStatuses)
+        .execute();
+      const row = rows[0];
+      return row ? toolCallFromRow(row) : undefined;
+    },
+    `ToolCall ${expectedStatuses.join('/')} for ${taskRunId}`,
+  );
 }
 
 async function getToolCall(db: Db, toolCallId: string): Promise<ToolCallLog> {
-  const row = await db.selectFrom('tool_call_log').selectAll().where('tool_call_id', '=', toolCallId).executeTakeFirst();
+  const row = await db
+    .selectFrom('tool_call_log')
+    .selectAll()
+    .where('tool_call_id', '=', toolCallId)
+    .executeTakeFirst();
   assert.ok(row, `ToolCallLog not found: ${toolCallId}`);
   return toolCallFromRow(row);
 }
 
 async function assertNoCommittedToolCall(db: Db, toolCallId: string): Promise<void> {
   const toolCall = await getToolCall(db, toolCallId);
-  assert.notEqual(toolCall.status, 'committed', 'Tool commit must not execute while worker is stopped');
+  assert.notEqual(
+    toolCall.status,
+    'committed',
+    'Tool commit must not execute while worker is stopped',
+  );
 }
 
-async function countAuditEvents(db: Db, action: string, targetId: string, taskRunId: string): Promise<number> {
+async function countAuditEvents(
+  db: Db,
+  action: string,
+  targetId: string,
+  taskRunId: string,
+): Promise<number> {
   const result = await db
     .selectFrom('audit_event')
     .select(({ fn }) => fn.countAll<string>().as('count'))
@@ -664,7 +844,10 @@ async function countAuditEvents(db: Db, action: string, targetId: string, taskRu
   return Number(result?.count ?? 0);
 }
 
-async function countIdempotencyRecords(db: Db, idempotencyKey: string | undefined): Promise<number> {
+async function countIdempotencyRecords(
+  db: Db,
+  idempotencyKey: string | undefined,
+): Promise<number> {
   if (!idempotencyKey) {
     return 0;
   }
@@ -677,7 +860,11 @@ async function countIdempotencyRecords(db: Db, idempotencyKey: string | undefine
 }
 
 async function getTaskRun(db: Db, taskRunId: string): Promise<TaskRun | undefined> {
-  const row = await db.selectFrom('task_run').selectAll().where('task_run_id', '=', taskRunId).executeTakeFirst();
+  const row = await db
+    .selectFrom('task_run')
+    .selectAll()
+    .where('task_run_id', '=', taskRunId)
+    .executeTakeFirst();
   if (!row) {
     return undefined;
   }
@@ -717,7 +904,7 @@ function toolCallFromRow(row: ToolCallRow): ToolCallLog {
     idempotency_key: row.idempotency_key ?? undefined,
     input_hash: row.input_hash ?? undefined,
     output_hash: row.output_hash ?? undefined,
-    mode: row.mode ? row.mode as ToolCallLog['mode'] : undefined,
+    mode: row.mode ? (row.mode as ToolCallLog['mode']) : undefined,
     error_code: row.error_code ?? undefined,
     adapter_type: row.adapter_type ?? undefined,
     preview_json: row.preview_json ?? undefined,
@@ -727,7 +914,11 @@ function toolCallFromRow(row: ToolCallRow): ToolCallLog {
 
 async function checkHealth(url: string, appName: string): Promise<void> {
   const response = await fetch(url);
-  assert.equal(response.ok, true, `${appName} healthz failed: ${response.status} ${await response.text()}`);
+  assert.equal(
+    response.ok,
+    true,
+    `${appName} healthz failed: ${response.status} ${await response.text()}`,
+  );
 }
 
 async function checkReady(url: string, appName: string): Promise<void> {
@@ -787,14 +978,26 @@ async function poll<T>(fn: () => Promise<T | undefined>, label: string): Promise
 }
 
 async function dockerCompose(args: string[]): Promise<void> {
-  await runCommand('docker', ['compose', ...composeFiles.flatMap((file) => ['-f', file]), ...args], { inherit: true });
+  await runCommand(
+    'docker',
+    ['compose', ...composeFiles.flatMap((file) => ['-f', file]), ...args],
+    { inherit: true },
+  );
 }
 
 async function dockerComposeOutput(args: string[]): Promise<string> {
-  return runCommand('docker', ['compose', ...composeFiles.flatMap((file) => ['-f', file]), ...args], { inherit: false });
+  return runCommand(
+    'docker',
+    ['compose', ...composeFiles.flatMap((file) => ['-f', file]), ...args],
+    { inherit: false },
+  );
 }
 
-async function runCommand(command: string, args: string[], options: { inherit: boolean }): Promise<string> {
+async function runCommand(
+  command: string,
+  args: string[],
+  options: { inherit: boolean },
+): Promise<string> {
   return new Promise((resolve, reject) => {
     let stdout = '';
     let stderr = '';
@@ -803,8 +1006,12 @@ async function runCommand(command: string, args: string[], options: { inherit: b
       stdio: options.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
       env: process.env,
     });
-    child.stdout?.on('data', (chunk) => { stdout += String(chunk); });
-    child.stderr?.on('data', (chunk) => { stderr += String(chunk); });
+    child.stdout?.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
     child.on('error', reject);
     child.on('close', (code) => {
       if (code === 0) {
@@ -833,26 +1040,118 @@ async function printCommandSummary(label: string, args: string[]): Promise<void>
     console.error(`--- ${label} ---`);
     console.error(redact(output));
   } catch (error) {
-    console.error(`--- ${label} unavailable: ${error instanceof Error ? error.message : String(error)} ---`);
+    console.error(
+      `--- ${label} unavailable: ${error instanceof Error ? error.message : String(error)} ---`,
+    );
   }
 }
 
 async function printDbSummary(db: Db): Promise<void> {
   try {
-    const [taskRuns, agentRuns, agentSteps, humanTasks, snapshots, toolCalls, idempotency, audits] = await Promise.all([
-      db.selectFrom('task_run').select(['task_run_id', 'tenant_id', 'status', 'workflow_id', 'error_code']).orderBy('created_at', 'desc').limit(10).execute(),
-      db.selectFrom('agent_run').select(['agent_run_id', 'task_run_id', 'status', 'workflow_id', 'workflow_run_id', 'current_segment_index']).orderBy('created_at', 'desc').limit(10).execute(),
-      db.selectFrom('agent_step').select(['stable_step_key', 'agent_run_id', 'segment_status']).orderBy('created_at', 'desc').limit(20).execute(),
-      db.selectFrom('human_task').select(['human_task_id', 'task_run_id', 'kind', 'status', 'workflow_id']).orderBy('created_at', 'desc').limit(20).execute(),
-      db.selectFrom('agent_context_snapshot').select(['snapshot_id', 'agent_run_id', 'previous_snapshot_id', 'snapshot_hash', 'message_count', 'byte_size']).orderBy('created_at', 'desc').limit(20).execute(),
-      db.selectFrom('tool_call_log').select(['tool_call_id', 'task_run_id', 'tool_name', 'status', 'mode', 'idempotency_key', 'output_hash']).orderBy('created_at', 'desc').limit(20).execute(),
-      db.selectFrom('idempotency_record').select(['idempotency_key', 'tenant_id', 'target_type', 'target_id', 'status']).orderBy('created_at', 'desc').limit(20).execute(),
-      db.selectFrom('audit_event').select(['event_id', 'tenant_id', 'action', 'target_type', 'target_id', 'result', 'reason']).orderBy('occurred_at', 'desc').limit(20).execute(),
-    ]);
+    const [taskRuns, agentRuns, agentSteps, humanTasks, snapshots, toolCalls, idempotency, audits] =
+      await Promise.all([
+        db
+          .selectFrom('task_run')
+          .select(['task_run_id', 'tenant_id', 'status', 'workflow_id', 'error_code'])
+          .orderBy('created_at', 'desc')
+          .limit(10)
+          .execute(),
+        db
+          .selectFrom('agent_run')
+          .select([
+            'agent_run_id',
+            'task_run_id',
+            'status',
+            'workflow_id',
+            'workflow_run_id',
+            'current_segment_index',
+          ])
+          .orderBy('created_at', 'desc')
+          .limit(10)
+          .execute(),
+        db
+          .selectFrom('agent_step')
+          .select(['stable_step_key', 'agent_run_id', 'segment_status'])
+          .orderBy('created_at', 'desc')
+          .limit(20)
+          .execute(),
+        db
+          .selectFrom('human_task')
+          .select(['human_task_id', 'task_run_id', 'kind', 'status', 'workflow_id'])
+          .orderBy('created_at', 'desc')
+          .limit(20)
+          .execute(),
+        db
+          .selectFrom('agent_context_snapshot')
+          .select([
+            'snapshot_id',
+            'agent_run_id',
+            'previous_snapshot_id',
+            'snapshot_hash',
+            'message_count',
+            'byte_size',
+          ])
+          .orderBy('created_at', 'desc')
+          .limit(20)
+          .execute(),
+        db
+          .selectFrom('tool_call_log')
+          .select([
+            'tool_call_id',
+            'task_run_id',
+            'tool_name',
+            'status',
+            'mode',
+            'idempotency_key',
+            'output_hash',
+          ])
+          .orderBy('created_at', 'desc')
+          .limit(20)
+          .execute(),
+        db
+          .selectFrom('idempotency_record')
+          .select(['idempotency_key', 'tenant_id', 'target_type', 'target_id', 'status'])
+          .orderBy('created_at', 'desc')
+          .limit(20)
+          .execute(),
+        db
+          .selectFrom('audit_event')
+          .select([
+            'event_id',
+            'tenant_id',
+            'action',
+            'target_type',
+            'target_id',
+            'result',
+            'reason',
+          ])
+          .orderBy('occurred_at', 'desc')
+          .limit(20)
+          .execute(),
+      ]);
     console.error('--- db summary ---');
-    console.error(redact(JSON.stringify({ taskRuns, agentRuns, agentSteps, humanTasks, snapshots, toolCalls, idempotency, audits }, null, 2)));
+    console.error(
+      redact(
+        JSON.stringify(
+          {
+            taskRuns,
+            agentRuns,
+            agentSteps,
+            humanTasks,
+            snapshots,
+            toolCalls,
+            idempotency,
+            audits,
+          },
+          null,
+          2,
+        ),
+      ),
+    );
   } catch (error) {
-    console.error(`db summary unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(
+      `db summary unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
@@ -883,12 +1182,7 @@ function agentToolGatewayStoreKey(input: {
     input.callId,
     input.operation,
   ].join(':');
-  return [
-    input.tenantId,
-    input.toolName,
-    input.operation,
-    activityIdempotencyKey,
-  ].join(':');
+  return [input.tenantId, input.toolName, input.operation, activityIdempotencyKey].join(':');
 }
 
 function trimTrailingSlash(value: string): string {
@@ -900,7 +1194,9 @@ function assertNoDuplicate(values: string[], label: string): void {
 }
 
 function safeRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function usageFromJson(value: unknown): AgentStepRecord['usage'] {
@@ -909,8 +1205,12 @@ function usageFromJson(value: unknown): AgentStepRecord['usage'] {
     input_tokens: numberFromRecord(usage, 'input_tokens'),
     output_tokens: numberFromRecord(usage, 'output_tokens'),
     total_tokens: numberFromRecord(usage, 'total_tokens'),
-    ...(typeof usage?.cache_read_tokens === 'number' ? { cache_read_tokens: usage.cache_read_tokens } : {}),
-    ...(typeof usage?.cache_write_tokens === 'number' ? { cache_write_tokens: usage.cache_write_tokens } : {}),
+    ...(typeof usage?.cache_read_tokens === 'number'
+      ? { cache_read_tokens: usage.cache_read_tokens }
+      : {}),
+    ...(typeof usage?.cache_write_tokens === 'number'
+      ? { cache_write_tokens: usage.cache_write_tokens }
+      : {}),
     ...(typeof usage?.estimated_cost === 'number' ? { estimated_cost: usage.estimated_cost } : {}),
   };
 }

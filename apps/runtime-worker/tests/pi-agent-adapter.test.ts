@@ -3,9 +3,16 @@ import type { AgentExecutionPlan, AgentRunRecord, ResolvedModelPolicy } from '@d
 import type { Database } from '@dar/db';
 import type { Kysely } from 'kysely';
 import { createDeterministicPiStream } from '../src/agent/deterministic-pi-stream.js';
-import { createModelGatewayModel, createModelGatewayPiStream } from '../src/agent/model-gateway-pi-stream.js';
+import {
+  createModelGatewayModel,
+  createModelGatewayPiStream,
+} from '../src/agent/model-gateway-pi-stream.js';
 import { runPiAgentSegment } from '../src/agent/pi-agent-adapter.js';
-import { restorePiMessages, serializePiContext, replaceDeferredToolResults } from '../src/agent/pi-context-codec.js';
+import {
+  restorePiMessages,
+  serializePiContext,
+  replaceDeferredToolResults,
+} from '../src/agent/pi-context-codec.js';
 
 describe('PiAgentAdapter', () => {
   it('runs the real Pi Agent loop and stops at deferred tool boundary', async () => {
@@ -21,10 +28,10 @@ describe('PiAgentAdapter', () => {
         maxContextBytes: 262_144,
       });
 
-      expect(result.segmentResult.status).toBe('tool_requested');
       if (result.segmentResult.status !== 'tool_requested') {
-        throw new Error('expected tool request');
+        throw new Error(`expected tool request, got ${JSON.stringify(result.segmentResult)}`);
       }
+      expect(result.segmentResult.status).toBe('tool_requested');
       expect(result.segmentResult.proposed_tool_calls[0]).toMatchObject({
         tool_name: 'knowledge.search',
         tool_version: '1.0.0',
@@ -63,32 +70,49 @@ describe('PiAgentAdapter', () => {
   });
 
   it('sanitizes hidden reasoning and replaces deferred tool result idempotently', () => {
-    const context = serializePiContext([
-      {
-        role: 'assistant',
-        content: [
-          { type: 'thinking', thinking: 'secret chain of thought', thinkingSignature: 'opaque' },
-          { type: 'text', text: 'visible answer with Authorization: Bearer abc123' },
-          { type: 'toolCall', id: 'call_1', name: 'knowledge.search', arguments: { api_key: 'secret', query: 'x' } },
-        ],
-        api: 'test',
-        provider: 'test',
-        model: 'test',
-        diagnostics: [{ hidden_reasoning: 'do not store' }],
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: 'toolUse',
-        timestamp: 1,
-      },
-      {
-        role: 'toolResult',
-        toolCallId: 'call_1',
-        toolName: 'knowledge.search',
-        content: [{ type: 'text', text: 'Deferred tool proposal captured for knowledge.search.' }],
-        details: { kind: 'deferred_tool_proposal', token: 'secret-token' },
-        isError: false,
-        timestamp: 2,
-      },
-    ], { maxBytes: 262_144 });
+    const context = serializePiContext(
+      [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'secret chain of thought', thinkingSignature: 'opaque' },
+            { type: 'text', text: 'visible answer with Authorization: Bearer abc123' },
+            {
+              type: 'toolCall',
+              id: 'call_1',
+              name: 'knowledge.search',
+              arguments: { api_key: 'secret', query: 'x' },
+            },
+          ],
+          api: 'test',
+          provider: 'test',
+          model: 'test',
+          diagnostics: [{ hidden_reasoning: 'do not store' }],
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: 'toolUse',
+          timestamp: 1,
+        },
+        {
+          role: 'toolResult',
+          toolCallId: 'call_1',
+          toolName: 'knowledge.search',
+          content: [
+            { type: 'text', text: 'Deferred tool proposal captured for knowledge.search.' },
+          ],
+          details: { kind: 'deferred_tool_proposal', token: 'secret-token' },
+          isError: false,
+          timestamp: 2,
+        },
+      ],
+      { maxBytes: 262_144 },
+    );
 
     expect(JSON.stringify(context)).not.toContain('secret chain of thought');
     expect(JSON.stringify(context)).not.toContain('hidden_reasoning');
@@ -96,15 +120,21 @@ describe('PiAgentAdapter', () => {
     expect(JSON.stringify(context)).toContain('[REDACTED]');
 
     const restored = restorePiMessages(context);
-    const replaced = replaceDeferredToolResults(restored, [{
-      tool_call_id: 'call_1',
-      tool_name: 'knowledge.search',
-      tool_version: '1.0.0',
-      result_summary: 'real result',
-      is_error: false,
-      content: [{ type: 'text', text: 'real result' }],
-      details: { result_ref: 'ref_1' },
-    }], { maxBytes: 262_144 });
+    const replaced = replaceDeferredToolResults(
+      restored,
+      [
+        {
+          tool_call_id: 'call_1',
+          tool_name: 'knowledge.search',
+          tool_version: '1.0.0',
+          result_summary: 'real result',
+          is_error: false,
+          content: [{ type: 'text', text: 'real result' }],
+          details: { result_ref: 'ref_1' },
+        },
+      ],
+      { maxBytes: 262_144 },
+    );
 
     const toolResults = replaced.messages.filter((message) => message.role === 'toolResult');
     expect(toolResults).toHaveLength(1);
@@ -144,7 +174,11 @@ describe('PiAgentAdapter', () => {
   });
 
   it('maps structured Model Gateway tool calls into Pi deferred tool proposals', async () => {
-    const observedRequests: Array<{ url: string; idempotencyKey: string | undefined; body: Record<string, unknown> }> = [];
+    const observedRequests: Array<{
+      url: string;
+      idempotencyKey: string | undefined;
+      body: Record<string, unknown>;
+    }> = [];
     const server = await import('node:http').then(({ createServer }) =>
       createServer((request, response) => {
         if (request.url !== '/v1/chat/completions') {
@@ -160,30 +194,39 @@ describe('PiAgentAdapter', () => {
           const bodyText = Buffer.concat(chunks).toString('utf8');
           observedRequests.push({
             url: request.url ?? '',
-            idempotencyKey: typeof request.headers['idempotency-key'] === 'string' ? request.headers['idempotency-key'] : undefined,
+            idempotencyKey:
+              typeof request.headers['idempotency-key'] === 'string'
+                ? request.headers['idempotency-key']
+                : undefined,
             body: JSON.parse(bodyText) as Record<string, unknown>,
           });
           response.setHeader('content-type', 'application/json');
-          response.end(JSON.stringify({
-            id: 'chatcmpl_1',
-            model: 'dar-local-model',
-            choices: [{
-              finish_reason: 'tool_calls',
-              message: {
-                role: 'assistant',
-                content: null,
-                tool_calls: [{
-                  id: 'call_model_1',
-                  type: 'function',
-                  function: {
-                    name: 'knowledge.search',
-                    arguments: JSON.stringify({ query: 'from model gateway' }),
+          response.end(
+            JSON.stringify({
+              id: 'chatcmpl_1',
+              model: 'dar-local-model',
+              choices: [
+                {
+                  finish_reason: 'tool_calls',
+                  message: {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: 'call_model_1',
+                        type: 'function',
+                        function: {
+                          name: 'tool_knowledge_search_f2405c6159c9',
+                          arguments: JSON.stringify({ query: 'from model gateway' }),
+                        },
+                      },
+                    ],
                   },
-                }],
-              },
-            }],
-            usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
-          }));
+                },
+              ],
+              usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+            }),
+          );
         });
       }),
     );
@@ -209,6 +252,7 @@ describe('PiAgentAdapter', () => {
           timeoutMs: 5_000,
           maxRetries: 0,
           maxResponseBytes: 1_000_000,
+          maxLedgerResponseBytes: 1_048_576,
           allowInsecureHttp: true,
           idempotencyHeader: 'Idempotency-Key',
           userAgent: 'durable-agent-runtime-lite/runtime-worker-test',
@@ -220,10 +264,10 @@ describe('PiAgentAdapter', () => {
         maxContextBytes: 262_144,
       });
 
-      expect(result.segmentResult.status).toBe('tool_requested');
       if (result.segmentResult.status !== 'tool_requested') {
-        throw new Error('expected tool request');
+        throw new Error(`expected tool request, got ${JSON.stringify(result.segmentResult)}`);
       }
+      expect(result.segmentResult.status).toBe('tool_requested');
       expect(result.segmentResult.proposed_tool_calls[0]).toMatchObject({
         call_id: 'call_model_1',
         tool_name: 'knowledge.search',
@@ -238,7 +282,10 @@ describe('PiAgentAdapter', () => {
         model: 'dar-local-model',
         tool_choice: 'auto',
       });
-      expect(JSON.stringify(observedRequests[0]?.body)).toContain('knowledge.search');
+      expect(JSON.stringify(observedRequests[0]?.body)).not.toContain('knowledge.search');
+      expect(JSON.stringify(observedRequests[0]?.body)).toContain(
+        'tool_knowledge_search_f2405c6159c9',
+      );
       expect(ledger.modelCalls[0]).toMatchObject({
         tenant_id: 'tenant_1',
         agent_run_id: 'agent_run_1',
@@ -259,7 +306,281 @@ describe('PiAgentAdapter', () => {
       });
       expect(JSON.stringify(ledger.modelCalls[0]?.safe_response_json)).not.toContain('test-key');
     } finally {
-      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it('keeps assistant tool call ids and sends tool results with after-tool tool choice', async () => {
+    const observedRequests: Array<Record<string, unknown>> = [];
+    const server = await import('node:http').then(({ createServer }) =>
+      createServer((request, response) => {
+        if (request.url !== '/v1/chat/completions') {
+          response.statusCode = 404;
+          response.end();
+          return;
+        }
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => {
+          chunks.push(chunk);
+        });
+        request.on('end', () => {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<
+            string,
+            unknown
+          >;
+          observedRequests.push(body);
+          response.setHeader('content-type', 'application/json');
+          response.end(
+            JSON.stringify({
+              id: `chatcmpl_${observedRequests.length}`,
+              model: 'dar-local-model',
+              choices:
+                observedRequests.length === 1
+                  ? [
+                      {
+                        finish_reason: 'tool_calls',
+                        message: {
+                          role: 'assistant',
+                          content: null,
+                          tool_calls: [
+                            {
+                              id: 'call_model_1',
+                              type: 'function',
+                              function: {
+                                name: 'tool_knowledge_search_f2405c6159c9',
+                                arguments: JSON.stringify({ query: 'from model gateway' }),
+                              },
+                            },
+                          ],
+                        },
+                      },
+                    ]
+                  : [
+                      {
+                        finish_reason: 'stop',
+                        message: { role: 'assistant', content: 'final after tool' },
+                      },
+                    ],
+              usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+            }),
+          );
+        });
+      }),
+    );
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('server did not bind to a TCP port');
+    }
+    const executionPlan = {
+      ...plan('model_gateway:readonly_tool'),
+      resolved_model_policy: {
+        ...plan('model_gateway:readonly_tool').resolved_model_policy,
+        request_policy: {
+          ...plan('model_gateway:readonly_tool').resolved_model_policy.request_policy,
+          initial_tool_choice_mode: 'required',
+          after_tool_result_tool_choice_mode: 'none',
+        },
+      },
+    };
+    const target = firstModelTarget(executionPlan);
+    const ledger = createModelCallLedgerDb();
+    const streamFn = createModelGatewayPiStream({
+      db: ledger.db,
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      apiKey: 'test-key',
+      executionPlan,
+      agentRun: agentRunFor(executionPlan),
+      segmentIndex: 0,
+      timeoutMs: 5_000,
+      maxRetries: 0,
+      maxResponseBytes: 1_000_000,
+      maxLedgerResponseBytes: 1_048_576,
+      allowInsecureHttp: true,
+      idempotencyHeader: 'Idempotency-Key',
+      userAgent: 'durable-agent-runtime-lite/runtime-worker-test',
+      allowedModelIds: new Set([target.model_id]),
+    });
+    try {
+      const first = await runPiAgentSegment({
+        executionPlan,
+        model: createModelGatewayModel(target),
+        streamFn,
+        initialUserInput: 'readonly_tool',
+        segmentIndex: 0,
+        budgetRemaining: executionPlan.budget,
+        maxContextBytes: 262_144,
+      });
+      if (first.segmentResult.status !== 'tool_requested') {
+        throw new Error(`expected tool request, got ${JSON.stringify(first.segmentResult)}`);
+      }
+      expect(first.segmentResult.status).toBe('tool_requested');
+      const nextContext = replaceDeferredToolResults(
+        first.messages,
+        [
+          {
+            tool_call_id: 'call_model_1',
+            tool_name: 'knowledge.search',
+            tool_version: '1.0.0',
+            result_summary: 'real result',
+            is_error: false,
+            content: [{ type: 'text', text: 'real result' }],
+            details: { result_ref: 'ref_1' },
+          },
+        ],
+        { maxBytes: 262_144 },
+      );
+
+      const second = await runPiAgentSegment({
+        executionPlan,
+        model: createModelGatewayModel(target),
+        streamFn,
+        contextMessages: nextContext.messages,
+        segmentIndex: 1,
+        budgetRemaining: executionPlan.budget,
+        maxContextBytes: 262_144,
+      });
+
+      expect(second.segmentResult.status).toBe('completed');
+      expect(observedRequests[0]).toMatchObject({ tool_choice: 'required' });
+      expect(observedRequests[1]).toMatchObject({
+        tool_choice: 'none',
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: 'assistant',
+            tool_calls: [
+              expect.objectContaining({
+                id: 'call_model_1',
+                function: expect.objectContaining({ name: 'tool_knowledge_search_f2405c6159c9' }),
+              }),
+            ],
+          }),
+          expect.objectContaining({
+            role: 'tool',
+            tool_call_id: 'call_model_1',
+            content: 'real result',
+          }),
+        ]),
+      });
+      expect(ledger.modelCalls).toHaveLength(2);
+      expect(String(ledger.modelCalls[0]?.model_request_key)).not.toContain(target.target_id);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it('resumes failed logical model calls with the next global attempt index', async () => {
+    let requestCount = 0;
+    const server = await import('node:http').then(({ createServer }) =>
+      createServer((request, response) => {
+        if (request.url !== '/v1/chat/completions') {
+          response.statusCode = 404;
+          response.end();
+          return;
+        }
+        request.resume();
+        request.on('end', () => {
+          requestCount += 1;
+          response.setHeader('content-type', 'application/json');
+          if (requestCount === 1) {
+            response.statusCode = 503;
+            response.end(JSON.stringify({ error: { message: 'temporary unavailable' } }));
+            return;
+          }
+          response.end(
+            JSON.stringify({
+              id: 'chatcmpl_recovered',
+              model: 'dar-local-model',
+              choices: [
+                {
+                  finish_reason: 'tool_calls',
+                  message: {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: 'call_recovered_1',
+                        type: 'function',
+                        function: {
+                          name: 'tool_knowledge_search_f2405c6159c9',
+                          arguments: JSON.stringify({ query: 'after retry recovery' }),
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+              usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+            }),
+          );
+        });
+      }),
+    );
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('server did not bind to a TCP port');
+    }
+    const executionPlan = plan('model_gateway:readonly_tool');
+    const target = firstModelTarget(executionPlan);
+    const ledger = createModelCallLedgerDb();
+    const streamOptions = {
+      db: ledger.db,
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      apiKey: 'test-key',
+      executionPlan,
+      agentRun: agentRunFor(executionPlan),
+      segmentIndex: 0,
+      timeoutMs: 5_000,
+      maxRetries: 0,
+      maxResponseBytes: 1_000_000,
+      maxLedgerResponseBytes: 1_048_576,
+      allowInsecureHttp: true,
+      idempotencyHeader: 'Idempotency-Key',
+      userAgent: 'durable-agent-runtime-lite/runtime-worker-test',
+      allowedModelIds: new Set([target.model_id]),
+    };
+    try {
+      const failed = await runPiAgentSegment({
+        executionPlan,
+        model: createModelGatewayModel(target),
+        streamFn: createModelGatewayPiStream(streamOptions),
+        initialUserInput: 'readonly_tool',
+        segmentIndex: 0,
+        budgetRemaining: executionPlan.budget,
+        maxContextBytes: 262_144,
+      });
+      expect(failed.segmentResult.status).toBe('failed');
+
+      const recovered = await runPiAgentSegment({
+        executionPlan,
+        model: createModelGatewayModel(target),
+        streamFn: createModelGatewayPiStream(streamOptions),
+        initialUserInput: 'readonly_tool',
+        segmentIndex: 0,
+        budgetRemaining: executionPlan.budget,
+        maxContextBytes: 262_144,
+      });
+
+      expect(recovered.segmentResult.status).toBe('tool_requested');
+      expect(ledger.modelCalls).toHaveLength(1);
+      expect(ledger.modelCalls[0]).toMatchObject({
+        status: 'succeeded',
+        attempt_count: 2,
+        model_request_key: expect.stringContaining('model:agent_run_1:segment:0:turn:0:'),
+      });
+      expect(ledger.attempts).toHaveLength(2);
+      expect(ledger.attempts.map((attempt) => attempt.global_attempt_index)).toEqual([0, 1]);
+      expect(ledger.attempts.map((attempt) => attempt.target_attempt_index)).toEqual([0, 0]);
+      expect(ledger.attempts.map((attempt) => attempt.fallback_index)).toEqual([0, 0]);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
     }
   });
 });
@@ -281,17 +602,19 @@ function plan(modelPolicy: string): AgentExecutionPlan {
     model_policy_version: resolvedModelPolicy.model_policy_version,
     model_policy_hash: resolvedModelPolicy.model_policy_hash,
     resolved_model_policy: resolvedModelPolicy,
-    allowed_tools: [{
-      tool_name: 'knowledge.search',
-      tool_version: '1.0.0',
-      tool_sha256: 'a'.repeat(64),
-      risk_level: 'L1',
-      input_schema: {
-        type: 'object',
-        properties: { query: { type: 'string' } },
-        required: ['query'],
+    allowed_tools: [
+      {
+        tool_name: 'knowledge.search',
+        tool_version: '1.0.0',
+        tool_sha256: 'a'.repeat(64),
+        risk_level: 'L1',
+        input_schema: {
+          type: 'object',
+          properties: { query: { type: 'string' } },
+          required: ['query'],
+        },
       },
-    }],
+    ],
     allowed_handoffs: [],
     budget: {
       max_segments: 8,
@@ -317,17 +640,19 @@ function plan(modelPolicy: string): AgentExecutionPlan {
       model_policy_version: resolvedModelPolicy.model_policy_version,
       model_policy_hash: resolvedModelPolicy.model_policy_hash,
       resolved_model_policy: resolvedModelPolicy,
-      allowed_tools: [{
-        tool_name: 'knowledge.search',
-        tool_version: '1.0.0',
-        tool_sha256: 'a'.repeat(64),
-        risk_level: 'L1',
-        input_schema: {
-          type: 'object',
-          properties: { query: { type: 'string' } },
-          required: ['query'],
+      allowed_tools: [
+        {
+          tool_name: 'knowledge.search',
+          tool_version: '1.0.0',
+          tool_sha256: 'a'.repeat(64),
+          risk_level: 'L1',
+          input_schema: {
+            type: 'object',
+            properties: { query: { type: 'string' } },
+            required: ['query'],
+          },
         },
-      }],
+      ],
       allowed_handoffs: [],
       budget: {
         max_segments: 8,
@@ -348,24 +673,29 @@ function plan(modelPolicy: string): AgentExecutionPlan {
 
 function resolvedModelPolicyFor(modelPolicy: string): ResolvedModelPolicy {
   const isModelGateway = modelPolicy.startsWith('model_gateway:');
-  const capabilities: ResolvedModelPolicy['resolved_targets'][number]['capabilities'] = isModelGateway
-    ? ['text', 'tools', 'usage']
-    : ['text', 'tools'];
+  const capabilities: ResolvedModelPolicy['resolved_targets'][number]['capabilities'] =
+    isModelGateway ? ['text', 'tools', 'usage'] : ['text', 'tools'];
   const modelId = isModelGateway ? 'dar-local-model' : modelPolicy;
   const gatewayProfile = isModelGateway ? 'local-openai-compatible' : 'local-deterministic';
   return {
-    model_policy_id: isModelGateway ? 'model-gateway-readonly-tool' : modelPolicy.replace(/[^a-z0-9_-]+/giu, '-'),
+    model_policy_id: isModelGateway
+      ? 'model-gateway-readonly-tool'
+      : modelPolicy.replace(/[^a-z0-9_-]+/giu, '-'),
     model_policy_version: 1,
     model_policy_hash: 'f'.repeat(64),
     protocol: isModelGateway ? 'openai_chat_completions' : 'dar_generate',
-    resolved_targets: [{
-      target_id: isModelGateway ? 'local-openai-compatible-primary' : 'local-deterministic-primary',
-      gateway_profile: gatewayProfile,
-      model_id: modelId,
-      priority: 0,
-      enabled: true,
-      capabilities,
-    }],
+    resolved_targets: [
+      {
+        target_id: isModelGateway
+          ? 'local-openai-compatible-primary'
+          : 'local-deterministic-primary',
+        gateway_profile: gatewayProfile,
+        model_id: modelId,
+        priority: 0,
+        enabled: true,
+        capabilities,
+      },
+    ],
     retry_policy: {
       max_attempts_per_target: 1,
       retryable_status_codes: [408, 429, 500, 502, 503, 504],
@@ -386,14 +716,17 @@ function resolvedModelPolicyFor(modelPolicy: string): ResolvedModelPolicy {
       temperature: 0,
       top_p: 1,
       max_output_tokens: 1000,
-      tool_choice_mode: 'auto',
+      initial_tool_choice_mode: 'auto',
+      after_tool_result_tool_choice_mode: 'auto',
       response_format: 'text',
       allow_parallel_tool_calls: false,
     },
   };
 }
 
-function firstModelTarget(executionPlan: AgentExecutionPlan): ResolvedModelPolicy['resolved_targets'][number] {
+function firstModelTarget(
+  executionPlan: AgentExecutionPlan,
+): ResolvedModelPolicy['resolved_targets'][number] {
   const target = executionPlan.resolved_model_policy.resolved_targets[0];
   if (!target) {
     throw new Error('test execution plan must include a ModelPolicy target');

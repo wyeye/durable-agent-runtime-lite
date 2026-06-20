@@ -259,7 +259,12 @@ export interface ModelPolicyWriteOptions extends RepositoryTenantOptions {
 
 export interface ModelPolicyUpdateDraftInput extends ModelPolicyWriteOptions {
   expectedRevision: number;
-  policy: Partial<Omit<ModelPolicy, 'model_policy_id' | 'version' | 'revision' | 'created_at' | 'updated_at' | 'published_at'>>;
+  policy: Partial<
+    Omit<
+      ModelPolicy,
+      'model_policy_id' | 'version' | 'revision' | 'created_at' | 'updated_at' | 'published_at'
+    >
+  >;
 }
 
 export interface ModelPolicyReleaseOptions extends ModelPolicyWriteOptions {
@@ -313,7 +318,9 @@ export interface ModelCallListOptions extends RepositoryTenantOptions {
 export interface ModelCallAttemptStartInput {
   attempt_id?: string;
   model_call_id: string;
-  attempt_index: number;
+  global_attempt_index: number;
+  target_attempt_index: number;
+  fallback_index: number;
   target_id: string;
   provider?: string;
   model_id: string;
@@ -385,7 +392,12 @@ export interface TenantPolicyWriteOptions extends RepositoryTenantOptions {
 
 export interface TenantPolicyUpdateDraftInput extends TenantPolicyWriteOptions {
   expectedRevision: number;
-  policy: Partial<Omit<TenantRuntimePolicy, 'tenant_id' | 'version' | 'revision' | 'created_at' | 'updated_at' | 'published_at'>>;
+  policy: Partial<
+    Omit<
+      TenantRuntimePolicy,
+      'tenant_id' | 'version' | 'revision' | 'created_at' | 'updated_at' | 'published_at'
+    >
+  >;
 }
 
 export interface TenantPolicyReleaseOptions extends TenantPolicyWriteOptions {
@@ -408,7 +420,23 @@ export interface CreateTenantPolicySnapshotInput {
   parentSnapshotRef?: string;
   derivationType?: TenantPolicySnapshotDerivationType;
   lineageDepth?: number;
-  resolvedPolicy: Omit<TenantRuntimePolicySnapshot, 'snapshot_id' | 'snapshot_ref' | 'tenant_id' | 'root_snapshot_ref' | 'parent_snapshot_ref' | 'derivation_type' | 'lineage_depth' | 'source_policy_version' | 'source_policy_hash' | 'execution_plan_ref' | 'execution_plan_hash' | 'execution_plan_type' | 'snapshot_hash' | 'created_at'>;
+  resolvedPolicy: Omit<
+    TenantRuntimePolicySnapshot,
+    | 'snapshot_id'
+    | 'snapshot_ref'
+    | 'tenant_id'
+    | 'root_snapshot_ref'
+    | 'parent_snapshot_ref'
+    | 'derivation_type'
+    | 'lineage_depth'
+    | 'source_policy_version'
+    | 'source_policy_hash'
+    | 'execution_plan_ref'
+    | 'execution_plan_hash'
+    | 'execution_plan_type'
+    | 'snapshot_hash'
+    | 'created_at'
+  >;
 }
 
 export interface TenantAdmissionReserveInput {
@@ -451,7 +479,10 @@ export interface ListAgentRunsOptions extends RepositoryTenantOptions {
   offset?: number;
 }
 
-export interface CreateAgentStepInput extends Omit<AgentStepRecord, 'agent_step_id' | 'created_at' | 'updated_at'> {
+export interface CreateAgentStepInput extends Omit<
+  AgentStepRecord,
+  'agent_step_id' | 'created_at' | 'updated_at'
+> {
   agent_step_id?: string;
 }
 
@@ -493,7 +524,9 @@ export function buildDbFlowSnapshotRef(flowId: string, version: number): string 
   return `db://flow/${encodeURIComponent(flowId)}/versions/${version}`;
 }
 
-export function parseDbFlowSnapshotRef(ref: string): { flowId: string; version: number } | undefined {
+export function parseDbFlowSnapshotRef(
+  ref: string,
+): { flowId: string; version: number } | undefined {
   const match = /^db:\/\/flow\/([^/]+)\/versions\/([1-9]\d*)$/u.exec(ref);
   if (!match) {
     return undefined;
@@ -548,7 +581,12 @@ export class FlowDefinitionRepository {
       schema: flowSpecSchema,
       getSpecId: (spec) => spec.flow_id,
       getSpecVersion: (spec) => spec.version,
-      withIdentity: (spec, resourceId, version, status) => ({ ...spec, flow_id: resourceId, version, status }),
+      withIdentity: (spec, resourceId, version, status) => ({
+        ...spec,
+        flow_id: resourceId,
+        version,
+        status,
+      }),
     });
   }
 
@@ -556,63 +594,117 @@ export class FlowDefinitionRepository {
     return this.registry.list(options);
   }
 
-  getByIdAndVersion(flowId: string, version: number, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<FlowSpec> | undefined> {
+  getByIdAndVersion(
+    flowId: string,
+    version: number,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<FlowSpec> | undefined> {
     return this.registry.getByIdAndVersion(flowId, version, options);
   }
 
-  getLatestVersion(flowId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<FlowSpec> | undefined> {
+  getLatestVersion(
+    flowId: string,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<FlowSpec> | undefined> {
     return this.registry.getLatestVersion(flowId, options);
   }
 
-  getLatestPublishedVersion(flowId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<FlowSpec> | undefined> {
+  getLatestPublishedVersion(
+    flowId: string,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<FlowSpec> | undefined> {
     return this.registry.getLatestPublishedVersion(flowId, options);
   }
 
-  listVersions(flowId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<FlowSpec>[]> {
+  listVersions(
+    flowId: string,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<FlowSpec>[]> {
     return this.registry.listVersions(flowId, options);
   }
 
-  createDraft(flowSpec: FlowSpec, options: RegistryWriteOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+  createDraft(
+    flowSpec: FlowSpec,
+    options: RegistryWriteOptions,
+  ): Promise<RegistryResourceRecord<FlowSpec>> {
     return this.registry.createDraft(flowSpec, options);
   }
 
-  updateDraft(flowId: string, version: number, input: RegistryUpdateDraftInput<FlowSpec>): Promise<RegistryResourceRecord<FlowSpec>> {
+  updateDraft(
+    flowId: string,
+    version: number,
+    input: RegistryUpdateDraftInput<FlowSpec>,
+  ): Promise<RegistryResourceRecord<FlowSpec>> {
     return this.registry.updateDraft(flowId, version, input);
   }
 
-  cloneVersion(flowId: string, version: number, options: RegistryCloneOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+  cloneVersion(
+    flowId: string,
+    version: number,
+    options: RegistryCloneOptions,
+  ): Promise<RegistryResourceRecord<FlowSpec>> {
     return this.registry.cloneVersion(flowId, version, options);
   }
 
-  markValidated(flowId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+  markValidated(
+    flowId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<FlowSpec>> {
     return this.registry.markValidated(flowId, version, options);
   }
 
-  publish(flowId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+  publish(
+    flowId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<FlowSpec>> {
     return this.registry.publish(flowId, version, options);
   }
 
-  setGray(flowId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+  setGray(
+    flowId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<FlowSpec>> {
     return this.registry.setGray(flowId, version, options);
   }
 
-  deprecate(flowId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+  deprecate(
+    flowId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<FlowSpec>> {
     return this.registry.deprecate(flowId, version, options);
   }
 
-  disable(flowId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+  disable(
+    flowId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<FlowSpec>> {
     return this.registry.disable(flowId, version, options);
   }
 
-  rollback(flowId: string, targetVersion: number, options: RegistryRollbackOptions): Promise<RegistryResourceRecord<FlowSpec>> {
+  rollback(
+    flowId: string,
+    targetVersion: number,
+    options: RegistryRollbackOptions,
+  ): Promise<RegistryResourceRecord<FlowSpec>> {
     return this.registry.rollback(flowId, targetVersion, options);
   }
 
-  listReleaseHistory(flowId: string, options: RegistryListOptions = {}): Promise<CapabilityRelease[]> {
+  listReleaseHistory(
+    flowId: string,
+    options: RegistryListOptions = {},
+  ): Promise<CapabilityRelease[]> {
     return this.registry.listReleaseHistory(flowId, options);
   }
 
-  selectVersionForRequest(flowId: string, input: { tenantId?: string; userId?: string }): Promise<RegistryResourceRecord<FlowSpec> | undefined> {
+  selectVersionForRequest(
+    flowId: string,
+    input: { tenantId?: string; userId?: string },
+  ): Promise<RegistryResourceRecord<FlowSpec> | undefined> {
     return this.registry.selectVersionForRequest(flowId, input);
   }
 
@@ -629,7 +721,11 @@ export class FlowDefinitionRepository {
     return rows.map((row) => flowSpecSchema.parse(row.spec_json));
   }
 
-  async getPublished(flowId: string, version: number, options: RepositoryTenantOptions = {}): Promise<FlowSpec | undefined> {
+  async getPublished(
+    flowId: string,
+    version: number,
+    options: RepositoryTenantOptions = {},
+  ): Promise<FlowSpec | undefined> {
     const row = await this.db
       .selectFrom('flow_definition')
       .select(['spec_json'])
@@ -654,9 +750,13 @@ export class FlowDefinitionRepository {
       sha256: parsed.sha256 ?? hashJson(parsed),
       created_by: options.createdBy ?? null,
       updated_by: options.createdBy ?? null,
-      published_by: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? options.createdBy ?? null : null,
+      published_by: executableSpecStatuses.includes(status as ExecutableSpecStatus)
+        ? (options.createdBy ?? null)
+        : null,
       updated_at: new Date(),
-      published_at: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? new Date() : null,
+      published_at: executableSpecStatuses.includes(status as ExecutableSpecStatus)
+        ? new Date()
+        : null,
       revision: 1,
       gray_policy_json: grayPolicySchema.parse({}),
     };
@@ -714,12 +814,18 @@ export async function buildFlowExecutionPlan(
   input: BuildFlowExecutionPlanInput,
 ): Promise<FlowExecutionPlan> {
   const tenantId = tenant(input);
-  const flow = await new FlowDefinitionRepository(db).getByIdAndVersion(input.flowId, input.flowVersion, { tenantId });
+  const flow = await new FlowDefinitionRepository(db).getByIdAndVersion(
+    input.flowId,
+    input.flowVersion,
+    { tenantId },
+  );
   if (!flow) {
     throw new Error(`FlowSpec exact version not found: ${input.flowId}@${input.flowVersion}`);
   }
   if (!isDependencyPublishable(flow.status)) {
-    throw new Error(`FlowSpec is not executable for plan generation: ${input.flowId}@${input.flowVersion}`);
+    throw new Error(
+      `FlowSpec is not executable for plan generation: ${input.flowId}@${input.flowVersion}`,
+    );
   }
 
   const agents: FlowExecutionPlanAgent[] = [];
@@ -734,12 +840,15 @@ export async function buildFlowExecutionPlan(
       if (!step.tool_version) {
         throw new Error(`Flow tool step missing exact tool_version: ${step.id}`);
       }
-      addToolEntry(toolEntries, await resolveToolPlanEntry(db, {
-        stepId: step.id,
-        toolName: step.tool,
-        toolVersion: step.tool_version,
-        tenantId,
-      }));
+      addToolEntry(
+        toolEntries,
+        await resolveToolPlanEntry(db, {
+          stepId: step.id,
+          toolName: step.tool,
+          toolVersion: step.tool_version,
+          tenantId,
+        }),
+      );
     }
 
     if (step.type === 'agent') {
@@ -750,24 +859,38 @@ export async function buildFlowExecutionPlan(
       if (!agentVersion) {
         throw new Error(`Flow agent step missing exact input.agent_version: ${step.id}`);
       }
-      const agentRecord = await new AgentSpecRepository(db).getByIdAndVersion(step.agent_id, agentVersion, { tenantId });
+      const agentRecord = await new AgentSpecRepository(db).getByIdAndVersion(
+        step.agent_id,
+        agentVersion,
+        { tenantId },
+      );
       if (!agentRecord) {
         throw new Error(`AgentSpec exact version not found: ${step.agent_id}@${agentVersion}`);
       }
       if (!isDependencyPublishable(agentRecord.status)) {
-        throw new Error(`AgentSpec is not executable for plan generation: ${step.agent_id}@${agentVersion}`);
+        throw new Error(
+          `AgentSpec is not executable for plan generation: ${step.agent_id}@${agentVersion}`,
+        );
       }
 
       const promptRef = parseVersionRef(agentRecord.spec.prompt_ref);
       if (!promptRef) {
-        throw new Error(`Agent prompt_ref must use prompt_id@version: ${agentRecord.spec.agent_id}@${agentRecord.spec.version}`);
+        throw new Error(
+          `Agent prompt_ref must use prompt_id@version: ${agentRecord.spec.agent_id}@${agentRecord.spec.version}`,
+        );
       }
-      const promptRecord = await new PromptDefinitionRepository(db).getByIdAndVersion(promptRef.id, promptRef.version, { tenantId });
+      const promptRecord = await new PromptDefinitionRepository(db).getByIdAndVersion(
+        promptRef.id,
+        promptRef.version,
+        { tenantId },
+      );
       if (!promptRecord) {
         throw new Error(`PromptDefinition exact version not found: ${agentRecord.spec.prompt_ref}`);
       }
       if (!isDependencyPublishable(promptRecord.status)) {
-        throw new Error(`PromptDefinition is not executable for plan generation: ${agentRecord.spec.prompt_ref}`);
+        throw new Error(
+          `PromptDefinition is not executable for plan generation: ${agentRecord.spec.prompt_ref}`,
+        );
       }
 
       const allowedToolRefs = resolveAllowedToolRefs(
@@ -865,9 +988,7 @@ export class FlowExecutionPlanRepository {
     const saved = await this.db
       .insertInto('flow_execution_plan')
       .values(row)
-      .onConflict((oc) =>
-        oc.column('execution_plan_ref').doNothing(),
-      )
+      .onConflict((oc) => oc.column('execution_plan_ref').doNothing())
       .returningAll()
       .executeTakeFirst();
 
@@ -877,12 +998,17 @@ export class FlowExecutionPlanRepository {
 
     const existing = await this.getByRef(plan.execution_plan_ref, { tenantId: plan.tenant_id });
     if (!existing) {
-      throw new Error(`FlowExecutionPlan insert conflict but existing plan was not found: ${plan.execution_plan_ref}`);
+      throw new Error(
+        `FlowExecutionPlan insert conflict but existing plan was not found: ${plan.execution_plan_ref}`,
+      );
     }
     return existing;
   }
 
-  async getByRef(ref: string, options: RepositoryTenantOptions = {}): Promise<FlowExecutionPlan | undefined> {
+  async getByRef(
+    ref: string,
+    options: RepositoryTenantOptions = {},
+  ): Promise<FlowExecutionPlan | undefined> {
     const parsed = parseExecutionPlanRef(ref);
     if (!parsed) {
       return undefined;
@@ -901,7 +1027,11 @@ export class FlowExecutionPlanRepository {
     return row ? mapFlowExecutionPlan(row) : undefined;
   }
 
-  async getLatestForFlow(flowId: string, version: number, options: RepositoryTenantOptions = {}): Promise<FlowExecutionPlan | undefined> {
+  async getLatestForFlow(
+    flowId: string,
+    version: number,
+    options: RepositoryTenantOptions = {},
+  ): Promise<FlowExecutionPlan | undefined> {
     const row = await this.db
       .selectFrom('flow_execution_plan')
       .selectAll()
@@ -920,37 +1050,62 @@ export async function buildAgentExecutionPlan(
   input: BuildAgentExecutionPlanInput,
 ): Promise<AgentExecutionPlan> {
   const tenantId = tenant(input);
-  const agentRecord = await new AgentSpecRepository(db).getByIdAndVersion(input.agentId, input.agentVersion, { tenantId });
+  const agentRecord = await new AgentSpecRepository(db).getByIdAndVersion(
+    input.agentId,
+    input.agentVersion,
+    { tenantId },
+  );
   if (!agentRecord) {
     throw new Error(`AgentSpec exact version not found: ${input.agentId}@${input.agentVersion}`);
   }
   if (!isDependencyPublishable(agentRecord.status)) {
-    throw new Error(`AgentSpec is not executable for plan generation: ${input.agentId}@${input.agentVersion}`);
+    throw new Error(
+      `AgentSpec is not executable for plan generation: ${input.agentId}@${input.agentVersion}`,
+    );
   }
 
   const promptRef = parseVersionRef(agentRecord.spec.prompt_ref);
   if (!promptRef) {
-    throw new Error(`Agent prompt_ref must use prompt_id@version: ${agentRecord.spec.agent_id}@${agentRecord.spec.version}`);
+    throw new Error(
+      `Agent prompt_ref must use prompt_id@version: ${agentRecord.spec.agent_id}@${agentRecord.spec.version}`,
+    );
   }
-  const promptRecord = await new PromptDefinitionRepository(db).getByIdAndVersion(promptRef.id, promptRef.version, { tenantId });
+  const promptRecord = await new PromptDefinitionRepository(db).getByIdAndVersion(
+    promptRef.id,
+    promptRef.version,
+    { tenantId },
+  );
   if (!promptRecord) {
     throw new Error(`PromptDefinition exact version not found: ${agentRecord.spec.prompt_ref}`);
   }
   if (!isDependencyPublishable(promptRecord.status)) {
-    throw new Error(`PromptDefinition is not executable for plan generation: ${agentRecord.spec.prompt_ref}`);
+    throw new Error(
+      `PromptDefinition is not executable for plan generation: ${agentRecord.spec.prompt_ref}`,
+    );
   }
 
   const allowedTools = [];
-  for (const toolRef of parseToolVersionRefs(agentRecord.spec.allowed_tools, 'AgentSpec.allowed_tools')) {
-    const toolRecord = await new ToolManifestRepository(db).getByIdAndVersion(toolRef.name, manifestVersionToRegistryVersion(toolRef.version), { tenantId });
+  for (const toolRef of parseToolVersionRefs(
+    agentRecord.spec.allowed_tools,
+    'AgentSpec.allowed_tools',
+  )) {
+    const toolRecord = await new ToolManifestRepository(db).getByIdAndVersion(
+      toolRef.name,
+      manifestVersionToRegistryVersion(toolRef.version),
+      { tenantId },
+    );
     if (!toolRecord) {
       throw new Error(`ToolManifest exact version not found: ${toolRef.name}@${toolRef.version}`);
     }
     if (toolRecord.spec.version !== toolRef.version) {
-      throw new Error(`ToolManifest version mismatch: requested ${toolRef.name}@${toolRef.version}, got ${toolRecord.spec.version}`);
+      throw new Error(
+        `ToolManifest version mismatch: requested ${toolRef.name}@${toolRef.version}, got ${toolRecord.spec.version}`,
+      );
     }
     if (!isDependencyPublishable(toolRecord.status)) {
-      throw new Error(`ToolManifest is not executable for plan generation: ${toolRef.name}@${toolRef.version}`);
+      throw new Error(
+        `ToolManifest is not executable for plan generation: ${toolRef.name}@${toolRef.version}`,
+      );
     }
     allowedTools.push({
       tool_name: toolRecord.spec.tool_name,
@@ -1051,8 +1206,13 @@ export class AgentExecutionPlanRepository {
 
   async createForAgent(input: BuildAgentExecutionPlanInput): Promise<AgentExecutionPlan> {
     const plan = await buildAgentExecutionPlan(this.db, input);
-    const existing = await this.getByAgentVersion(plan.agent_id, plan.agent_version, { tenantId: plan.tenant_id });
-    if (existing && agentExecutionPlanContentHash(existing) === agentExecutionPlanContentHash(plan)) {
+    const existing = await this.getByAgentVersion(plan.agent_id, plan.agent_version, {
+      tenantId: plan.tenant_id,
+    });
+    if (
+      existing &&
+      agentExecutionPlanContentHash(existing) === agentExecutionPlanContentHash(plan)
+    ) {
       return existing;
     }
 
@@ -1070,7 +1230,9 @@ export class AgentExecutionPlanRepository {
       model_policy_id: plan.model_policy_id ?? null,
       model_policy_version: plan.model_policy_version ?? null,
       model_policy_hash: plan.model_policy_hash ?? null,
-      resolved_model_policy_json: plan.resolved_model_policy ? toDbJson(plan.resolved_model_policy) : null,
+      resolved_model_policy_json: plan.resolved_model_policy
+        ? toDbJson(plan.resolved_model_policy)
+        : null,
       allowed_tools_json: toDbJson(plan.allowed_tools),
       allowed_handoffs_json: toDbJson(plan.allowed_handoffs),
       output_schema_json: plan.output_schema ? toDbJson(plan.output_schema) : null,
@@ -1088,7 +1250,10 @@ export class AgentExecutionPlanRepository {
     return mapAgentExecutionPlan(saved);
   }
 
-  async getByRef(ref: string, options: RepositoryTenantOptions = {}): Promise<AgentExecutionPlan | undefined> {
+  async getByRef(
+    ref: string,
+    options: RepositoryTenantOptions = {},
+  ): Promise<AgentExecutionPlan | undefined> {
     const parsed = parseAgentExecutionPlanRef(ref);
     if (!parsed) {
       return undefined;
@@ -1104,7 +1269,11 @@ export class AgentExecutionPlanRepository {
     return row ? mapAgentExecutionPlan(row) : undefined;
   }
 
-  async getByAgentVersion(agentId: string, version: number, options: RepositoryTenantOptions = {}): Promise<AgentExecutionPlan | undefined> {
+  async getByAgentVersion(
+    agentId: string,
+    version: number,
+    options: RepositoryTenantOptions = {},
+  ): Promise<AgentExecutionPlan | undefined> {
     const row = await this.db
       .selectFrom('agent_execution_plan')
       .selectAll()
@@ -1116,7 +1285,11 @@ export class AgentExecutionPlanRepository {
     return row ? mapAgentExecutionPlan(row) : undefined;
   }
 
-  async verifyHash(ref: string, expectedHash: string, options: RepositoryTenantOptions = {}): Promise<boolean> {
+  async verifyHash(
+    ref: string,
+    expectedHash: string,
+    options: RepositoryTenantOptions = {},
+  ): Promise<boolean> {
     const plan = await this.getByRef(ref, options);
     return Boolean(plan && plan.execution_plan_hash === expectedHash);
   }
@@ -1172,63 +1345,117 @@ export class RouteConfigRepository {
     return this.registry.list(options);
   }
 
-  getByIdAndVersion(routeId: string, version: number, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<RouteSpec> | undefined> {
+  getByIdAndVersion(
+    routeId: string,
+    version: number,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<RouteSpec> | undefined> {
     return this.registry.getByIdAndVersion(routeId, version, options);
   }
 
-  getLatestVersion(routeId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<RouteSpec> | undefined> {
+  getLatestVersion(
+    routeId: string,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<RouteSpec> | undefined> {
     return this.registry.getLatestVersion(routeId, options);
   }
 
-  getLatestPublishedVersion(routeId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<RouteSpec> | undefined> {
+  getLatestPublishedVersion(
+    routeId: string,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<RouteSpec> | undefined> {
     return this.registry.getLatestPublishedVersion(routeId, options);
   }
 
-  listVersions(routeId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<RouteSpec>[]> {
+  listVersions(
+    routeId: string,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<RouteSpec>[]> {
     return this.registry.listVersions(routeId, options);
   }
 
-  createDraft(routeSpec: RouteSpec, options: RegistryWriteOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+  createDraft(
+    routeSpec: RouteSpec,
+    options: RegistryWriteOptions,
+  ): Promise<RegistryResourceRecord<RouteSpec>> {
     return this.registry.createDraft(routeSpec, options);
   }
 
-  updateDraft(routeId: string, version: number, input: RegistryUpdateDraftInput<RouteSpec>): Promise<RegistryResourceRecord<RouteSpec>> {
+  updateDraft(
+    routeId: string,
+    version: number,
+    input: RegistryUpdateDraftInput<RouteSpec>,
+  ): Promise<RegistryResourceRecord<RouteSpec>> {
     return this.registry.updateDraft(routeId, version, input);
   }
 
-  cloneVersion(routeId: string, version: number, options: RegistryCloneOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+  cloneVersion(
+    routeId: string,
+    version: number,
+    options: RegistryCloneOptions,
+  ): Promise<RegistryResourceRecord<RouteSpec>> {
     return this.registry.cloneVersion(routeId, version, options);
   }
 
-  markValidated(routeId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+  markValidated(
+    routeId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<RouteSpec>> {
     return this.registry.markValidated(routeId, version, options);
   }
 
-  publish(routeId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+  publish(
+    routeId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<RouteSpec>> {
     return this.registry.publish(routeId, version, options);
   }
 
-  setGray(routeId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+  setGray(
+    routeId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<RouteSpec>> {
     return this.registry.setGray(routeId, version, options);
   }
 
-  deprecate(routeId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+  deprecate(
+    routeId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<RouteSpec>> {
     return this.registry.deprecate(routeId, version, options);
   }
 
-  disable(routeId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+  disable(
+    routeId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<RouteSpec>> {
     return this.registry.disable(routeId, version, options);
   }
 
-  rollback(routeId: string, targetVersion: number, options: RegistryRollbackOptions): Promise<RegistryResourceRecord<RouteSpec>> {
+  rollback(
+    routeId: string,
+    targetVersion: number,
+    options: RegistryRollbackOptions,
+  ): Promise<RegistryResourceRecord<RouteSpec>> {
     return this.registry.rollback(routeId, targetVersion, options);
   }
 
-  listReleaseHistory(routeId: string, options: RegistryListOptions = {}): Promise<CapabilityRelease[]> {
+  listReleaseHistory(
+    routeId: string,
+    options: RegistryListOptions = {},
+  ): Promise<CapabilityRelease[]> {
     return this.registry.listReleaseHistory(routeId, options);
   }
 
-  selectVersionForRequest(routeId: string, input: { tenantId?: string; userId?: string }): Promise<RegistryResourceRecord<RouteSpec> | undefined> {
+  selectVersionForRequest(
+    routeId: string,
+    input: { tenantId?: string; userId?: string },
+  ): Promise<RegistryResourceRecord<RouteSpec> | undefined> {
     return this.registry.selectVersionForRequest(routeId, input);
   }
 
@@ -1245,7 +1472,10 @@ export class RouteConfigRepository {
     return rows.map((row) => routeSpecSchema.parse(row.route_spec_json));
   }
 
-  async getPublished(routeId: string, options: RepositoryTenantOptions = {}): Promise<RouteSpec | undefined> {
+  async getPublished(
+    routeId: string,
+    options: RepositoryTenantOptions = {},
+  ): Promise<RouteSpec | undefined> {
     const row = await this.db
       .selectFrom('flow_route_config')
       .select(['route_spec_json'])
@@ -1273,8 +1503,12 @@ export class RouteConfigRepository {
       sha256: parsed.sha256 ?? hashJson(parsed),
       created_by: options.createdBy ?? null,
       updated_by: options.createdBy ?? null,
-      published_by: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? options.createdBy ?? null : null,
-      published_at: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? new Date() : null,
+      published_by: executableSpecStatuses.includes(status as ExecutableSpecStatus)
+        ? (options.createdBy ?? null)
+        : null,
+      published_at: executableSpecStatuses.includes(status as ExecutableSpecStatus)
+        ? new Date()
+        : null,
       revision: 1,
       gray_policy_json: grayPolicySchema.parse({}),
     };
@@ -1329,63 +1563,117 @@ export class ToolManifestRepository {
     return this.registry.list(options);
   }
 
-  getByIdAndVersion(toolName: string, version: number, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<ToolManifest> | undefined> {
+  getByIdAndVersion(
+    toolName: string,
+    version: number,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<ToolManifest> | undefined> {
     return this.registry.getByIdAndVersion(toolName, version, options);
   }
 
-  getLatestVersion(toolName: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<ToolManifest> | undefined> {
+  getLatestVersion(
+    toolName: string,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<ToolManifest> | undefined> {
     return this.registry.getLatestVersion(toolName, options);
   }
 
-  getLatestPublishedVersion(toolName: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<ToolManifest> | undefined> {
+  getLatestPublishedVersion(
+    toolName: string,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<ToolManifest> | undefined> {
     return this.registry.getLatestPublishedVersion(toolName, options);
   }
 
-  listVersions(toolName: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<ToolManifest>[]> {
+  listVersions(
+    toolName: string,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<ToolManifest>[]> {
     return this.registry.listVersions(toolName, options);
   }
 
-  createDraft(manifest: ToolManifest, options: RegistryWriteOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+  createDraft(
+    manifest: ToolManifest,
+    options: RegistryWriteOptions,
+  ): Promise<RegistryResourceRecord<ToolManifest>> {
     return this.registry.createDraft(manifest, options);
   }
 
-  updateDraft(toolName: string, version: number, input: RegistryUpdateDraftInput<ToolManifest>): Promise<RegistryResourceRecord<ToolManifest>> {
+  updateDraft(
+    toolName: string,
+    version: number,
+    input: RegistryUpdateDraftInput<ToolManifest>,
+  ): Promise<RegistryResourceRecord<ToolManifest>> {
     return this.registry.updateDraft(toolName, version, input);
   }
 
-  cloneVersion(toolName: string, version: number, options: RegistryCloneOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+  cloneVersion(
+    toolName: string,
+    version: number,
+    options: RegistryCloneOptions,
+  ): Promise<RegistryResourceRecord<ToolManifest>> {
     return this.registry.cloneVersion(toolName, version, options);
   }
 
-  markValidated(toolName: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+  markValidated(
+    toolName: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<ToolManifest>> {
     return this.registry.markValidated(toolName, version, options);
   }
 
-  publish(toolName: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+  publish(
+    toolName: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<ToolManifest>> {
     return this.registry.publish(toolName, version, options);
   }
 
-  setGray(toolName: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+  setGray(
+    toolName: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<ToolManifest>> {
     return this.registry.setGray(toolName, version, options);
   }
 
-  deprecate(toolName: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+  deprecate(
+    toolName: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<ToolManifest>> {
     return this.registry.deprecate(toolName, version, options);
   }
 
-  disable(toolName: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+  disable(
+    toolName: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<ToolManifest>> {
     return this.registry.disable(toolName, version, options);
   }
 
-  rollback(toolName: string, targetVersion: number, options: RegistryRollbackOptions): Promise<RegistryResourceRecord<ToolManifest>> {
+  rollback(
+    toolName: string,
+    targetVersion: number,
+    options: RegistryRollbackOptions,
+  ): Promise<RegistryResourceRecord<ToolManifest>> {
     return this.registry.rollback(toolName, targetVersion, options);
   }
 
-  listReleaseHistory(toolName: string, options: RegistryListOptions = {}): Promise<CapabilityRelease[]> {
+  listReleaseHistory(
+    toolName: string,
+    options: RegistryListOptions = {},
+  ): Promise<CapabilityRelease[]> {
     return this.registry.listReleaseHistory(toolName, options);
   }
 
-  selectVersionForRequest(toolName: string, input: { tenantId?: string; userId?: string }): Promise<RegistryResourceRecord<ToolManifest> | undefined> {
+  selectVersionForRequest(
+    toolName: string,
+    input: { tenantId?: string; userId?: string },
+  ): Promise<RegistryResourceRecord<ToolManifest> | undefined> {
     return this.registry.selectVersionForRequest(toolName, input);
   }
 
@@ -1402,7 +1690,10 @@ export class ToolManifestRepository {
     return rows.map((row) => toolManifestSchema.parse(row.spec_json));
   }
 
-  async getPublished(toolName: string, options: RepositoryTenantOptions = {}): Promise<ToolManifest | undefined> {
+  async getPublished(
+    toolName: string,
+    options: RepositoryTenantOptions = {},
+  ): Promise<ToolManifest | undefined> {
     const row = await this.db
       .selectFrom('tool_manifest')
       .select(['spec_json'])
@@ -1427,9 +1718,13 @@ export class ToolManifestRepository {
       sha256: parsed.sha256 ?? hashJson(parsed),
       created_by: options.createdBy ?? null,
       updated_by: options.createdBy ?? null,
-      published_by: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? options.createdBy ?? null : null,
+      published_by: executableSpecStatuses.includes(status as ExecutableSpecStatus)
+        ? (options.createdBy ?? null)
+        : null,
       updated_at: new Date(),
-      published_at: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? new Date() : null,
+      published_at: executableSpecStatuses.includes(status as ExecutableSpecStatus)
+        ? new Date()
+        : null,
       revision: 1,
       gray_policy_json: grayPolicySchema.parse({}),
     };
@@ -1461,7 +1756,10 @@ export class ModelPolicyRepository {
   constructor(private readonly db: Kysely<Database>) {}
 
   async list(options: ModelPolicyListOptions = {}): Promise<ModelPolicy[]> {
-    let query = this.db.selectFrom('model_policy').selectAll().where('tenant_id', '=', tenant(options));
+    let query = this.db
+      .selectFrom('model_policy')
+      .selectAll()
+      .where('tenant_id', '=', tenant(options));
     if (options.status) {
       query = query.where('status', '=', options.status);
     }
@@ -1474,7 +1772,11 @@ export class ModelPolicyRepository {
     return rows.map(mapModelPolicy);
   }
 
-  async getByIdAndVersion(modelPolicyId: string, version: number, options: RepositoryTenantOptions = {}): Promise<ModelPolicy | undefined> {
+  async getByIdAndVersion(
+    modelPolicyId: string,
+    version: number,
+    options: RepositoryTenantOptions = {},
+  ): Promise<ModelPolicy | undefined> {
     const row = await this.db
       .selectFrom('model_policy')
       .selectAll()
@@ -1485,7 +1787,10 @@ export class ModelPolicyRepository {
     return row ? mapModelPolicy(row) : undefined;
   }
 
-  async getLatestPublished(modelPolicyId: string, options: RepositoryTenantOptions = {}): Promise<ModelPolicy | undefined> {
+  async getLatestPublished(
+    modelPolicyId: string,
+    options: RepositoryTenantOptions = {},
+  ): Promise<ModelPolicy | undefined> {
     const row = await this.db
       .selectFrom('model_policy')
       .selectAll()
@@ -1497,7 +1802,10 @@ export class ModelPolicyRepository {
     return row ? mapModelPolicy(row) : undefined;
   }
 
-  async listVersions(modelPolicyId: string, options: ModelPolicyListOptions = {}): Promise<ModelPolicy[]> {
+  async listVersions(
+    modelPolicyId: string,
+    options: ModelPolicyListOptions = {},
+  ): Promise<ModelPolicy[]> {
     const rows = await this.db
       .selectFrom('model_policy')
       .selectAll()
@@ -1535,29 +1843,49 @@ export class ModelPolicyRepository {
       updated_at: new Date(),
       published_at: null,
     };
-    const saved = await this.db.insertInto('model_policy').values(row).returningAll().executeTakeFirstOrThrow();
+    const saved = await this.db
+      .insertInto('model_policy')
+      .values(row)
+      .returningAll()
+      .executeTakeFirstOrThrow();
     return mapModelPolicy(saved);
   }
 
-  async updateDraft(modelPolicyId: string, version: number, input: ModelPolicyUpdateDraftInput): Promise<ModelPolicy> {
+  async updateDraft(
+    modelPolicyId: string,
+    version: number,
+    input: ModelPolicyUpdateDraftInput,
+  ): Promise<ModelPolicy> {
     const existing = await this.getByIdAndVersion(modelPolicyId, version, input);
     if (!existing) {
-      throw new RegistryRepositoryError('REGISTRY_VERSION_NOT_FOUND', 'ModelPolicy version not found', { model_policy_id: modelPolicyId, version });
+      throw new RegistryRepositoryError(
+        'REGISTRY_VERSION_NOT_FOUND',
+        'ModelPolicy version not found',
+        { model_policy_id: modelPolicyId, version },
+      );
     }
     if (existing.status !== 'draft' && existing.status !== 'validated') {
-      throw new RegistryRepositoryError('REGISTRY_VERSION_IMMUTABLE', 'Only draft or validated ModelPolicy versions can be updated', {
-        model_policy_id: modelPolicyId,
-        version,
-        status: existing.status,
-      });
+      throw new RegistryRepositoryError(
+        'REGISTRY_VERSION_IMMUTABLE',
+        'Only draft or validated ModelPolicy versions can be updated',
+        {
+          model_policy_id: modelPolicyId,
+          version,
+          status: existing.status,
+        },
+      );
     }
     if (existing.revision !== input.expectedRevision) {
-      throw new RegistryRepositoryError('REGISTRY_OPTIMISTIC_LOCK_CONFLICT', 'ModelPolicy revision conflict', {
-        model_policy_id: modelPolicyId,
-        version,
-        expected_revision: input.expectedRevision,
-        actual_revision: existing.revision,
-      });
+      throw new RegistryRepositoryError(
+        'REGISTRY_OPTIMISTIC_LOCK_CONFLICT',
+        'ModelPolicy revision conflict',
+        {
+          model_policy_id: modelPolicyId,
+          version,
+          expected_revision: input.expectedRevision,
+          actual_revision: existing.revision,
+        },
+      );
     }
     const updated = modelPolicySchema.parse({
       ...existing,
@@ -1589,53 +1917,97 @@ export class ModelPolicyRepository {
       .returningAll()
       .executeTakeFirst();
     if (!row) {
-      throw new RegistryRepositoryError('REGISTRY_OPTIMISTIC_LOCK_CONFLICT', 'ModelPolicy revision conflict', { model_policy_id: modelPolicyId, version });
+      throw new RegistryRepositoryError(
+        'REGISTRY_OPTIMISTIC_LOCK_CONFLICT',
+        'ModelPolicy revision conflict',
+        { model_policy_id: modelPolicyId, version },
+      );
     }
     return mapModelPolicy(row);
   }
 
-  async cloneVersion(modelPolicyId: string, version: number, options: ModelPolicyWriteOptions): Promise<ModelPolicy> {
+  async cloneVersion(
+    modelPolicyId: string,
+    version: number,
+    options: ModelPolicyWriteOptions,
+  ): Promise<ModelPolicy> {
     const source = await this.getByIdAndVersion(modelPolicyId, version, options);
     if (!source) {
-      throw new RegistryRepositoryError('REGISTRY_VERSION_NOT_FOUND', 'ModelPolicy version not found', { model_policy_id: modelPolicyId, version });
+      throw new RegistryRepositoryError(
+        'REGISTRY_VERSION_NOT_FOUND',
+        'ModelPolicy version not found',
+        { model_policy_id: modelPolicyId, version },
+      );
     }
-    const nextVersion = options.version ?? Math.max(0, ...(await this.listVersions(modelPolicyId, options)).map((entry) => entry.version)) + 1;
-    return this.createDraft({
-      ...source,
-      version: nextVersion,
-      status: 'draft',
-      revision: 1,
-      created_by: options.operatorId,
-      updated_by: options.operatorId,
-      published_by: undefined,
-      created_at: undefined,
-      updated_at: undefined,
-      published_at: undefined,
-    }, options);
+    const nextVersion =
+      options.version ??
+      Math.max(
+        0,
+        ...(await this.listVersions(modelPolicyId, options)).map((entry) => entry.version),
+      ) + 1;
+    return this.createDraft(
+      {
+        ...source,
+        version: nextVersion,
+        status: 'draft',
+        revision: 1,
+        created_by: options.operatorId,
+        updated_by: options.operatorId,
+        published_by: undefined,
+        created_at: undefined,
+        updated_at: undefined,
+        published_at: undefined,
+      },
+      options,
+    );
   }
 
-  async markValidated(modelPolicyId: string, version: number, options: ModelPolicyWriteOptions): Promise<ModelPolicy> {
+  async markValidated(
+    modelPolicyId: string,
+    version: number,
+    options: ModelPolicyWriteOptions,
+  ): Promise<ModelPolicy> {
     return this.updateStatus(modelPolicyId, version, 'validated', options);
   }
 
-  async publish(modelPolicyId: string, version: number, options: ModelPolicyReleaseOptions): Promise<ModelPolicy> {
+  async publish(
+    modelPolicyId: string,
+    version: number,
+    options: ModelPolicyReleaseOptions,
+  ): Promise<ModelPolicy> {
     return withTransaction(this.db, async (trx) => {
       const repository = new ModelPolicyRepository(trx);
       const existing = await repository.getByIdAndVersion(modelPolicyId, version, options);
       if (!existing) {
-        throw new RegistryRepositoryError('REGISTRY_VERSION_NOT_FOUND', 'ModelPolicy version not found', { model_policy_id: modelPolicyId, version });
+        throw new RegistryRepositoryError(
+          'REGISTRY_VERSION_NOT_FOUND',
+          'ModelPolicy version not found',
+          { model_policy_id: modelPolicyId, version },
+        );
       }
-      if (options.expectedRevision !== undefined && existing.revision !== options.expectedRevision) {
-        throw new RegistryRepositoryError('REGISTRY_OPTIMISTIC_LOCK_CONFLICT', 'ModelPolicy revision conflict', {
-          model_policy_id: modelPolicyId,
-          version,
-          expected_revision: options.expectedRevision,
-          actual_revision: existing.revision,
-        });
+      if (
+        options.expectedRevision !== undefined &&
+        existing.revision !== options.expectedRevision
+      ) {
+        throw new RegistryRepositoryError(
+          'REGISTRY_OPTIMISTIC_LOCK_CONFLICT',
+          'ModelPolicy revision conflict',
+          {
+            model_policy_id: modelPolicyId,
+            version,
+            expected_revision: options.expectedRevision,
+            actual_revision: existing.revision,
+          },
+        );
       }
       await trx
         .updateTable('model_policy')
-        .set({ status: 'deprecated', updated_by: options.operatorId, updated_at: new Date(), revision: sql<number>`revision + 1` })
+        .set({
+          status: 'deprecated',
+          updated_by: options.operatorId,
+          updated_at: new Date(),
+          revision: sql<number>`revision + 1`,
+        })
         .where('tenant_id', '=', tenant(options))
         .where('model_policy_id', '=', modelPolicyId)
         .where('status', '=', 'published')
@@ -1658,50 +2030,111 @@ export class ModelPolicyRepository {
         .returningAll()
         .executeTakeFirst();
       if (!row) {
-        throw new RegistryRepositoryError('INVALID_SPEC_STATUS_TRANSITION', 'ModelPolicy cannot be published from current status', { model_policy_id: modelPolicyId, version });
+        throw new RegistryRepositoryError(
+          'INVALID_SPEC_STATUS_TRANSITION',
+          'ModelPolicy cannot be published from current status',
+          { model_policy_id: modelPolicyId, version },
+        );
       }
       const policy = mapModelPolicy(row);
       await appendModelPolicyRelease(trx, policy, 'publish', options);
-      await appendModelPolicyAudit(trx, policy, tenant(options), 'model_policy.publish', 'succeeded', options.operatorId, options.releaseNote);
+      await appendModelPolicyAudit(
+        trx,
+        policy,
+        tenant(options),
+        'model_policy.publish',
+        'succeeded',
+        options.operatorId,
+        options.releaseNote,
+      );
       return policy;
     });
   }
 
-  async setGray(modelPolicyId: string, version: number, options: ModelPolicyReleaseOptions): Promise<ModelPolicy> {
+  async setGray(
+    modelPolicyId: string,
+    version: number,
+    options: ModelPolicyReleaseOptions,
+  ): Promise<ModelPolicy> {
     const policy = await this.updateStatus(modelPolicyId, version, 'gray', options);
     await appendModelPolicyRelease(this.db, policy, 'gray', options);
-    await appendModelPolicyAudit(this.db, policy, tenant(options), 'model_policy.gray', 'succeeded', options.operatorId, options.releaseNote);
+    await appendModelPolicyAudit(
+      this.db,
+      policy,
+      tenant(options),
+      'model_policy.gray',
+      'succeeded',
+      options.operatorId,
+      options.releaseNote,
+    );
     return policy;
   }
 
-  async deprecate(modelPolicyId: string, version: number, options: ModelPolicyReleaseOptions): Promise<ModelPolicy> {
+  async deprecate(
+    modelPolicyId: string,
+    version: number,
+    options: ModelPolicyReleaseOptions,
+  ): Promise<ModelPolicy> {
     const policy = await this.updateStatus(modelPolicyId, version, 'deprecated', options);
     await appendModelPolicyRelease(this.db, policy, 'deprecate', options);
-    await appendModelPolicyAudit(this.db, policy, tenant(options), 'model_policy.deprecated', 'succeeded', options.operatorId, options.releaseNote);
+    await appendModelPolicyAudit(
+      this.db,
+      policy,
+      tenant(options),
+      'model_policy.deprecated',
+      'succeeded',
+      options.operatorId,
+      options.releaseNote,
+    );
     return policy;
   }
 
-  async disable(modelPolicyId: string, version: number, options: ModelPolicyReleaseOptions): Promise<ModelPolicy> {
+  async disable(
+    modelPolicyId: string,
+    version: number,
+    options: ModelPolicyReleaseOptions,
+  ): Promise<ModelPolicy> {
     const policy = await this.updateStatus(modelPolicyId, version, 'disabled', options);
     await appendModelPolicyRelease(this.db, policy, 'disable', options);
-    await appendModelPolicyAudit(this.db, policy, tenant(options), 'model_policy.disabled', 'succeeded', options.operatorId, options.releaseNote);
+    await appendModelPolicyAudit(
+      this.db,
+      policy,
+      tenant(options),
+      'model_policy.disabled',
+      'succeeded',
+      options.operatorId,
+      options.releaseNote,
+    );
     return policy;
   }
 
   async rollback(modelPolicyId: string, options: ModelPolicyRollbackOptions): Promise<ModelPolicy> {
     return withTransaction(this.db, async (trx) => {
       const repository = new ModelPolicyRepository(trx);
-      const target = await repository.getByIdAndVersion(modelPolicyId, options.targetVersion, options);
+      const target = await repository.getByIdAndVersion(
+        modelPolicyId,
+        options.targetVersion,
+        options,
+      );
       if (!target) {
-        throw new RegistryRepositoryError('REGISTRY_VERSION_NOT_FOUND', 'ModelPolicy rollback target not found', {
-          model_policy_id: modelPolicyId,
-          target_version: options.targetVersion,
-        });
+        throw new RegistryRepositoryError(
+          'REGISTRY_VERSION_NOT_FOUND',
+          'ModelPolicy rollback target not found',
+          {
+            model_policy_id: modelPolicyId,
+            target_version: options.targetVersion,
+          },
+        );
       }
       const previous = await repository.getLatestPublished(modelPolicyId, options);
       await trx
         .updateTable('model_policy')
-        .set({ status: 'deprecated', updated_by: options.operatorId, updated_at: new Date(), revision: sql<number>`revision + 1` })
+        .set({
+          status: 'deprecated',
+          updated_by: options.operatorId,
+          updated_at: new Date(),
+          revision: sql<number>`revision + 1`,
+        })
         .where('tenant_id', '=', tenant(options))
         .where('model_policy_id', '=', modelPolicyId)
         .where('status', '=', 'published')
@@ -1724,19 +2157,34 @@ export class ModelPolicyRepository {
         .returningAll()
         .executeTakeFirst();
       if (!row) {
-        throw new RegistryRepositoryError('REGISTRY_ROLLBACK_TARGET_NOT_PUBLISHED', 'ModelPolicy rollback target cannot be activated', {
-          model_policy_id: modelPolicyId,
-          target_version: options.targetVersion,
-        });
+        throw new RegistryRepositoryError(
+          'REGISTRY_ROLLBACK_TARGET_NOT_PUBLISHED',
+          'ModelPolicy rollback target cannot be activated',
+          {
+            model_policy_id: modelPolicyId,
+            target_version: options.targetVersion,
+          },
+        );
       }
       const policy = mapModelPolicy(row);
       await appendModelPolicyRelease(trx, policy, 'rollback', options, previous?.version);
-      await appendModelPolicyAudit(trx, policy, tenant(options), 'model_policy.rollback', 'succeeded', options.operatorId, options.releaseNote);
+      await appendModelPolicyAudit(
+        trx,
+        policy,
+        tenant(options),
+        'model_policy.rollback',
+        'succeeded',
+        options.operatorId,
+        options.releaseNote,
+      );
       return policy;
     });
   }
 
-  async listReleaseHistory(modelPolicyId: string, options: RepositoryTenantOptions = {}): Promise<CapabilityRelease[]> {
+  async listReleaseHistory(
+    modelPolicyId: string,
+    options: RepositoryTenantOptions = {},
+  ): Promise<CapabilityRelease[]> {
     return new CapabilityReleaseRepository(this.db).list({
       tenantId: tenant(options),
       resourceType: 'model_policy',
@@ -1745,7 +2193,12 @@ export class ModelPolicyRepository {
     });
   }
 
-  private async updateStatus(modelPolicyId: string, version: number, status: ModelPolicyStatus, options: ModelPolicyWriteOptions): Promise<ModelPolicy> {
+  private async updateStatus(
+    modelPolicyId: string,
+    version: number,
+    status: ModelPolicyStatus,
+    options: ModelPolicyWriteOptions,
+  ): Promise<ModelPolicy> {
     const row = await this.db
       .updateTable('model_policy')
       .set({
@@ -1753,7 +2206,9 @@ export class ModelPolicyRepository {
         updated_by: options.operatorId,
         updated_at: new Date(),
         revision: sql<number>`revision + 1`,
-        ...(status === 'published' || status === 'gray' ? { published_by: options.operatorId, published_at: new Date() } : {}),
+        ...(status === 'published' || status === 'gray'
+          ? { published_by: options.operatorId, published_at: new Date() }
+          : {}),
       })
       .where('tenant_id', '=', tenant(options))
       .where('model_policy_id', '=', modelPolicyId)
@@ -1761,7 +2216,11 @@ export class ModelPolicyRepository {
       .returningAll()
       .executeTakeFirst();
     if (!row) {
-      throw new RegistryRepositoryError('REGISTRY_VERSION_NOT_FOUND', 'ModelPolicy version not found', { model_policy_id: modelPolicyId, version });
+      throw new RegistryRepositoryError(
+        'REGISTRY_VERSION_NOT_FOUND',
+        'ModelPolicy version not found',
+        { model_policy_id: modelPolicyId, version },
+      );
     }
     return mapModelPolicy(row);
   }
@@ -1781,7 +2240,8 @@ export class TaskRunRepository {
       flow_version: taskRun.flow_version ?? null,
       workflow_id: taskRun.workflow_id ?? null,
       execution_plan_ref: taskRun.execution_plan_ref ?? input.executionPlanRef ?? null,
-      tenant_policy_snapshot_ref: taskRun.tenant_policy_snapshot_ref ?? input.tenantPolicySnapshotRef ?? null,
+      tenant_policy_snapshot_ref:
+        taskRun.tenant_policy_snapshot_ref ?? input.tenantPolicySnapshotRef ?? null,
       tenant_policy_hash: taskRun.tenant_policy_hash ?? input.tenantPolicyHash ?? null,
       tenant_admission_id: taskRun.tenant_admission_id ?? input.tenantAdmissionId ?? null,
       status: taskRun.status,
@@ -1844,8 +2304,8 @@ export class TaskRunRepository {
     const rowUpdate: Updateable<TaskRunTable> = {
       status: parsedStatus,
       updated_at: new Date(),
-      error_code: failureStatus ? normalized.errorCode ?? 'WORKFLOW_FAILED' : null,
-      error_message: failureStatus ? normalized.errorMessage ?? 'Workflow failed' : null,
+      error_code: failureStatus ? (normalized.errorCode ?? 'WORKFLOW_FAILED') : null,
+      error_message: failureStatus ? (normalized.errorMessage ?? 'Workflow failed') : null,
     };
     const row = await this.db
       .updateTable('task_run')
@@ -1936,7 +2396,10 @@ export class AgentRunRepository {
     return existing;
   }
 
-  async get(agentRunId: string, options: RepositoryTenantOptions = {}): Promise<AgentRunRecord | undefined> {
+  async get(
+    agentRunId: string,
+    options: RepositoryTenantOptions = {},
+  ): Promise<AgentRunRecord | undefined> {
     let query = this.db.selectFrom('agent_run').selectAll().where('agent_run_id', '=', agentRunId);
     if (options.tenantId) {
       query = query.where('tenant_id', '=', options.tenantId);
@@ -1967,7 +2430,10 @@ export class AgentRunRepository {
     return rows.map(mapAgentRun);
   }
 
-  async update(agentRunId: string, input: UpdateAgentRunInput): Promise<AgentRunRecord | undefined> {
+  async update(
+    agentRunId: string,
+    input: UpdateAgentRunInput,
+  ): Promise<AgentRunRecord | undefined> {
     const rowUpdate: Updateable<AgentRunTable> = { updated_at: new Date() };
     if (input.status) {
       rowUpdate.status = agentRunStatusSchema.parse(input.status);
@@ -2063,10 +2529,16 @@ export class AgentStepRepository {
       tool_result_refs_json: toDbJson(parsed.tool_result_refs),
       authoritative_tool_result_refs_json: toDbJson(parsed.authoritative_tool_result_refs),
       human_task_ids_json: toDbJson(parsed.human_task_ids),
-      context_snapshot_before_ref: parsed.context_snapshot_before ? toDbJson(parsed.context_snapshot_before) : null,
-      context_snapshot_after_ref: parsed.context_snapshot_after ? toDbJson(parsed.context_snapshot_after) : null,
+      context_snapshot_before_ref: parsed.context_snapshot_before
+        ? toDbJson(parsed.context_snapshot_before)
+        : null,
+      context_snapshot_after_ref: parsed.context_snapshot_after
+        ? toDbJson(parsed.context_snapshot_after)
+        : null,
       handoff_refs_json: toDbJson(parsed.handoff_refs),
-      context_snapshot_ref: parsed.context_snapshot_ref ? toDbJson(parsed.context_snapshot_ref) : null,
+      context_snapshot_ref: parsed.context_snapshot_ref
+        ? toDbJson(parsed.context_snapshot_ref)
+        : null,
       output_ref: parsed.output_ref ?? null,
       usage_json: toDbJson(parsed.usage),
       error_code: parsed.error_code ?? null,
@@ -2076,15 +2548,17 @@ export class AgentStepRepository {
     const saved = await this.db
       .insertInto('agent_step')
       .values(row)
-      .onConflict((oc) => oc.column('stable_step_key').doUpdateSet({
-        segment_status: row.segment_status,
-        decision_summary: row.decision_summary,
-        proposed_tool_calls_json: row.proposed_tool_calls_json,
-        usage_json: row.usage_json,
-        error_code: row.error_code,
-        error_message: row.error_message,
-        updated_at: new Date(),
-      }))
+      .onConflict((oc) =>
+        oc.column('stable_step_key').doUpdateSet({
+          segment_status: row.segment_status,
+          decision_summary: row.decision_summary,
+          proposed_tool_calls_json: row.proposed_tool_calls_json,
+          usage_json: row.usage_json,
+          error_code: row.error_code,
+          error_message: row.error_message,
+          updated_at: new Date(),
+        }),
+      )
       .returningAll()
       .executeTakeFirst();
 
@@ -2093,7 +2567,9 @@ export class AgentStepRepository {
     }
     const existing = await this.getByStableKey(parsed.stable_step_key);
     if (!existing) {
-      throw new Error(`AgentStep insert conflict but existing step was not found: ${parsed.stable_step_key}`);
+      throw new Error(
+        `AgentStep insert conflict but existing step was not found: ${parsed.stable_step_key}`,
+      );
     }
     return existing;
   }
@@ -2116,19 +2592,27 @@ export class AgentStepRepository {
     }
     if (input.authoritativeToolResultRefs !== undefined) {
       rowUpdate.authoritative_tool_result_refs_json = toDbJson(input.authoritativeToolResultRefs);
-      rowUpdate.tool_result_refs_json = toDbJson(input.toolResultRefs ?? input.authoritativeToolResultRefs);
+      rowUpdate.tool_result_refs_json = toDbJson(
+        input.toolResultRefs ?? input.authoritativeToolResultRefs,
+      );
     }
     if (input.humanTaskIds !== undefined) {
       rowUpdate.human_task_ids_json = toDbJson(input.humanTaskIds);
     }
     if (input.contextSnapshotBefore !== undefined) {
-      rowUpdate.context_snapshot_before_ref = input.contextSnapshotBefore ? toDbJson(input.contextSnapshotBefore) : null;
+      rowUpdate.context_snapshot_before_ref = input.contextSnapshotBefore
+        ? toDbJson(input.contextSnapshotBefore)
+        : null;
     }
     if (input.contextSnapshotAfter !== undefined) {
-      rowUpdate.context_snapshot_after_ref = input.contextSnapshotAfter ? toDbJson(input.contextSnapshotAfter) : null;
+      rowUpdate.context_snapshot_after_ref = input.contextSnapshotAfter
+        ? toDbJson(input.contextSnapshotAfter)
+        : null;
     }
     if (input.contextSnapshotRef !== undefined) {
-      rowUpdate.context_snapshot_ref = input.contextSnapshotRef ? toDbJson(input.contextSnapshotRef) : null;
+      rowUpdate.context_snapshot_ref = input.contextSnapshotRef
+        ? toDbJson(input.contextSnapshotRef)
+        : null;
     }
     if (input.handoffRefs !== undefined) {
       rowUpdate.handoff_refs_json = toDbJson(input.handoffRefs);
@@ -2167,7 +2651,10 @@ export class AgentStepRepository {
     return row ? mapAgentStep(row) : undefined;
   }
 
-  async listByRun(agentRunId: string, options: { limit?: number; offset?: number } = {}): Promise<AgentStepRecord[]> {
+  async listByRun(
+    agentRunId: string,
+    options: { limit?: number; offset?: number } = {},
+  ): Promise<AgentStepRecord[]> {
     const rows = await this.db
       .selectFrom('agent_step')
       .selectAll()
@@ -2214,12 +2701,18 @@ export class AgentContextSnapshotRepository {
     }
     const existing = await this.getByHash(snapshotHash);
     if (!existing) {
-      throw new Error(`AgentContextSnapshot insert conflict but existing snapshot was not found: ${snapshotHash}`);
+      throw new Error(
+        `AgentContextSnapshot insert conflict but existing snapshot was not found: ${snapshotHash}`,
+      );
     }
     return existing.ref;
   }
 
-  async get(snapshotId: string): Promise<{ ref: PiContextSnapshotRef; messages: unknown[]; previousSnapshotId?: string } | undefined> {
+  async get(
+    snapshotId: string,
+  ): Promise<
+    { ref: PiContextSnapshotRef; messages: unknown[]; previousSnapshotId?: string } | undefined
+  > {
     const row = await this.db
       .selectFrom('agent_context_snapshot')
       .selectAll()
@@ -2228,7 +2721,11 @@ export class AgentContextSnapshotRepository {
     return row ? snapshotFromRow(row) : undefined;
   }
 
-  async getByHash(snapshotHash: string): Promise<{ ref: PiContextSnapshotRef; messages: unknown[]; previousSnapshotId?: string } | undefined> {
+  async getByHash(
+    snapshotHash: string,
+  ): Promise<
+    { ref: PiContextSnapshotRef; messages: unknown[]; previousSnapshotId?: string } | undefined
+  > {
     const row = await this.db
       .selectFrom('agent_context_snapshot')
       .selectAll()
@@ -2360,7 +2857,11 @@ export class HumanTaskRepository {
       completed_at: null,
     };
 
-    const saved = await this.db.insertInto('human_task').values(row).returningAll().executeTakeFirstOrThrow();
+    const saved = await this.db
+      .insertInto('human_task')
+      .values(row)
+      .returningAll()
+      .executeTakeFirstOrThrow();
     return mapHumanTask(saved);
   }
 
@@ -2374,7 +2875,10 @@ export class HumanTaskRepository {
     return row ? mapHumanTask(row) : undefined;
   }
 
-  async approve(humanTaskId: string, input: HumanTaskDecisionInput): Promise<HumanTask | undefined> {
+  async approve(
+    humanTaskId: string,
+    input: HumanTaskDecisionInput,
+  ): Promise<HumanTask | undefined> {
     return this.decide(humanTaskId, 'approved', input);
   }
 
@@ -2390,7 +2894,10 @@ export class HumanTaskRepository {
     return this.decide(humanTaskId, 'expired', input);
   }
 
-  async respond(humanTaskId: string, input: HumanTaskRespondInput): Promise<{ humanTask?: HumanTask; conflict: boolean; idempotentReplay: boolean }> {
+  async respond(
+    humanTaskId: string,
+    input: HumanTaskRespondInput,
+  ): Promise<{ humanTask?: HumanTask; conflict: boolean; idempotentReplay: boolean }> {
     const parsed = humanTaskRespondRequestSchema.parse({
       tenant_id: input.tenantId ?? 'default',
       user_id: input.userId,
@@ -2405,12 +2912,19 @@ export class HumanTaskRepository {
       throw new Error(`HumanTask is not user_input kind: ${humanTaskId}`);
     }
     if (existing.response_idempotency_key) {
-      if (existing.response_idempotency_key === parsed.response_idempotency_key && hashJson(existing.response ?? {}) === hashJson(parsed.response)) {
+      if (
+        existing.response_idempotency_key === parsed.response_idempotency_key &&
+        hashJson(existing.response ?? {}) === hashJson(parsed.response)
+      ) {
         return { humanTask: existing, conflict: false, idempotentReplay: true };
       }
       return { humanTask: existing, conflict: true, idempotentReplay: false };
     }
-    if (existing.status !== 'pending' && existing.status !== 'created' && existing.status !== 'assigned') {
+    if (
+      existing.status !== 'pending' &&
+      existing.status !== 'created' &&
+      existing.status !== 'assigned'
+    ) {
       return { humanTask: existing, conflict: true, idempotentReplay: false };
     }
 
@@ -2444,11 +2958,11 @@ export class HumanTaskRepository {
       : { conflict: false, idempotentReplay: false };
   }
 
-  async listByTaskRunId(taskRunId: string, options: RepositoryTenantOptions = {}): Promise<HumanTask[]> {
-    let query = this.db
-      .selectFrom('human_task')
-      .selectAll()
-      .where('task_run_id', '=', taskRunId);
+  async listByTaskRunId(
+    taskRunId: string,
+    options: RepositoryTenantOptions = {},
+  ): Promise<HumanTask[]> {
+    let query = this.db.selectFrom('human_task').selectAll().where('task_run_id', '=', taskRunId);
 
     if (options.tenantId) {
       query = query.where('tenant_id', '=', options.tenantId);
@@ -2487,7 +3001,11 @@ export class HumanTaskRepository {
     if (!existing || (input.tenantId && existing.tenant_id !== input.tenantId)) {
       return undefined;
     }
-    if (existing.status !== 'pending' && existing.status !== 'created' && existing.status !== 'assigned') {
+    if (
+      existing.status !== 'pending' &&
+      existing.status !== 'created' &&
+      existing.status !== 'assigned'
+    ) {
       return existing;
     }
 
@@ -2530,7 +3048,9 @@ export class IdempotencyRecordRepository {
     return row ? mapIdempotencyRecord(row) : undefined;
   }
 
-  async insert(record: Omit<IdempotencyRecord, 'created_at' | 'updated_at'>): Promise<IdempotencyRecord> {
+  async insert(
+    record: Omit<IdempotencyRecord, 'created_at' | 'updated_at'>,
+  ): Promise<IdempotencyRecord> {
     const parsed = idempotencyRecordSchema.parse(record);
     const row: Insertable<IdempotencyRecordTable> = {
       idempotency_key: parsed.idempotency_key,
@@ -2598,11 +3118,16 @@ export class ToolCallLogRepository {
       mode: toolCallLog.mode ?? null,
       preview_json: toolCallLog.preview_json ? toDbJson(toolCallLog.preview_json) : null,
       result_json: toolCallLog.result_json ? toDbJson(toolCallLog.result_json) : null,
-      tenant_policy_snapshot_ref: toolCallLog.tenant_policy_snapshot_ref ?? input.tenant_policy_snapshot_ref ?? null,
+      tenant_policy_snapshot_ref:
+        toolCallLog.tenant_policy_snapshot_ref ?? input.tenant_policy_snapshot_ref ?? null,
       policy_decision_code: toolCallLog.policy_decision_code ?? input.policy_decision_code ?? null,
     };
 
-    const saved = await this.db.insertInto('tool_call_log').values(row).returningAll().executeTakeFirstOrThrow();
+    const saved = await this.db
+      .insertInto('tool_call_log')
+      .values(row)
+      .returningAll()
+      .executeTakeFirstOrThrow();
     return mapToolCallLog(saved);
   }
 
@@ -2616,7 +3141,10 @@ export class ToolCallLogRepository {
     return row ? mapToolCallLog(row) : undefined;
   }
 
-  async update(toolCallId: string, input: ToolCallLogUpdateInput): Promise<ToolCallLog | undefined> {
+  async update(
+    toolCallId: string,
+    input: ToolCallLogUpdateInput,
+  ): Promise<ToolCallLog | undefined> {
     const rowUpdate: Updateable<ToolCallLogTable> = {
       updated_at: new Date(),
     };
@@ -2767,7 +3295,9 @@ export class ModelCallLogRepository {
     }
     const raced = await this.getByRequestKey(input.model_request_key);
     if (!raced) {
-      throw new Error(`ModelCall insert conflict but existing record was not found: ${input.model_request_key}`);
+      throw new Error(
+        `ModelCall insert conflict but existing record was not found: ${input.model_request_key}`,
+      );
     }
     if (raced.request_hash !== input.request_hash) {
       return { decision: 'conflict', record: raced };
@@ -2777,7 +3307,10 @@ export class ModelCallLogRepository {
       : { decision: 'existing', record: raced };
   }
 
-  async markRunning(modelCallId: string, input: { targetId: string; provider?: string; modelId: string; fallbackIndex?: number }): Promise<ModelCallRecord> {
+  async markRunning(
+    modelCallId: string,
+    input: { targetId: string; provider?: string; modelId: string; fallbackIndex?: number },
+  ): Promise<ModelCallRecord> {
     const row = await this.db
       .updateTable('model_call_log')
       .set({
@@ -2795,19 +3328,22 @@ export class ModelCallLogRepository {
     return mapModelCallRecord(row);
   }
 
-  async markSucceeded(modelCallId: string, input: {
-    targetId: string;
-    provider?: string;
-    modelId: string;
-    attemptCount: number;
-    fallbackIndex: number;
-    finishReason?: string;
-    responseId?: string;
-    usage?: ModelUsage;
-    latencyMs?: number;
-    responseHash: string;
-    safeResponseJson: Record<string, unknown>;
-  }): Promise<ModelCallRecord> {
+  async markSucceeded(
+    modelCallId: string,
+    input: {
+      targetId: string;
+      provider?: string;
+      modelId: string;
+      attemptCount: number;
+      fallbackIndex: number;
+      finishReason?: string;
+      responseId?: string;
+      usage?: ModelUsage;
+      latencyMs?: number;
+      responseHash: string;
+      safeResponseJson: Record<string, unknown>;
+    },
+  ): Promise<ModelCallRecord> {
     const row = await this.db
       .updateTable('model_call_log')
       .set({
@@ -2835,14 +3371,17 @@ export class ModelCallLogRepository {
     return mapModelCallRecord(row);
   }
 
-  async markFailed(modelCallId: string, input: {
-    status?: Extract<ModelCallStatus, 'failed' | 'timed_out' | 'cancelled'>;
-    attemptCount?: number;
-    fallbackIndex?: number;
-    errorClass: string;
-    errorCode: string;
-    latencyMs?: number;
-  }): Promise<ModelCallRecord> {
+  async markFailed(
+    modelCallId: string,
+    input: {
+      status?: Extract<ModelCallStatus, 'failed' | 'timed_out' | 'cancelled'>;
+      attemptCount?: number;
+      fallbackIndex?: number;
+      errorClass: string;
+      errorCode: string;
+      latencyMs?: number;
+    },
+  ): Promise<ModelCallRecord> {
     const row = await this.db
       .updateTable('model_call_log')
       .set({
@@ -2862,12 +3401,23 @@ export class ModelCallLogRepository {
   }
 
   async markCancelled(modelCallId: string): Promise<ModelCallRecord> {
-    return this.markFailed(modelCallId, { status: 'cancelled', errorClass: 'cancelled', errorCode: 'MODEL_CALL_CANCELLED' });
+    return this.markFailed(modelCallId, {
+      status: 'cancelled',
+      errorClass: 'cancelled',
+      errorCode: 'MODEL_CALL_CANCELLED',
+    });
   }
 
-  async replaySucceededResult(modelRequestKey: string, requestHash: string): Promise<ModelCallRecord | undefined> {
+  async replaySucceededResult(
+    modelRequestKey: string,
+    requestHash: string,
+  ): Promise<ModelCallRecord | undefined> {
     const record = await this.getByRequestKey(modelRequestKey);
-    if (!record || (record.status !== 'succeeded' && record.status !== 'replayed') || record.request_hash !== requestHash) {
+    if (
+      !record ||
+      (record.status !== 'succeeded' && record.status !== 'replayed') ||
+      record.request_hash !== requestHash
+    ) {
       return undefined;
     }
     await this.db
@@ -2941,7 +3491,10 @@ export class ModelCallAttemptRepository {
     const parsed = modelCallAttemptSchema.parse({
       attempt_id: input.attempt_id ?? `model_attempt_${randomUUID()}`,
       model_call_id: input.model_call_id,
-      attempt_index: input.attempt_index,
+      global_attempt_index: input.global_attempt_index,
+      target_attempt_index: input.target_attempt_index,
+      fallback_index: input.fallback_index,
+      attempt_index: input.global_attempt_index,
       target_id: input.target_id,
       provider: input.provider,
       model_id: input.model_id,
@@ -2951,7 +3504,10 @@ export class ModelCallAttemptRepository {
     const row: Insertable<ModelCallAttemptTable> = {
       attempt_id: parsed.attempt_id,
       model_call_id: parsed.model_call_id,
-      attempt_index: parsed.attempt_index,
+      global_attempt_index: parsed.global_attempt_index,
+      target_attempt_index: parsed.target_attempt_index,
+      fallback_index: parsed.fallback_index,
+      attempt_index: parsed.global_attempt_index,
       target_id: parsed.target_id,
       provider: parsed.provider ?? null,
       model_id: parsed.model_id,
@@ -2967,20 +3523,27 @@ export class ModelCallAttemptRepository {
     const saved = await this.db
       .insertInto('model_call_attempt')
       .values(row)
-      .onConflict((oc) => oc.columns(['model_call_id', 'attempt_index']).doNothing())
+      .onConflict((oc) => oc.columns(['model_call_id', 'global_attempt_index']).doNothing())
       .returningAll()
       .executeTakeFirst();
     if (saved) {
       return mapModelCallAttempt(saved);
     }
-    const existing = (await this.listByModelCall(input.model_call_id)).find((attempt) => attempt.attempt_index === input.attempt_index);
+    const existing = (await this.listByModelCall(input.model_call_id)).find(
+      (attempt) => attempt.global_attempt_index === input.global_attempt_index,
+    );
     if (!existing) {
-      throw new Error(`ModelCallAttempt insert conflict but existing attempt was not found: ${input.model_call_id}#${input.attempt_index}`);
+      throw new Error(
+        `ModelCallAttempt insert conflict but existing attempt was not found: ${input.model_call_id}#${input.global_attempt_index}`,
+      );
     }
     return existing;
   }
 
-  async completeAttempt(attemptId: string, input: ModelCallAttemptCompleteInput): Promise<ModelCallAttempt> {
+  async completeAttempt(
+    attemptId: string,
+    input: ModelCallAttemptCompleteInput,
+  ): Promise<ModelCallAttempt> {
     const row = await this.db
       .updateTable('model_call_attempt')
       .set({
@@ -3003,7 +3566,7 @@ export class ModelCallAttemptRepository {
       .selectFrom('model_call_attempt')
       .selectAll()
       .where('model_call_id', '=', modelCallId)
-      .orderBy('attempt_index', 'asc')
+      .orderBy('global_attempt_index', 'asc')
       .execute();
     return rows.map(mapModelCallAttempt);
   }
@@ -3029,7 +3592,10 @@ export class TenantRuntimePolicyRepository {
     return rows.map(mapTenantRuntimePolicy);
   }
 
-  async getByTenantAndVersion(tenantId: string, version: number): Promise<TenantRuntimePolicy | undefined> {
+  async getByTenantAndVersion(
+    tenantId: string,
+    version: number,
+  ): Promise<TenantRuntimePolicy | undefined> {
     const row = await this.db
       .selectFrom('tenant_runtime_policy')
       .selectAll()
@@ -3054,7 +3620,10 @@ export class TenantRuntimePolicyRepository {
     return this.list({ tenantId, limit: 100 });
   }
 
-  async createDraft(policy: TenantRuntimePolicy, options: TenantPolicyWriteOptions): Promise<TenantRuntimePolicy> {
+  async createDraft(
+    policy: TenantRuntimePolicy,
+    options: TenantPolicyWriteOptions,
+  ): Promise<TenantRuntimePolicy> {
     const tenantId = options.tenantId ?? policy.tenant_id;
     const parsed = tenantRuntimePolicySchema.parse({
       ...policy,
@@ -3091,7 +3660,11 @@ export class TenantRuntimePolicyRepository {
     return mapTenantRuntimePolicy(saved);
   }
 
-  async updateDraft(tenantId: string, version: number, input: TenantPolicyUpdateDraftInput): Promise<TenantRuntimePolicy> {
+  async updateDraft(
+    tenantId: string,
+    version: number,
+    input: TenantPolicyUpdateDraftInput,
+  ): Promise<TenantRuntimePolicy> {
     const existing = await this.getByTenantAndVersion(tenantId, version);
     if (!existing) {
       throw new Error(`TenantRuntimePolicy not found: ${tenantId}@${version}`);
@@ -3139,32 +3712,48 @@ export class TenantRuntimePolicyRepository {
     return mapTenantRuntimePolicy(row);
   }
 
-  async cloneVersion(tenantId: string, version: number, options: TenantPolicyWriteOptions): Promise<TenantRuntimePolicy> {
+  async cloneVersion(
+    tenantId: string,
+    version: number,
+    options: TenantPolicyWriteOptions,
+  ): Promise<TenantRuntimePolicy> {
     const source = await this.getByTenantAndVersion(tenantId, version);
     if (!source) {
       throw new Error(`TenantRuntimePolicy not found: ${tenantId}@${version}`);
     }
     const versions = await this.listVersions(tenantId);
-    const nextVersion = options.version ?? Math.max(0, ...versions.map((entry) => entry.version)) + 1;
-    return this.createDraft({
-      ...source,
-      version: nextVersion,
-      status: 'draft',
-      revision: 1,
-      created_by: options.operatorId,
-      updated_by: options.operatorId,
-      published_by: undefined,
-      created_at: undefined,
-      updated_at: undefined,
-      published_at: undefined,
-    }, { tenantId, operatorId: options.operatorId });
+    const nextVersion =
+      options.version ?? Math.max(0, ...versions.map((entry) => entry.version)) + 1;
+    return this.createDraft(
+      {
+        ...source,
+        version: nextVersion,
+        status: 'draft',
+        revision: 1,
+        created_by: options.operatorId,
+        updated_by: options.operatorId,
+        published_by: undefined,
+        created_at: undefined,
+        updated_at: undefined,
+        published_at: undefined,
+      },
+      { tenantId, operatorId: options.operatorId },
+    );
   }
 
-  async markValidated(tenantId: string, version: number, options: TenantPolicyWriteOptions): Promise<TenantRuntimePolicy> {
+  async markValidated(
+    tenantId: string,
+    version: number,
+    options: TenantPolicyWriteOptions,
+  ): Promise<TenantRuntimePolicy> {
     return this.updateStatus(tenantId, version, 'validated', options);
   }
 
-  async publish(tenantId: string, version: number, options: TenantPolicyReleaseOptions): Promise<TenantRuntimePolicy> {
+  async publish(
+    tenantId: string,
+    version: number,
+    options: TenantPolicyReleaseOptions,
+  ): Promise<TenantRuntimePolicy> {
     return withPolicyTransaction(this.db, async (trx) => {
       await trx
         .updateTable('tenant_runtime_policy')
@@ -3193,12 +3782,23 @@ export class TenantRuntimePolicyRepository {
       }
       const policy = mapTenantRuntimePolicy(row);
       await appendTenantPolicyRelease(trx, policy, 'publish', options);
-      await appendTenantPolicyAudit(trx, policy, 'policy.publish', 'succeeded', options.operatorId, options.releaseNote);
+      await appendTenantPolicyAudit(
+        trx,
+        policy,
+        'policy.publish',
+        'succeeded',
+        options.operatorId,
+        options.releaseNote,
+      );
       return policy;
     });
   }
 
-  async deprecate(tenantId: string, version: number, options: TenantPolicyReleaseOptions): Promise<TenantRuntimePolicy> {
+  async deprecate(
+    tenantId: string,
+    version: number,
+    options: TenantPolicyReleaseOptions,
+  ): Promise<TenantRuntimePolicy> {
     const policy = await this.updateStatus(tenantId, version, 'deprecated', options);
     await appendTenantPolicyRelease(this.db, policy, 'deprecate', options);
     await new AuditEventRepository(this.db).append({
@@ -3215,7 +3815,11 @@ export class TenantRuntimePolicyRepository {
     return policy;
   }
 
-  async disable(tenantId: string, version: number, options: TenantPolicyReleaseOptions): Promise<TenantRuntimePolicy> {
+  async disable(
+    tenantId: string,
+    version: number,
+    options: TenantPolicyReleaseOptions,
+  ): Promise<TenantRuntimePolicy> {
     const policy = await this.updateStatus(tenantId, version, 'disabled', options);
     await appendTenantPolicyRelease(this.db, policy, 'disable', options);
     await new AuditEventRepository(this.db).append({
@@ -3232,7 +3836,10 @@ export class TenantRuntimePolicyRepository {
     return policy;
   }
 
-  async rollback(tenantId: string, options: TenantPolicyRollbackOptions): Promise<TenantRuntimePolicy> {
+  async rollback(
+    tenantId: string,
+    options: TenantPolicyRollbackOptions,
+  ): Promise<TenantRuntimePolicy> {
     return withPolicyTransaction(this.db, async (trx) => {
       const previous = await new TenantRuntimePolicyRepository(trx).getLatestPublished(tenantId);
       await trx
@@ -3258,11 +3865,20 @@ export class TenantRuntimePolicyRepository {
         .returningAll()
         .executeTakeFirst();
       if (!row) {
-        throw new Error(`TenantRuntimePolicy rollback target not found: ${tenantId}@${options.targetVersion}`);
+        throw new Error(
+          `TenantRuntimePolicy rollback target not found: ${tenantId}@${options.targetVersion}`,
+        );
       }
       const policy = mapTenantRuntimePolicy(row);
       await appendTenantPolicyRelease(trx, policy, 'rollback', options, previous?.version);
-      await appendTenantPolicyAudit(trx, policy, 'policy.rollback', 'succeeded', options.operatorId, options.releaseNote);
+      await appendTenantPolicyAudit(
+        trx,
+        policy,
+        'policy.rollback',
+        'succeeded',
+        options.operatorId,
+        options.releaseNote,
+      );
       return policy;
     });
   }
@@ -3305,7 +3921,9 @@ export class TenantRuntimePolicyRepository {
 export class TenantRuntimePolicySnapshotRepository {
   constructor(private readonly db: Kysely<Database>) {}
 
-  async createImmutableSnapshot(input: CreateTenantPolicySnapshotInput): Promise<TenantRuntimePolicySnapshot> {
+  async createImmutableSnapshot(
+    input: CreateTenantPolicySnapshotInput,
+  ): Promise<TenantRuntimePolicySnapshot> {
     const createdAt = new Date().toISOString();
     const snapshotId = `tenant_policy_snapshot_${randomUUID()}`;
     const snapshotRef = buildTenantPolicySnapshotRef(snapshotId);
@@ -3315,7 +3933,9 @@ export class TenantRuntimePolicySnapshotRepository {
     const parentSnapshotRef = input.parentSnapshotRef;
     if (derivationType === 'root') {
       if (parentSnapshotRef || lineageDepth !== 0 || rootSnapshotRef !== snapshotRef) {
-        throw new Error('Root TenantRuntimePolicySnapshot must not have a parent and must point root_snapshot_ref to itself');
+        throw new Error(
+          'Root TenantRuntimePolicySnapshot must not have a parent and must point root_snapshot_ref to itself',
+        );
       }
     } else if (!parentSnapshotRef || lineageDepth <= 0 || rootSnapshotRef === snapshotRef) {
       throw new Error('Child TenantRuntimePolicySnapshot requires parent/root lineage');
@@ -3393,12 +4013,17 @@ export class TenantRuntimePolicySnapshotRepository {
     }
     const existing = await this.getByHash(parsed.snapshot_hash, { tenantId: parsed.tenant_id });
     if (!existing) {
-      throw new Error(`TenantRuntimePolicySnapshot insert conflict but existing snapshot was not found: ${parsed.snapshot_hash}`);
+      throw new Error(
+        `TenantRuntimePolicySnapshot insert conflict but existing snapshot was not found: ${parsed.snapshot_hash}`,
+      );
     }
     return existing;
   }
 
-  async getByRef(snapshotRef: string, options: RepositoryTenantOptions = {}): Promise<TenantRuntimePolicySnapshot | undefined> {
+  async getByRef(
+    snapshotRef: string,
+    options: RepositoryTenantOptions = {},
+  ): Promise<TenantRuntimePolicySnapshot | undefined> {
     let query = this.db
       .selectFrom('tenant_runtime_policy_snapshot')
       .selectAll()
@@ -3410,7 +4035,10 @@ export class TenantRuntimePolicySnapshotRepository {
     return row ? mapTenantRuntimePolicySnapshot(row) : undefined;
   }
 
-  async getByHash(snapshotHash: string, options: RepositoryTenantOptions = {}): Promise<TenantRuntimePolicySnapshot | undefined> {
+  async getByHash(
+    snapshotHash: string,
+    options: RepositoryTenantOptions = {},
+  ): Promise<TenantRuntimePolicySnapshot | undefined> {
     let query = this.db
       .selectFrom('tenant_runtime_policy_snapshot')
       .selectAll()
@@ -3422,12 +4050,19 @@ export class TenantRuntimePolicySnapshotRepository {
     return row ? mapTenantRuntimePolicySnapshot(row) : undefined;
   }
 
-  async verifyHash(snapshotRef: string, expectedHash: string, options: RepositoryTenantOptions = {}): Promise<boolean> {
+  async verifyHash(
+    snapshotRef: string,
+    expectedHash: string,
+    options: RepositoryTenantOptions = {},
+  ): Promise<boolean> {
     const snapshot = await this.getByRef(snapshotRef, options);
     return Boolean(snapshot && snapshot.snapshot_hash === expectedHash);
   }
 
-  async listByTenant(tenantId: string, options: TenantPolicySnapshotListOptions = {}): Promise<TenantRuntimePolicySnapshot[]> {
+  async listByTenant(
+    tenantId: string,
+    options: TenantPolicySnapshotListOptions = {},
+  ): Promise<TenantRuntimePolicySnapshot[]> {
     let query = this.db
       .selectFrom('tenant_runtime_policy_snapshot')
       .selectAll()
@@ -3457,8 +4092,17 @@ export class TenantRuntimePolicySnapshotRepository {
       query = query
         .innerJoin('tenant_runtime_policy', (join) =>
           join
-            .onRef('tenant_runtime_policy.tenant_id', '=', 'tenant_runtime_policy_snapshot.tenant_id')
-            .onRef('tenant_runtime_policy.version', '=', 'tenant_runtime_policy_snapshot.source_policy_version'))
+            .onRef(
+              'tenant_runtime_policy.tenant_id',
+              '=',
+              'tenant_runtime_policy_snapshot.tenant_id',
+            )
+            .onRef(
+              'tenant_runtime_policy.version',
+              '=',
+              'tenant_runtime_policy_snapshot.source_policy_version',
+            ),
+        )
         .where('tenant_runtime_policy.status', '=', options.status);
     }
     const rows = await query
@@ -3469,7 +4113,10 @@ export class TenantRuntimePolicySnapshotRepository {
     return rows.map(mapTenantRuntimePolicySnapshot);
   }
 
-  async listByExecutionPlan(executionPlanRef: string, options: RepositoryTenantOptions = {}): Promise<TenantRuntimePolicySnapshot[]> {
+  async listByExecutionPlan(
+    executionPlanRef: string,
+    options: RepositoryTenantOptions = {},
+  ): Promise<TenantRuntimePolicySnapshot[]> {
     let query = this.db
       .selectFrom('tenant_runtime_policy_snapshot')
       .selectAll()
@@ -3485,19 +4132,31 @@ export class TenantRuntimePolicySnapshotRepository {
 export class TenantAgentAdmissionRepository {
   constructor(private readonly db: Kysely<Database>) {}
 
-  async reserve(input: TenantAdmissionReserveInput): Promise<{ accepted: boolean; admission?: TenantAgentAdmission; activeCount: number }> {
+  async reserve(
+    input: TenantAdmissionReserveInput,
+  ): Promise<{ accepted: boolean; admission?: TenantAgentAdmission; activeCount: number }> {
     return withPolicyTransaction(this.db, async (trx) => {
       await acquireTenantAdmissionLock(trx, input.tenantId);
-      const existing = await this.scoped(trx).getByTaskRun(input.taskRunId, { tenantId: input.tenantId });
+      const existing = await this.scoped(trx).getByTaskRun(input.taskRunId, {
+        tenantId: input.tenantId,
+      });
       if (existing) {
         if (existing.policy_snapshot_ref !== input.policySnapshotRef) {
           throw new Error('TENANT_AGENT_ADMISSION_SNAPSHOT_CONFLICT');
         }
         if (existing.status === 'reserved' || existing.status === 'active') {
-          return { accepted: true, admission: existing, activeCount: await activeAdmissionCount(trx, input.tenantId) };
+          return {
+            accepted: true,
+            admission: existing,
+            activeCount: await activeAdmissionCount(trx, input.tenantId),
+          };
         }
         if (existing.status === 'rejected') {
-          return { accepted: false, admission: existing, activeCount: await activeAdmissionCount(trx, input.tenantId) };
+          return {
+            accepted: false,
+            admission: existing,
+            activeCount: await activeAdmissionCount(trx, input.tenantId),
+          };
         }
       }
       const activeCount = await activeAdmissionCount(trx, input.tenantId);
@@ -3521,7 +4180,10 @@ export class TenantAgentAdmissionRepository {
     });
   }
 
-  async activate(admissionId: string, input: { workflowId?: string; workflowRunId?: string } = {}): Promise<TenantAgentAdmission | undefined> {
+  async activate(
+    admissionId: string,
+    input: { workflowId?: string; workflowRunId?: string } = {},
+  ): Promise<TenantAgentAdmission | undefined> {
     const row = await this.db
       .updateTable('tenant_agent_admission')
       .set({
@@ -3539,17 +4201,28 @@ export class TenantAgentAdmissionRepository {
     return row ? mapTenantAgentAdmission(row) : this.get(admissionId);
   }
 
-  async attachAgentRun(admissionId: string, agentRunId: string): Promise<TenantAgentAdmission | undefined> {
+  async attachAgentRun(
+    admissionId: string,
+    agentRunId: string,
+  ): Promise<TenantAgentAdmission | undefined> {
     const row = await this.db
       .updateTable('tenant_agent_admission')
-      .set({ agent_run_id: agentRunId, updated_at: new Date(), revision: sql<number>`revision + 1` })
+      .set({
+        agent_run_id: agentRunId,
+        updated_at: new Date(),
+        revision: sql<number>`revision + 1`,
+      })
       .where('admission_id', '=', admissionId)
       .returningAll()
       .executeTakeFirst();
     return row ? mapTenantAgentAdmission(row) : undefined;
   }
 
-  async attachWorkflow(admissionId: string, workflowId: string, workflowRunId?: string): Promise<TenantAgentAdmission | undefined> {
+  async attachWorkflow(
+    admissionId: string,
+    workflowId: string,
+    workflowRunId?: string,
+  ): Promise<TenantAgentAdmission | undefined> {
     const row = await this.db
       .updateTable('tenant_agent_admission')
       .set({
@@ -3564,7 +4237,10 @@ export class TenantAgentAdmissionRepository {
     return row ? mapTenantAgentAdmission(row) : undefined;
   }
 
-  async release(admissionId: string, reason = 'released'): Promise<TenantAgentAdmission | undefined> {
+  async release(
+    admissionId: string,
+    reason = 'released',
+  ): Promise<TenantAgentAdmission | undefined> {
     const existing = await this.get(admissionId);
     if (!existing) {
       return undefined;
@@ -3588,7 +4264,10 @@ export class TenantAgentAdmissionRepository {
     return row ? mapTenantAgentAdmission(row) : existing;
   }
 
-  async reject(admissionId: string, reason = 'rejected'): Promise<TenantAgentAdmission | undefined> {
+  async reject(
+    admissionId: string,
+    reason = 'rejected',
+  ): Promise<TenantAgentAdmission | undefined> {
     const row = await this.db
       .updateTable('tenant_agent_admission')
       .set({
@@ -3617,8 +4296,14 @@ export class TenantAgentAdmissionRepository {
     return row ? mapTenantAgentAdmission(row) : undefined;
   }
 
-  async getByTaskRun(taskRunId: string, options: RepositoryTenantOptions = {}): Promise<TenantAgentAdmission | undefined> {
-    let query = this.db.selectFrom('tenant_agent_admission').selectAll().where('task_run_id', '=', taskRunId);
+  async getByTaskRun(
+    taskRunId: string,
+    options: RepositoryTenantOptions = {},
+  ): Promise<TenantAgentAdmission | undefined> {
+    let query = this.db
+      .selectFrom('tenant_agent_admission')
+      .selectAll()
+      .where('task_run_id', '=', taskRunId);
     if (options.tenantId) {
       query = query.where('tenant_id', '=', options.tenantId);
     }
@@ -3626,8 +4311,14 @@ export class TenantAgentAdmissionRepository {
     return row ? mapTenantAgentAdmission(row) : undefined;
   }
 
-  async listByTenant(tenantId: string, options: TenantAdmissionListOptions = {}): Promise<TenantAgentAdmission[]> {
-    let query = this.db.selectFrom('tenant_agent_admission').selectAll().where('tenant_id', '=', tenantId);
+  async listByTenant(
+    tenantId: string,
+    options: TenantAdmissionListOptions = {},
+  ): Promise<TenantAgentAdmission[]> {
+    let query = this.db
+      .selectFrom('tenant_agent_admission')
+      .selectAll()
+      .where('tenant_id', '=', tenantId);
     if (options.status) {
       query = query.where('status', '=', options.status);
     }
@@ -3654,7 +4345,9 @@ export class TenantAgentAdmissionRepository {
     return rows.map(mapTenantAgentAdmission);
   }
 
-  async reconcileCandidates(options: TenantAdmissionListOptions = {}): Promise<TenantAgentAdmission[]> {
+  async reconcileCandidates(
+    options: TenantAdmissionListOptions = {},
+  ): Promise<TenantAgentAdmission[]> {
     let query = this.db
       .selectFrom('tenant_agent_admission')
       .selectAll()
@@ -3673,7 +4366,10 @@ export class TenantAgentAdmissionRepository {
     return rows.map(mapTenantAgentAdmission);
   }
 
-  async markReconciled(admissionId: string, reason = 'reconciled'): Promise<TenantAgentAdmission | undefined> {
+  async markReconciled(
+    admissionId: string,
+    reason = 'reconciled',
+  ): Promise<TenantAgentAdmission | undefined> {
     const row = await this.db
       .updateTable('tenant_agent_admission')
       .set({
@@ -3721,59 +4417,110 @@ export class AgentSpecRepository {
     return this.registry.list(options);
   }
 
-  getByIdAndVersion(agentId: string, version: number, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<AgentSpec> | undefined> {
+  getByIdAndVersion(
+    agentId: string,
+    version: number,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<AgentSpec> | undefined> {
     return this.registry.getByIdAndVersion(agentId, version, options);
   }
 
-  getLatestVersion(agentId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<AgentSpec> | undefined> {
+  getLatestVersion(
+    agentId: string,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<AgentSpec> | undefined> {
     return this.registry.getLatestVersion(agentId, options);
   }
 
-  getLatestPublishedVersion(agentId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<AgentSpec> | undefined> {
+  getLatestPublishedVersion(
+    agentId: string,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<AgentSpec> | undefined> {
     return this.registry.getLatestPublishedVersion(agentId, options);
   }
 
-  listVersions(agentId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<AgentSpec>[]> {
+  listVersions(
+    agentId: string,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<AgentSpec>[]> {
     return this.registry.listVersions(agentId, options);
   }
 
-  createDraft(agentSpec: AgentSpec, options: RegistryWriteOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+  createDraft(
+    agentSpec: AgentSpec,
+    options: RegistryWriteOptions,
+  ): Promise<RegistryResourceRecord<AgentSpec>> {
     return this.registry.createDraft(agentSpec, options);
   }
 
-  updateDraft(agentId: string, version: number, input: RegistryUpdateDraftInput<AgentSpec>): Promise<RegistryResourceRecord<AgentSpec>> {
+  updateDraft(
+    agentId: string,
+    version: number,
+    input: RegistryUpdateDraftInput<AgentSpec>,
+  ): Promise<RegistryResourceRecord<AgentSpec>> {
     return this.registry.updateDraft(agentId, version, input);
   }
 
-  cloneVersion(agentId: string, version: number, options: RegistryCloneOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+  cloneVersion(
+    agentId: string,
+    version: number,
+    options: RegistryCloneOptions,
+  ): Promise<RegistryResourceRecord<AgentSpec>> {
     return this.registry.cloneVersion(agentId, version, options);
   }
 
-  markValidated(agentId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+  markValidated(
+    agentId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<AgentSpec>> {
     return this.registry.markValidated(agentId, version, options);
   }
 
-  publish(agentId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+  publish(
+    agentId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<AgentSpec>> {
     return this.registry.publish(agentId, version, options);
   }
 
-  setGray(agentId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+  setGray(
+    agentId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<AgentSpec>> {
     return this.registry.setGray(agentId, version, options);
   }
 
-  deprecate(agentId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+  deprecate(
+    agentId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<AgentSpec>> {
     return this.registry.deprecate(agentId, version, options);
   }
 
-  disable(agentId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+  disable(
+    agentId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<AgentSpec>> {
     return this.registry.disable(agentId, version, options);
   }
 
-  rollback(agentId: string, targetVersion: number, options: RegistryRollbackOptions): Promise<RegistryResourceRecord<AgentSpec>> {
+  rollback(
+    agentId: string,
+    targetVersion: number,
+    options: RegistryRollbackOptions,
+  ): Promise<RegistryResourceRecord<AgentSpec>> {
     return this.registry.rollback(agentId, targetVersion, options);
   }
 
-  listReleaseHistory(agentId: string, options: RegistryListOptions = {}): Promise<CapabilityRelease[]> {
+  listReleaseHistory(
+    agentId: string,
+    options: RegistryListOptions = {},
+  ): Promise<CapabilityRelease[]> {
     return this.registry.listReleaseHistory(agentId, options);
   }
 }
@@ -3804,59 +4551,110 @@ export class PromptDefinitionRepository {
     return this.registry.list(options);
   }
 
-  getByIdAndVersion(promptId: string, version: number, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<PromptDefinition> | undefined> {
+  getByIdAndVersion(
+    promptId: string,
+    version: number,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<PromptDefinition> | undefined> {
     return this.registry.getByIdAndVersion(promptId, version, options);
   }
 
-  getLatestVersion(promptId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<PromptDefinition> | undefined> {
+  getLatestVersion(
+    promptId: string,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<PromptDefinition> | undefined> {
     return this.registry.getLatestVersion(promptId, options);
   }
 
-  getLatestPublishedVersion(promptId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<PromptDefinition> | undefined> {
+  getLatestPublishedVersion(
+    promptId: string,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<PromptDefinition> | undefined> {
     return this.registry.getLatestPublishedVersion(promptId, options);
   }
 
-  listVersions(promptId: string, options: RegistryListOptions = {}): Promise<RegistryResourceRecord<PromptDefinition>[]> {
+  listVersions(
+    promptId: string,
+    options: RegistryListOptions = {},
+  ): Promise<RegistryResourceRecord<PromptDefinition>[]> {
     return this.registry.listVersions(promptId, options);
   }
 
-  createDraft(prompt: PromptDefinition, options: RegistryWriteOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+  createDraft(
+    prompt: PromptDefinition,
+    options: RegistryWriteOptions,
+  ): Promise<RegistryResourceRecord<PromptDefinition>> {
     return this.registry.createDraft(prompt, options);
   }
 
-  updateDraft(promptId: string, version: number, input: RegistryUpdateDraftInput<PromptDefinition>): Promise<RegistryResourceRecord<PromptDefinition>> {
+  updateDraft(
+    promptId: string,
+    version: number,
+    input: RegistryUpdateDraftInput<PromptDefinition>,
+  ): Promise<RegistryResourceRecord<PromptDefinition>> {
     return this.registry.updateDraft(promptId, version, input);
   }
 
-  cloneVersion(promptId: string, version: number, options: RegistryCloneOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+  cloneVersion(
+    promptId: string,
+    version: number,
+    options: RegistryCloneOptions,
+  ): Promise<RegistryResourceRecord<PromptDefinition>> {
     return this.registry.cloneVersion(promptId, version, options);
   }
 
-  markValidated(promptId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+  markValidated(
+    promptId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<PromptDefinition>> {
     return this.registry.markValidated(promptId, version, options);
   }
 
-  publish(promptId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+  publish(
+    promptId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<PromptDefinition>> {
     return this.registry.publish(promptId, version, options);
   }
 
-  setGray(promptId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+  setGray(
+    promptId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<PromptDefinition>> {
     return this.registry.setGray(promptId, version, options);
   }
 
-  deprecate(promptId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+  deprecate(
+    promptId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<PromptDefinition>> {
     return this.registry.deprecate(promptId, version, options);
   }
 
-  disable(promptId: string, version: number, options: RegistryStatusOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+  disable(
+    promptId: string,
+    version: number,
+    options: RegistryStatusOptions,
+  ): Promise<RegistryResourceRecord<PromptDefinition>> {
     return this.registry.disable(promptId, version, options);
   }
 
-  rollback(promptId: string, targetVersion: number, options: RegistryRollbackOptions): Promise<RegistryResourceRecord<PromptDefinition>> {
+  rollback(
+    promptId: string,
+    targetVersion: number,
+    options: RegistryRollbackOptions,
+  ): Promise<RegistryResourceRecord<PromptDefinition>> {
     return this.registry.rollback(promptId, targetVersion, options);
   }
 
-  listReleaseHistory(promptId: string, options: RegistryListOptions = {}): Promise<CapabilityRelease[]> {
+  listReleaseHistory(
+    promptId: string,
+    options: RegistryListOptions = {},
+  ): Promise<CapabilityRelease[]> {
     return this.registry.listReleaseHistory(promptId, options);
   }
 }
@@ -3877,9 +4675,13 @@ export async function upsertAgentSpec(
     sha256: parsed.sha256 ?? hashJson(parsed),
     created_by: options.createdBy ?? null,
     updated_by: options.createdBy ?? null,
-    published_by: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? options.createdBy ?? null : null,
+    published_by: executableSpecStatuses.includes(status as ExecutableSpecStatus)
+      ? (options.createdBy ?? null)
+      : null,
     updated_at: new Date(),
-    published_at: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? new Date() : null,
+    published_at: executableSpecStatuses.includes(status as ExecutableSpecStatus)
+      ? new Date()
+      : null,
     revision: 1,
     gray_policy_json: grayPolicySchema.parse({}),
   };
@@ -3921,9 +4723,13 @@ export async function upsertPromptDefinition(
     sha256: parsed.sha256 ?? hashJson(parsed),
     created_by: options.createdBy ?? null,
     updated_by: options.createdBy ?? null,
-    published_by: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? options.createdBy ?? null : null,
+    published_by: executableSpecStatuses.includes(status as ExecutableSpecStatus)
+      ? (options.createdBy ?? null)
+      : null,
     updated_at: new Date(),
-    published_at: executableSpecStatuses.includes(status as ExecutableSpecStatus) ? new Date() : null,
+    published_at: executableSpecStatuses.includes(status as ExecutableSpecStatus)
+      ? new Date()
+      : null,
     revision: 1,
     gray_policy_json: grayPolicySchema.parse({}),
   };
@@ -3973,7 +4779,11 @@ function parseToolVersionRef(ref: string): ToolVersionRef | undefined {
   return { name: match[1] ?? '', version: match[2] ?? '' };
 }
 
-function flowAllowedToolOverrides(flowSpec: FlowSpec, stepId: string, agentId: string): string[] | undefined {
+function flowAllowedToolOverrides(
+  flowSpec: FlowSpec,
+  stepId: string,
+  agentId: string,
+): string[] | undefined {
   const fromMetadata = flowSpec.metadata?.allowed_tools;
   if (isRecord(fromMetadata)) {
     const byStep = fromMetadata[stepId];
@@ -3997,7 +4807,9 @@ function resolveAllowedToolRefs(
   tenantAllowedTools: readonly string[] | undefined,
 ): ToolVersionRef[] {
   const agentRefs = parseToolVersionRefs(agentAllowedTools, 'AgentSpec.allowed_tools');
-  const overrideRefs = flowOverride ? parseToolVersionRefs(flowOverride, 'FlowSpec allowed_tools override') : agentRefs;
+  const overrideRefs = flowOverride
+    ? parseToolVersionRefs(flowOverride, 'FlowSpec allowed_tools override')
+    : agentRefs;
   const tenantNames = tenantAllowedTools ? new Set(tenantAllowedTools) : undefined;
   const agentKeys = new Set(agentRefs.map((ref) => buildToolVersionRef(ref.name, ref.version)));
   const selected: ToolVersionRef[] = [];
@@ -4031,22 +4843,38 @@ async function resolveAgentModelPolicy(
 ): Promise<ResolvedModelPolicy> {
   const ref = agentSpec.model_policy_ref;
   if (!ref) {
-    throw new Error(`AgentSpec must declare model_policy_ref exact lock: ${agentSpec.agent_id}@${agentSpec.version}`);
+    throw new Error(
+      `AgentSpec must declare model_policy_ref exact lock: ${agentSpec.agent_id}@${agentSpec.version}`,
+    );
   }
-  const record = await new ModelPolicyRepository(db).getByIdAndVersion(ref.model_policy_id, ref.model_policy_version, options);
+  const record = await new ModelPolicyRepository(db).getByIdAndVersion(
+    ref.model_policy_id,
+    ref.model_policy_version,
+    options,
+  );
   if (!record) {
-    throw new Error(`ModelPolicy exact version not found: ${ref.model_policy_id}@${ref.model_policy_version}`);
+    throw new Error(
+      `ModelPolicy exact version not found: ${ref.model_policy_id}@${ref.model_policy_version}`,
+    );
   }
   if (!isDependencyPublishable(record.status)) {
-    throw new Error(`ModelPolicy is not executable for plan generation: ${ref.model_policy_id}@${ref.model_policy_version}`);
+    throw new Error(
+      `ModelPolicy is not executable for plan generation: ${ref.model_policy_id}@${ref.model_policy_version}`,
+    );
   }
   const modelPolicyHash = hashModelPolicy(record);
   if (ref.model_policy_hash && ref.model_policy_hash !== modelPolicyHash) {
-    throw new Error(`ModelPolicy hash mismatch: ${ref.model_policy_id}@${ref.model_policy_version}`);
+    throw new Error(
+      `ModelPolicy hash mismatch: ${ref.model_policy_id}@${ref.model_policy_version}`,
+    );
   }
-  const resolvedTargets = record.targets.filter((target) => target.enabled).sort(compareModelTargets);
+  const resolvedTargets = record.targets
+    .filter((target) => target.enabled)
+    .sort(compareModelTargets);
   if (resolvedTargets.length === 0) {
-    throw new Error(`ModelPolicy has no enabled targets: ${ref.model_policy_id}@${ref.model_policy_version}`);
+    throw new Error(
+      `ModelPolicy has no enabled targets: ${ref.model_policy_id}@${ref.model_policy_version}`,
+    );
   }
   return resolvedModelPolicySchema.parse({
     model_policy_id: record.model_policy_id,
@@ -4060,8 +4888,13 @@ async function resolveAgentModelPolicy(
   });
 }
 
-function compareModelTargets(left: Pick<ModelTarget, 'priority' | 'target_id'>, right: Pick<ModelTarget, 'priority' | 'target_id'>): number {
-  return left.priority === right.priority ? left.target_id.localeCompare(right.target_id) : left.priority - right.priority;
+function compareModelTargets(
+  left: Pick<ModelTarget, 'priority' | 'target_id'>,
+  right: Pick<ModelTarget, 'priority' | 'target_id'>,
+): number {
+  return left.priority === right.priority
+    ? left.target_id.localeCompare(right.target_id)
+    : left.priority - right.priority;
 }
 
 export function hashModelPolicy(policy: ModelPolicy): string {
@@ -4082,15 +4915,21 @@ async function resolveToolPlanEntry(
 ): Promise<FlowExecutionPlanTool> {
   const repository = new ToolManifestRepository(db);
   const numericVersion = manifestVersionToRegistryVersion(input.toolVersion);
-  const toolRecord = await repository.getByIdAndVersion(input.toolName, numericVersion, { tenantId: input.tenantId });
+  const toolRecord = await repository.getByIdAndVersion(input.toolName, numericVersion, {
+    tenantId: input.tenantId,
+  });
   if (!toolRecord) {
     throw new Error(`ToolManifest exact version not found: ${input.toolName}@${input.toolVersion}`);
   }
   if (toolRecord.spec.version !== input.toolVersion) {
-    throw new Error(`ToolManifest version mismatch: requested ${input.toolName}@${input.toolVersion}, got ${toolRecord.spec.version}`);
+    throw new Error(
+      `ToolManifest version mismatch: requested ${input.toolName}@${input.toolVersion}, got ${toolRecord.spec.version}`,
+    );
   }
   if (!isDependencyPublishable(toolRecord.status)) {
-    throw new Error(`ToolManifest is not executable for plan generation: ${input.toolName}@${input.toolVersion}`);
+    throw new Error(
+      `ToolManifest is not executable for plan generation: ${input.toolName}@${input.toolVersion}`,
+    );
   }
 
   return {
@@ -4106,12 +4945,17 @@ function manifestVersionToRegistryVersion(toolVersion: string): number {
   const [major] = toolVersion.split('.');
   const parsed = Number(major);
   if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`ToolManifest version must start with a positive numeric major: ${toolVersion}`);
+    throw new Error(
+      `ToolManifest version must start with a positive numeric major: ${toolVersion}`,
+    );
   }
   return parsed;
 }
 
-function addToolEntry(entries: Map<string, FlowExecutionPlanTool>, tool: FlowExecutionPlanTool): void {
+function addToolEntry(
+  entries: Map<string, FlowExecutionPlanTool>,
+  tool: FlowExecutionPlanTool,
+): void {
   const key = buildToolVersionRef(tool.tool_name, tool.tool_version);
   const existing = entries.get(key);
   if (existing && existing.tool_sha256 !== tool.tool_sha256) {
@@ -4135,7 +4979,9 @@ function manifestSpecVersion(manifest: ToolManifest): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
 }
 
-export function parseAgentOutputSchema(value: string | undefined): Record<string, unknown> | undefined {
+export function parseAgentOutputSchema(
+  value: string | undefined,
+): Record<string, unknown> | undefined {
   if (!value) {
     return undefined;
   }
@@ -4280,7 +5126,13 @@ function mapAgentExecutionPlan(row: Selectable<AgentExecutionPlanTable>): AgentE
     ...(row.model_policy_id ? { model_policy_id: row.model_policy_id } : {}),
     ...(row.model_policy_version ? { model_policy_version: row.model_policy_version } : {}),
     ...(row.model_policy_hash ? { model_policy_hash: row.model_policy_hash } : {}),
-    ...(row.resolved_model_policy_json ? { resolved_model_policy: resolvedModelPolicySchema.parse(fromDbJson(row.resolved_model_policy_json)) } : {}),
+    ...(row.resolved_model_policy_json
+      ? {
+          resolved_model_policy: resolvedModelPolicySchema.parse(
+            fromDbJson(row.resolved_model_policy_json),
+          ),
+        }
+      : {}),
     execution_plan_hash: row.execution_plan_hash,
     generated_at: toIso(row.generated_at),
   });
@@ -4356,7 +5208,9 @@ function mapAgentRun(row: Selectable<AgentRunTable>): AgentRunRecord {
     fallback_count: row.fallback_count,
     model_call_count: row.model_call_count,
     execution_mode: row.execution_mode,
-    ...(row.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: row.tenant_policy_snapshot_ref } : {}),
+    ...(row.tenant_policy_snapshot_ref
+      ? { tenant_policy_snapshot_ref: row.tenant_policy_snapshot_ref }
+      : {}),
     ...(row.tenant_policy_version ? { tenant_policy_version: row.tenant_policy_version } : {}),
     ...(row.tenant_policy_hash ? { tenant_policy_hash: row.tenant_policy_hash } : {}),
     ...(row.tenant_admission_id ? { tenant_admission_id: row.tenant_admission_id } : {}),
@@ -4411,7 +5265,9 @@ function mapModelCallRecord(row: Selectable<ModelCallLogTable>): ModelCallRecord
     ...(row.error_code ? { error_code: row.error_code } : {}),
     request_hash: row.request_hash,
     ...(row.response_hash ? { response_hash: row.response_hash } : {}),
-    ...(row.safe_response_json !== null ? { safe_response_json: jsonRecord(row.safe_response_json) ?? {} } : {}),
+    ...(row.safe_response_json !== null
+      ? { safe_response_json: jsonRecord(row.safe_response_json) ?? {} }
+      : {}),
     ...(row.started_at ? { started_at: toIso(row.started_at) } : {}),
     ...(row.completed_at ? { completed_at: toIso(row.completed_at) } : {}),
     created_at: toIso(row.created_at),
@@ -4423,6 +5279,9 @@ function mapModelCallAttempt(row: Selectable<ModelCallAttemptTable>): ModelCallA
   return modelCallAttemptSchema.parse({
     attempt_id: row.attempt_id,
     model_call_id: row.model_call_id,
+    global_attempt_index: row.global_attempt_index,
+    target_attempt_index: row.target_attempt_index,
+    fallback_index: row.fallback_index,
     attempt_index: row.attempt_index,
     target_id: row.target_id,
     ...(row.provider ? { provider: row.provider } : {}),
@@ -4449,14 +5308,21 @@ function mapAgentStep(row: Selectable<AgentStepTable>): AgentStepRecord {
     ...(row.decision_summary ? { decision_summary: row.decision_summary } : {}),
     proposed_tool_calls: jsonArray(row.proposed_tool_calls_json),
     tool_result_refs: jsonArray(row.tool_result_refs_json),
-    authoritative_tool_result_refs: jsonArray(row.authoritative_tool_result_refs_json).length > 0
-      ? jsonArray(row.authoritative_tool_result_refs_json)
-      : jsonArray(row.tool_result_refs_json),
+    authoritative_tool_result_refs:
+      jsonArray(row.authoritative_tool_result_refs_json).length > 0
+        ? jsonArray(row.authoritative_tool_result_refs_json)
+        : jsonArray(row.tool_result_refs_json),
     human_task_ids: jsonArray(row.human_task_ids_json).map(String),
-    ...(jsonRecord(row.context_snapshot_before_ref) ? { context_snapshot_before: jsonRecord(row.context_snapshot_before_ref) } : {}),
-    ...(jsonRecord(row.context_snapshot_after_ref) ? { context_snapshot_after: jsonRecord(row.context_snapshot_after_ref) } : {}),
+    ...(jsonRecord(row.context_snapshot_before_ref)
+      ? { context_snapshot_before: jsonRecord(row.context_snapshot_before_ref) }
+      : {}),
+    ...(jsonRecord(row.context_snapshot_after_ref)
+      ? { context_snapshot_after: jsonRecord(row.context_snapshot_after_ref) }
+      : {}),
     handoff_refs: jsonArray(row.handoff_refs_json).filter(isRecord),
-    ...(jsonRecord(row.context_snapshot_ref) ? { context_snapshot_ref: jsonRecord(row.context_snapshot_ref) } : {}),
+    ...(jsonRecord(row.context_snapshot_ref)
+      ? { context_snapshot_ref: jsonRecord(row.context_snapshot_ref) }
+      : {}),
     ...(row.output_ref ? { output_ref: row.output_ref } : {}),
     usage: jsonRecord(row.usage_json) ? agentUsageSchema.parse(jsonRecord(row.usage_json)) : {},
     ...(row.error_code ? { error_code: row.error_code } : {}),
@@ -4466,7 +5332,9 @@ function mapAgentStep(row: Selectable<AgentStepTable>): AgentStepRecord {
   });
 }
 
-function snapshotRefFromSnapshotRow(row: Selectable<AgentContextSnapshotTable>): PiContextSnapshotRef {
+function snapshotRefFromSnapshotRow(
+  row: Selectable<AgentContextSnapshotTable>,
+): PiContextSnapshotRef {
   return piContextSnapshotRefSchema.parse({
     snapshot_id: row.snapshot_id,
     schema_version: row.schema_version,
@@ -4476,7 +5344,11 @@ function snapshotRefFromSnapshotRow(row: Selectable<AgentContextSnapshotTable>):
   });
 }
 
-function snapshotFromRow(row: Selectable<AgentContextSnapshotTable>): { ref: PiContextSnapshotRef; messages: unknown[]; previousSnapshotId?: string } {
+function snapshotFromRow(row: Selectable<AgentContextSnapshotTable>): {
+  ref: PiContextSnapshotRef;
+  messages: unknown[];
+  previousSnapshotId?: string;
+} {
   return {
     ref: snapshotRefFromSnapshotRow(row),
     messages: jsonArray(row.sanitized_messages_json),
@@ -4665,7 +5537,9 @@ function mapTenantRuntimePolicy(row: Selectable<TenantRuntimePolicyTable>): Tena
   });
 }
 
-function mapTenantRuntimePolicySnapshot(row: Selectable<TenantRuntimePolicySnapshotTable>): TenantRuntimePolicySnapshot {
+function mapTenantRuntimePolicySnapshot(
+  row: Selectable<TenantRuntimePolicySnapshotTable>,
+): TenantRuntimePolicySnapshot {
   const resolved = jsonRecord(row.resolved_policy_json) ?? {};
   return tenantRuntimePolicySnapshotSchema.parse({
     ...resolved,
@@ -4730,7 +5604,8 @@ async function appendTenantPolicyRelease(
     resource_version: policy.version,
     action,
     ...(previousVersion ? { previous_version: previousVersion } : {}),
-    target_status: action === 'deprecate' ? 'deprecated' : action === 'disable' ? 'disabled' : 'published',
+    target_status:
+      action === 'deprecate' ? 'deprecated' : action === 'disable' ? 'disabled' : 'published',
     operator_id: options.operatorId,
     release_note: options.releaseNote,
     metadata_json: options.metadataJson ?? {},
@@ -4777,7 +5652,14 @@ async function appendModelPolicyRelease(
     resource_version: policy.version,
     action,
     ...(previousVersion ? { previous_version: previousVersion } : {}),
-    target_status: action === 'deprecate' ? 'deprecated' : action === 'disable' ? 'disabled' : action === 'gray' ? 'gray' : 'published',
+    target_status:
+      action === 'deprecate'
+        ? 'deprecated'
+        : action === 'disable'
+          ? 'disabled'
+          : action === 'gray'
+            ? 'gray'
+            : 'published',
     operator_id: options.operatorId,
     release_note: options.releaseNote,
     metadata_json: {
@@ -4829,7 +5711,9 @@ async function activeAdmissionCount(db: Kysely<Database>, tenantId: string): Pro
 }
 
 async function acquireTenantAdmissionLock(db: Kysely<Database>, tenantId: string): Promise<void> {
-  await sql`select pg_advisory_xact_lock(hashtextextended(${`tenant_agent_admission:${tenantId}`}, 0))`.execute(db);
+  await sql`select pg_advisory_xact_lock(hashtextextended(${`tenant_agent_admission:${tenantId}`}, 0))`.execute(
+    db,
+  );
 }
 
 async function insertAdmission(
@@ -4873,7 +5757,9 @@ async function insertAdmission(
       .where('tenant_id', '=', input.tenantId)
       .executeTakeFirst();
     if (!existing) {
-      throw new Error(`TenantAgentAdmission insert conflict but existing admission was not found: ${input.taskRunId}`);
+      throw new Error(
+        `TenantAgentAdmission insert conflict but existing admission was not found: ${input.taskRunId}`,
+      );
     }
     return mapTenantAgentAdmission(existing);
   }

@@ -1,8 +1,4 @@
-import {
-  ApplicationFailure,
-  CancelledFailure,
-  Context,
-} from '@temporalio/activity';
+import { ApplicationFailure, CancelledFailure, Context } from '@temporalio/activity';
 import {
   agentUsageSchema,
   effectiveTenantPolicySchema,
@@ -55,8 +51,14 @@ import {
   TenantRuntimePolicySnapshotRepository,
   effectivePolicyFromSnapshot,
 } from '@dar/db';
-import { createDeterministicPiStream, type DeterministicPiScenario } from '../agent/deterministic-pi-stream.js';
-import { createModelGatewayModel, createModelGatewayPiStream } from '../agent/model-gateway-pi-stream.js';
+import {
+  createDeterministicPiStream,
+  type DeterministicPiScenario,
+} from '../agent/deterministic-pi-stream.js';
+import {
+  createModelGatewayModel,
+  createModelGatewayPiStream,
+} from '../agent/model-gateway-pi-stream.js';
 import {
   PI_CONTEXT_SCHEMA_VERSION,
   replaceDeferredToolResults,
@@ -93,7 +95,13 @@ const sampleFlowSpec: FlowSpec = {
     { id: 'input_normalize', type: 'activity', activity: 'input.normalize' },
     { id: 'knowledge_search', type: 'tool', tool: 'knowledge.search', tool_version: '1.0.0' },
     { id: 'agent_plan', type: 'agent', agent_id: 'sample_agent', input: { agent_version: 1 } },
-    { id: 'record_write', type: 'tool', tool: 'record.write.mock', tool_version: '1.0.0', risk_level: 'L3' },
+    {
+      id: 'record_write',
+      type: 'tool',
+      tool: 'record.write.mock',
+      tool_version: '1.0.0',
+      risk_level: 'L3',
+    },
   ],
 };
 
@@ -123,7 +131,9 @@ function createToolGatewayClient(config = loadConfig()): ToolGatewayClient {
     baseUrl: getToolGatewayUrl(config),
     serviceIdentity: {
       serviceId: 'runtime-worker',
-      ...(config.RUNTIME_WORKER_TOOL_GATEWAY_TOKEN ? { token: config.RUNTIME_WORKER_TOOL_GATEWAY_TOKEN } : {}),
+      ...(config.RUNTIME_WORKER_TOOL_GATEWAY_TOKEN
+        ? { token: config.RUNTIME_WORKER_TOOL_GATEWAY_TOKEN }
+        : {}),
     },
   });
 }
@@ -243,7 +253,9 @@ export async function runAgentActivity(
   input: Record<string, unknown>,
 ): Promise<AgentRunResult> {
   void input;
-  throw new Error(`runAgentActivity is deprecated; use piDurableAgentWorkflow with agent_execution_plan_ref for ${agent.agent_id}@${agent.agent_version}`);
+  throw new Error(
+    `runAgentActivity is deprecated; use piDurableAgentWorkflow with agent_execution_plan_ref for ${agent.agent_id}@${agent.agent_version}`,
+  );
 }
 
 export async function loadAgentExecutionPlanByRefActivity(
@@ -251,9 +263,15 @@ export async function loadAgentExecutionPlanByRefActivity(
   tenantId?: string,
 ): Promise<AgentExecutionPlan> {
   return classifyActivityFailure('loadAgentExecutionPlanByRefActivity', async () => {
-    const plan = await new AgentExecutionPlanRepository(getProcessDb()).getByRef(executionPlanRef, tenantId ? { tenantId } : {});
+    const plan = await new AgentExecutionPlanRepository(getProcessDb()).getByRef(
+      executionPlanRef,
+      tenantId ? { tenantId } : {},
+    );
     if (!plan) {
-      throw ApplicationFailure.nonRetryable(`AgentExecutionPlan not found: ${executionPlanRef}`, 'NOT_FOUND');
+      throw ApplicationFailure.nonRetryable(
+        `AgentExecutionPlan not found: ${executionPlanRef}`,
+        'NOT_FOUND',
+      );
     }
     return plan;
   });
@@ -264,7 +282,10 @@ export async function loadTenantPolicySnapshotActivity(
 ): Promise<EffectiveTenantPolicy> {
   return classifyActivityFailure('loadTenantPolicySnapshotActivity', async () => {
     if (!input.tenant_policy_snapshot_ref || !input.tenant_policy_hash) {
-      throw ApplicationFailure.nonRetryable('Tenant policy snapshot identity is required', 'POLICY_DENIED');
+      throw ApplicationFailure.nonRetryable(
+        'Tenant policy snapshot identity is required',
+        'POLICY_DENIED',
+      );
     }
     const snapshot = await new TenantRuntimePolicySnapshotRepository(getProcessDb()).getByRef(
       input.tenant_policy_snapshot_ref,
@@ -274,14 +295,20 @@ export async function loadTenantPolicySnapshotActivity(
       throw ApplicationFailure.nonRetryable('Tenant policy snapshot not found', 'NOT_FOUND');
     }
     if (snapshot.snapshot_hash !== input.tenant_policy_hash) {
-      throw ApplicationFailure.nonRetryable('TENANT_POLICY_HASH_MISMATCH', 'TENANT_POLICY_HASH_MISMATCH');
+      throw ApplicationFailure.nonRetryable(
+        'TENANT_POLICY_HASH_MISMATCH',
+        'TENANT_POLICY_HASH_MISMATCH',
+      );
     }
     if (
-      snapshot.execution_plan_ref !== input.execution_plan_ref
-      || snapshot.execution_plan_hash !== input.execution_plan_hash
-      || snapshot.execution_plan_type !== input.execution_plan_type
+      snapshot.execution_plan_ref !== input.execution_plan_ref ||
+      snapshot.execution_plan_hash !== input.execution_plan_hash ||
+      snapshot.execution_plan_type !== input.execution_plan_type
     ) {
-      throw ApplicationFailure.nonRetryable('EXECUTION_PLAN_HASH_MISMATCH', 'EXECUTION_PLAN_HASH_MISMATCH');
+      throw ApplicationFailure.nonRetryable(
+        'EXECUTION_PLAN_HASH_MISMATCH',
+        'EXECUTION_PLAN_HASH_MISMATCH',
+      );
     }
     return effectiveTenantPolicySchema.parse(effectivePolicyFromSnapshot(snapshot));
   });
@@ -305,30 +332,52 @@ export async function deriveTenantPolicySnapshotActivity(
   });
 }
 
-export async function createAgentRunActivity(input: CreateAgentRunActivityInput): Promise<AgentRunRecord> {
+export async function createAgentRunActivity(
+  input: CreateAgentRunActivityInput,
+): Promise<AgentRunRecord> {
   return classifyActivityFailure('createAgentRunActivity', async () => {
     const db = getProcessDb();
-    const executionPlan = await new AgentExecutionPlanRepository(db).getByRef(input.execution_plan_ref, {
-      tenantId: input.tenant_id,
-    });
+    const executionPlan = await new AgentExecutionPlanRepository(db).getByRef(
+      input.execution_plan_ref,
+      {
+        tenantId: input.tenant_id,
+      },
+    );
     if (!executionPlan) {
-      throw ApplicationFailure.nonRetryable(`AgentExecutionPlan not found: ${input.execution_plan_ref}`, 'NOT_FOUND');
+      throw ApplicationFailure.nonRetryable(
+        `AgentExecutionPlan not found: ${input.execution_plan_ref}`,
+        'NOT_FOUND',
+      );
     }
     const policySnapshot = input.tenant_policy_snapshot_ref
-      ? await new TenantRuntimePolicySnapshotRepository(db).getByRef(input.tenant_policy_snapshot_ref, { tenantId: input.tenant_id })
+      ? await new TenantRuntimePolicySnapshotRepository(db).getByRef(
+          input.tenant_policy_snapshot_ref,
+          { tenantId: input.tenant_id },
+        )
       : undefined;
     if (input.tenant_policy_snapshot_ref && !policySnapshot) {
       throw ApplicationFailure.nonRetryable('Tenant policy snapshot not found', 'NOT_FOUND');
     }
-    if (policySnapshot && input.tenant_policy_hash && policySnapshot.snapshot_hash !== input.tenant_policy_hash) {
-      throw ApplicationFailure.nonRetryable('TENANT_POLICY_HASH_MISMATCH', 'TENANT_POLICY_HASH_MISMATCH');
+    if (
+      policySnapshot &&
+      input.tenant_policy_hash &&
+      policySnapshot.snapshot_hash !== input.tenant_policy_hash
+    ) {
+      throw ApplicationFailure.nonRetryable(
+        'TENANT_POLICY_HASH_MISMATCH',
+        'TENANT_POLICY_HASH_MISMATCH',
+      );
     }
-    if (policySnapshot && (
-      policySnapshot.execution_plan_ref !== executionPlan.execution_plan_ref
-      || policySnapshot.execution_plan_hash !== executionPlan.execution_plan_hash
-      || policySnapshot.execution_plan_type !== 'agent'
-    )) {
-      throw ApplicationFailure.nonRetryable('EXECUTION_PLAN_HASH_MISMATCH', 'EXECUTION_PLAN_HASH_MISMATCH');
+    if (
+      policySnapshot &&
+      (policySnapshot.execution_plan_ref !== executionPlan.execution_plan_ref ||
+        policySnapshot.execution_plan_hash !== executionPlan.execution_plan_hash ||
+        policySnapshot.execution_plan_type !== 'agent')
+    ) {
+      throw ApplicationFailure.nonRetryable(
+        'EXECUTION_PLAN_HASH_MISMATCH',
+        'EXECUTION_PLAN_HASH_MISMATCH',
+      );
     }
     const agentRun = await new AgentRunRepository(db).create({
       ...(input.agent_run_id ? { agentRunId: input.agent_run_id } : {}),
@@ -346,19 +395,26 @@ export async function createAgentRunActivity(input: CreateAgentRunActivityInput)
       ...(input.tenant_admission_id ? { tenantAdmissionId: input.tenant_admission_id } : {}),
     });
     if (input.tenant_admission_id) {
-      await new TenantAgentAdmissionRepository(db).attachAgentRun(input.tenant_admission_id, agentRun.agent_run_id);
+      await new TenantAgentAdmissionRepository(db).attachAgentRun(
+        input.tenant_admission_id,
+        agentRun.agent_run_id,
+      );
     }
     await new AgentRunRepository(db).update(agentRun.agent_run_id, { status: 'running' });
     return agentRun;
   });
 }
 
-export async function updateAgentRunActivity(input: UpdateAgentRunActivityInput): Promise<AgentRunRecord> {
+export async function updateAgentRunActivity(
+  input: UpdateAgentRunActivityInput,
+): Promise<AgentRunRecord> {
   return classifyActivityFailure('updateAgentRunActivity', async () => {
     const updated = await new AgentRunRepository(getProcessDb()).update(input.agent_run_id, {
       ...(input.status ? { status: input.status } : {}),
       ...(input.workflow_run_id !== undefined ? { workflowRunId: input.workflow_run_id } : {}),
-      ...(input.current_segment_index !== undefined ? { currentSegmentIndex: input.current_segment_index } : {}),
+      ...(input.current_segment_index !== undefined
+        ? { currentSegmentIndex: input.current_segment_index }
+        : {}),
       ...(input.model_turn_count !== undefined ? { modelTurnCount: input.model_turn_count } : {}),
       ...(input.tool_call_count !== undefined ? { toolCallCount: input.tool_call_count } : {}),
       ...(input.handoff_count !== undefined ? { handoffCount: input.handoff_count } : {}),
@@ -368,7 +424,10 @@ export async function updateAgentRunActivity(input: UpdateAgentRunActivityInput)
       ...(input.error_message !== undefined ? { errorMessage: input.error_message } : {}),
     });
     if (!updated) {
-      throw ApplicationFailure.nonRetryable(`AgentRun not found: ${input.agent_run_id}`, 'NOT_FOUND');
+      throw ApplicationFailure.nonRetryable(
+        `AgentRun not found: ${input.agent_run_id}`,
+        'NOT_FOUND',
+      );
     }
     return updated;
   });
@@ -378,36 +437,59 @@ export async function runPiSegmentActivity(request: PiSegmentRequest): Promise<P
   return classifyActivityFailure('runPiSegmentActivity', async () => {
     const parsed = piSegmentRequestSchema.parse(request);
     const db = getProcessDb();
-    heartbeatActivity({ activity: 'runPiSegmentActivity', phase: 'load_execution_plan', segment_index: parsed.segment_index });
+    heartbeatActivity({
+      activity: 'runPiSegmentActivity',
+      phase: 'load_execution_plan',
+      segment_index: parsed.segment_index,
+    });
     const executionPlan = await new AgentExecutionPlanRepository(db).getByRef(
       parsed.execution_plan_ref,
       { tenantId: parsed.request_context.tenant_id },
     );
     if (!executionPlan) {
-      throw ApplicationFailure.nonRetryable(`AgentExecutionPlan not found: ${parsed.execution_plan_ref}`, 'NOT_FOUND');
+      throw ApplicationFailure.nonRetryable(
+        `AgentExecutionPlan not found: ${parsed.execution_plan_ref}`,
+        'NOT_FOUND',
+      );
     }
     const agentRun = await new AgentRunRepository(db).get(parsed.agent_run_id, {
       tenantId: parsed.request_context.tenant_id,
     });
     if (!agentRun) {
-      throw ApplicationFailure.nonRetryable(`AgentRun not found: ${parsed.agent_run_id}`, 'NOT_FOUND');
+      throw ApplicationFailure.nonRetryable(
+        `AgentRun not found: ${parsed.agent_run_id}`,
+        'NOT_FOUND',
+      );
     }
     if (agentRun.execution_plan_hash !== executionPlan.execution_plan_hash) {
-      throw ApplicationFailure.nonRetryable(`AgentRun execution plan hash mismatch: ${parsed.agent_run_id}`, 'VALIDATION_FAILED');
+      throw ApplicationFailure.nonRetryable(
+        `AgentRun execution plan hash mismatch: ${parsed.agent_run_id}`,
+        'VALIDATION_FAILED',
+      );
     }
 
-    heartbeatActivity({ activity: 'runPiSegmentActivity', phase: 'load_context', segment_index: parsed.segment_index });
+    heartbeatActivity({
+      activity: 'runPiSegmentActivity',
+      phase: 'load_context',
+      segment_index: parsed.segment_index,
+    });
     const snapshot = parsed.context_snapshot_ref
       ? await new AgentContextSnapshotRepository(db).get(parsed.context_snapshot_ref.snapshot_id)
       : undefined;
     if (parsed.context_snapshot_ref && !snapshot) {
-      throw ApplicationFailure.nonRetryable(`Pi context snapshot not found: ${parsed.context_snapshot_ref.snapshot_id}`, 'NOT_FOUND');
+      throw ApplicationFailure.nonRetryable(
+        `Pi context snapshot not found: ${parsed.context_snapshot_ref.snapshot_id}`,
+        'NOT_FOUND',
+      );
     }
 
     const policySnapshot = agentRun.tenant_policy_snapshot_ref
-      ? await new TenantRuntimePolicySnapshotRepository(db).getByRef(agentRun.tenant_policy_snapshot_ref, {
-          tenantId: parsed.request_context.tenant_id,
-        })
+      ? await new TenantRuntimePolicySnapshotRepository(db).getByRef(
+          agentRun.tenant_policy_snapshot_ref,
+          {
+            tenantId: parsed.request_context.tenant_id,
+          },
+        )
       : undefined;
     const allowedModelIds = policySnapshot
       ? new Set(policySnapshot.resolved_allowed_models.map((rule) => rule.model_id))
@@ -442,10 +524,18 @@ export async function runPiSegmentActivity(request: PiSegmentRequest): Promise<P
       if (parsed.initial_user_input) {
         adapterInput.initialUserInput = parsed.initial_user_input;
       }
-      heartbeatActivity({ activity: 'runPiSegmentActivity', phase: 'pi_agent_start', segment_index: parsed.segment_index });
+      heartbeatActivity({
+        activity: 'runPiSegmentActivity',
+        phase: 'pi_agent_start',
+        segment_index: parsed.segment_index,
+      });
       const adapterResult = await runPiAgentSegment(adapterInput);
       throwIfActivityCancelled('runPiSegmentActivity cancelled after Pi segment');
-      heartbeatActivity({ activity: 'runPiSegmentActivity', phase: 'persist_context', segment_index: parsed.segment_index });
+      heartbeatActivity({
+        activity: 'runPiSegmentActivity',
+        phase: 'persist_context',
+        segment_index: parsed.segment_index,
+      });
       const snapshotInput: Parameters<AgentContextSnapshotRepository['create']>[0] = {
         agentRunId: parsed.agent_run_id,
         schemaVersion: PI_CONTEXT_SCHEMA_VERSION,
@@ -465,7 +555,8 @@ export async function runPiSegmentActivity(request: PiSegmentRequest): Promise<P
         stable_step_key: `${parsed.agent_run_id}:${parsed.segment_index}`,
         segment_status: stepStatusForSegment(segmentResult),
         decision_summary: decisionSummaryForSegment(segmentResult),
-        proposed_tool_calls: segmentResult.status === 'tool_requested' ? segmentResult.proposed_tool_calls : [],
+        proposed_tool_calls:
+          segmentResult.status === 'tool_requested' ? segmentResult.proposed_tool_calls : [],
         tool_result_refs: [],
         authoritative_tool_result_refs: [],
         human_task_ids: [],
@@ -474,14 +565,20 @@ export async function runPiSegmentActivity(request: PiSegmentRequest): Promise<P
         handoff_refs: [],
         context_snapshot_ref: snapshotRef,
         usage: segmentResult.usage,
-        ...(segmentResult.status === 'failed' || segmentResult.status === 'stopped_by_budget' || segmentResult.status === 'cancelled'
+        ...(segmentResult.status === 'failed' ||
+        segmentResult.status === 'stopped_by_budget' ||
+        segmentResult.status === 'cancelled'
           ? {
               error_code: segmentResult.error_code,
               error_message: segmentResult.error_message,
             }
           : {}),
       });
-      heartbeatActivity({ activity: 'runPiSegmentActivity', phase: 'completed', segment_index: parsed.segment_index });
+      heartbeatActivity({
+        activity: 'runPiSegmentActivity',
+        phase: 'completed',
+        segment_index: parsed.segment_index,
+      });
       return segmentResult;
     } finally {
       heartbeatLoop.stop();
@@ -495,11 +592,19 @@ export async function persistToolResultsToPiContextActivity(
 ): Promise<PiContextSnapshotRef> {
   return classifyActivityFailure('persistToolResultsToPiContextActivity', async () => {
     const db = getProcessDb();
-    const snapshot = await new AgentContextSnapshotRepository(db).get(input.previous_context_snapshot_ref.snapshot_id);
+    const snapshot = await new AgentContextSnapshotRepository(db).get(
+      input.previous_context_snapshot_ref.snapshot_id,
+    );
     if (!snapshot) {
-      throw ApplicationFailure.nonRetryable(`Pi context snapshot not found: ${input.previous_context_snapshot_ref.snapshot_id}`, 'NOT_FOUND');
+      throw ApplicationFailure.nonRetryable(
+        `Pi context snapshot not found: ${input.previous_context_snapshot_ref.snapshot_id}`,
+        'NOT_FOUND',
+      );
     }
-    const restoredMessages = restorePiMessages({ schema_version: PI_CONTEXT_SCHEMA_VERSION, messages: snapshot.messages });
+    const restoredMessages = restorePiMessages({
+      schema_version: PI_CONTEXT_SCHEMA_VERSION,
+      messages: snapshot.messages,
+    });
     const replaced = replaceDeferredToolResults(restoredMessages, input.tool_results, {
       maxBytes: input.max_context_bytes,
     });
@@ -517,23 +622,30 @@ export async function appendUserInputToPiContextActivity(
 ): Promise<PiContextSnapshotRef> {
   return classifyActivityFailure('appendUserInputToPiContextActivity', async () => {
     const db = getProcessDb();
-    const snapshot = await new AgentContextSnapshotRepository(db).get(input.previous_context_snapshot_ref.snapshot_id);
+    const snapshot = await new AgentContextSnapshotRepository(db).get(
+      input.previous_context_snapshot_ref.snapshot_id,
+    );
     if (!snapshot) {
-      throw ApplicationFailure.nonRetryable(`Pi context snapshot not found: ${input.previous_context_snapshot_ref.snapshot_id}`, 'NOT_FOUND');
+      throw ApplicationFailure.nonRetryable(
+        `Pi context snapshot not found: ${input.previous_context_snapshot_ref.snapshot_id}`,
+        'NOT_FOUND',
+      );
     }
-    const restoredMessages = restorePiMessages({ schema_version: PI_CONTEXT_SCHEMA_VERSION, messages: snapshot.messages });
+    const restoredMessages = restorePiMessages({
+      schema_version: PI_CONTEXT_SCHEMA_VERSION,
+      messages: snapshot.messages,
+    });
     const userMessage: UserMessage = {
       role: 'user',
-      content: [{
-        type: 'text',
-        text: `Human task ${input.human_task_id} response: ${JSON.stringify(input.response)}`,
-      }],
+      content: [
+        {
+          type: 'text',
+          text: `Human task ${input.human_task_id} response: ${JSON.stringify(input.response)}`,
+        },
+      ],
       timestamp: 0,
     };
-    const messages = [
-      ...restoredMessages,
-      userMessage,
-    ];
+    const messages = [...restoredMessages, userMessage];
     const serialized = serializePiContext(messages, { maxBytes: input.max_context_bytes });
     return new AgentContextSnapshotRepository(db).create({
       agentRunId: input.agent_run_id,
@@ -544,19 +656,31 @@ export async function appendUserInputToPiContextActivity(
   });
 }
 
-export async function updateAgentStepActivity(input: UpdateAgentStepActivityInput): Promise<AgentStepRecord> {
+export async function updateAgentStepActivity(
+  input: UpdateAgentStepActivityInput,
+): Promise<AgentStepRecord> {
   return classifyActivityFailure('updateAgentStepActivity', async () =>
     new AgentStepRepository(getProcessDb()).updateBoundaryResult({
       stableStepKey: input.stable_step_key,
       ...(input.segment_status ? { segmentStatus: input.segment_status } : {}),
       ...(input.decision_summary !== undefined ? { decisionSummary: input.decision_summary } : {}),
-      ...(input.proposed_tool_calls !== undefined ? { proposedToolCalls: input.proposed_tool_calls } : {}),
+      ...(input.proposed_tool_calls !== undefined
+        ? { proposedToolCalls: input.proposed_tool_calls }
+        : {}),
       ...(input.tool_result_refs !== undefined ? { toolResultRefs: input.tool_result_refs } : {}),
-      ...(input.authoritative_tool_result_refs !== undefined ? { authoritativeToolResultRefs: input.authoritative_tool_result_refs } : {}),
+      ...(input.authoritative_tool_result_refs !== undefined
+        ? { authoritativeToolResultRefs: input.authoritative_tool_result_refs }
+        : {}),
       ...(input.human_task_ids !== undefined ? { humanTaskIds: input.human_task_ids } : {}),
-      ...(input.context_snapshot_before !== undefined ? { contextSnapshotBefore: input.context_snapshot_before } : {}),
-      ...(input.context_snapshot_after !== undefined ? { contextSnapshotAfter: input.context_snapshot_after } : {}),
-      ...(input.context_snapshot_ref !== undefined ? { contextSnapshotRef: input.context_snapshot_ref } : {}),
+      ...(input.context_snapshot_before !== undefined
+        ? { contextSnapshotBefore: input.context_snapshot_before }
+        : {}),
+      ...(input.context_snapshot_after !== undefined
+        ? { contextSnapshotAfter: input.context_snapshot_after }
+        : {}),
+      ...(input.context_snapshot_ref !== undefined
+        ? { contextSnapshotRef: input.context_snapshot_ref }
+        : {}),
       ...(input.handoff_refs !== undefined ? { handoffRefs: input.handoff_refs } : {}),
       ...(input.output_ref !== undefined ? { outputRef: input.output_ref } : {}),
       ...(input.usage !== undefined ? { usage: input.usage } : {}),
@@ -597,7 +721,8 @@ export async function createHumanTaskActivity(
       target_type: 'human_task',
       target_id: humanTask.human_task_id,
       result: 'pending',
-      reason: input.kind === 'user_input' ? 'agent_user_input_required' : 'l3_tool_confirmation_required',
+      reason:
+        input.kind === 'user_input' ? 'agent_user_input_required' : 'l3_tool_confirmation_required',
       trace_id: context.request_id,
       payload: {
         task_run_id: context.task_run_id,
@@ -618,26 +743,43 @@ export async function invokeToolActivity(
 ): Promise<ToolInvokeResponse> {
   return classifyActivityFailure('invokeToolActivity', async () => {
     throwIfActivityCancelled('invokeToolActivity cancelled before Tool Gateway invoke');
-    heartbeatActivity({ activity: 'invokeToolActivity', phase: 'before_request', tool_name: tool.tool_name });
+    heartbeatActivity({
+      activity: 'invokeToolActivity',
+      phase: 'before_request',
+      tool_name: tool.tool_name,
+    });
     const config = loadConfig();
     const client = createToolGatewayClient(config);
-    const result = await client.invoke(toolInvokeRequestSchema.parse({
+    const result = await client.invoke(
+      toolInvokeRequestSchema.parse({
+        tool_name: tool.tool_name,
+        tool_version: tool.tool_version,
+        tool_sha256: tool.tool_sha256,
+        tenant_id: context.tenant_id,
+        user_context: { user_id: context.user_id },
+        task_context: { task_run_id: context.task_run_id, workflow_id: context.workflow_id },
+        arguments: args,
+        idempotency_key: identity
+          ? buildAgentToolIdempotencyKey(identity)
+          : `${context.task_run_id}:${tool.tool_name}`,
+        risk_level: tool.risk_level,
+        ...(context.tenant_policy_snapshot_ref
+          ? { tenant_policy_snapshot_ref: context.tenant_policy_snapshot_ref }
+          : {}),
+        ...(context.tenant_policy_hash ? { tenant_policy_hash: context.tenant_policy_hash } : {}),
+        ...(context.execution_plan_ref ? { execution_plan_ref: context.execution_plan_ref } : {}),
+        ...(context.execution_plan_hash
+          ? { execution_plan_hash: context.execution_plan_hash }
+          : {}),
+        request_id: context.request_id,
+      }),
+    );
+    heartbeatActivity({
+      activity: 'invokeToolActivity',
+      phase: 'after_request',
       tool_name: tool.tool_name,
-      tool_version: tool.tool_version,
-      tool_sha256: tool.tool_sha256,
-      tenant_id: context.tenant_id,
-      user_context: { user_id: context.user_id },
-	      task_context: { task_run_id: context.task_run_id, workflow_id: context.workflow_id },
-	      arguments: args,
-	      idempotency_key: identity ? buildAgentToolIdempotencyKey(identity) : `${context.task_run_id}:${tool.tool_name}`,
-	      risk_level: tool.risk_level,
-	      ...(context.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: context.tenant_policy_snapshot_ref } : {}),
-	      ...(context.tenant_policy_hash ? { tenant_policy_hash: context.tenant_policy_hash } : {}),
-	      ...(context.execution_plan_ref ? { execution_plan_ref: context.execution_plan_ref } : {}),
-	      ...(context.execution_plan_hash ? { execution_plan_hash: context.execution_plan_hash } : {}),
-	      request_id: context.request_id,
-	    }));
-    heartbeatActivity({ activity: 'invokeToolActivity', phase: 'after_request', tool_name: tool.tool_name, status: result.status });
+      status: result.status,
+    });
     return result;
   });
 }
@@ -650,26 +792,43 @@ export async function previewToolActivity(
 ): Promise<ToolPreviewResponse> {
   return classifyActivityFailure('previewToolActivity', async () => {
     throwIfActivityCancelled('previewToolActivity cancelled before Tool Gateway preview');
-    heartbeatActivity({ activity: 'previewToolActivity', phase: 'before_request', tool_name: tool.tool_name });
+    heartbeatActivity({
+      activity: 'previewToolActivity',
+      phase: 'before_request',
+      tool_name: tool.tool_name,
+    });
     const config = loadConfig();
     const client = createToolGatewayClient(config);
-    const result = await client.preview(toolPreviewRequestSchema.parse({
+    const result = await client.preview(
+      toolPreviewRequestSchema.parse({
+        tool_name: tool.tool_name,
+        tool_version: tool.tool_version,
+        tool_sha256: tool.tool_sha256,
+        tenant_id: context.tenant_id,
+        user_context: { user_id: context.user_id },
+        task_context: { task_run_id: context.task_run_id, workflow_id: context.workflow_id },
+        arguments: args,
+        idempotency_key: identity
+          ? buildAgentToolIdempotencyKey(identity)
+          : `${context.task_run_id}:${tool.tool_name}:preview`,
+        risk_level: tool.risk_level,
+        ...(context.tenant_policy_snapshot_ref
+          ? { tenant_policy_snapshot_ref: context.tenant_policy_snapshot_ref }
+          : {}),
+        ...(context.tenant_policy_hash ? { tenant_policy_hash: context.tenant_policy_hash } : {}),
+        ...(context.execution_plan_ref ? { execution_plan_ref: context.execution_plan_ref } : {}),
+        ...(context.execution_plan_hash
+          ? { execution_plan_hash: context.execution_plan_hash }
+          : {}),
+        request_id: context.request_id,
+      }),
+    );
+    heartbeatActivity({
+      activity: 'previewToolActivity',
+      phase: 'after_request',
       tool_name: tool.tool_name,
-      tool_version: tool.tool_version,
-      tool_sha256: tool.tool_sha256,
-      tenant_id: context.tenant_id,
-      user_context: { user_id: context.user_id },
-      task_context: { task_run_id: context.task_run_id, workflow_id: context.workflow_id },
-	      arguments: args,
-	      idempotency_key: identity ? buildAgentToolIdempotencyKey(identity) : `${context.task_run_id}:${tool.tool_name}:preview`,
-	      risk_level: tool.risk_level,
-	      ...(context.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: context.tenant_policy_snapshot_ref } : {}),
-	      ...(context.tenant_policy_hash ? { tenant_policy_hash: context.tenant_policy_hash } : {}),
-	      ...(context.execution_plan_ref ? { execution_plan_ref: context.execution_plan_ref } : {}),
-	      ...(context.execution_plan_hash ? { execution_plan_hash: context.execution_plan_hash } : {}),
-	      request_id: context.request_id,
-	    }));
-    heartbeatActivity({ activity: 'previewToolActivity', phase: 'after_request', tool_name: tool.tool_name, status: result.status });
+      status: result.status,
+    });
     return result;
   });
 }
@@ -683,26 +842,45 @@ export async function commitToolActivity(
 ): Promise<ToolCommitResponse> {
   return classifyActivityFailure('commitToolActivity', async () => {
     throwIfActivityCancelled('commitToolActivity cancelled before Tool Gateway commit');
-    heartbeatActivity({ activity: 'commitToolActivity', phase: 'before_request', tool_name: tool.tool_name, tool_call_id: toolCallId });
+    heartbeatActivity({
+      activity: 'commitToolActivity',
+      phase: 'before_request',
+      tool_name: tool.tool_name,
+      tool_call_id: toolCallId,
+    });
     const config = loadConfig();
     const client = createToolGatewayClient(config);
-    const result = await client.commit(toolCommitRequestSchema.parse({
-      tool_call_id: toolCallId,
+    const result = await client.commit(
+      toolCommitRequestSchema.parse({
+        tool_call_id: toolCallId,
+        tool_name: tool.tool_name,
+        tool_version: tool.tool_version,
+        tool_sha256: tool.tool_sha256,
+        tenant_id: context.tenant_id,
+        user_context: { user_id: context.user_id },
+        task_context: { task_run_id: context.task_run_id, workflow_id: context.workflow_id },
+        arguments: args,
+        idempotency_key: identity
+          ? buildAgentToolIdempotencyKey(identity)
+          : `${context.task_run_id}:${tool.tool_name}:commit:${toolCallId}`,
+        ...(context.tenant_policy_snapshot_ref
+          ? { tenant_policy_snapshot_ref: context.tenant_policy_snapshot_ref }
+          : {}),
+        ...(context.tenant_policy_hash ? { tenant_policy_hash: context.tenant_policy_hash } : {}),
+        ...(context.execution_plan_ref ? { execution_plan_ref: context.execution_plan_ref } : {}),
+        ...(context.execution_plan_hash
+          ? { execution_plan_hash: context.execution_plan_hash }
+          : {}),
+        request_id: context.request_id,
+      }),
+    );
+    heartbeatActivity({
+      activity: 'commitToolActivity',
+      phase: 'after_request',
       tool_name: tool.tool_name,
-      tool_version: tool.tool_version,
-      tool_sha256: tool.tool_sha256,
-      tenant_id: context.tenant_id,
-      user_context: { user_id: context.user_id },
-      task_context: { task_run_id: context.task_run_id, workflow_id: context.workflow_id },
-	      arguments: args,
-	      idempotency_key: identity ? buildAgentToolIdempotencyKey(identity) : `${context.task_run_id}:${tool.tool_name}:commit:${toolCallId}`,
-	      ...(context.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: context.tenant_policy_snapshot_ref } : {}),
-	      ...(context.tenant_policy_hash ? { tenant_policy_hash: context.tenant_policy_hash } : {}),
-	      ...(context.execution_plan_ref ? { execution_plan_ref: context.execution_plan_ref } : {}),
-	      ...(context.execution_plan_hash ? { execution_plan_hash: context.execution_plan_hash } : {}),
-	      request_id: context.request_id,
-	    }));
-    heartbeatActivity({ activity: 'commitToolActivity', phase: 'after_request', tool_name: tool.tool_name, tool_call_id: toolCallId, status: result.status });
+      tool_call_id: toolCallId,
+      status: result.status,
+    });
     return result;
   });
 }
@@ -722,7 +900,10 @@ export async function updateTaskRunStatusActivity(
       ...(input.error_message ? { errorMessage: input.error_message } : {}),
     });
     if (!updated) {
-      throw ApplicationFailure.nonRetryable(`TaskRun not found for status update: ${input.task_run_id}`, 'NOT_FOUND');
+      throw ApplicationFailure.nonRetryable(
+        `TaskRun not found for status update: ${input.task_run_id}`,
+        'NOT_FOUND',
+      );
     }
     if (input.tenant_admission_id && (input.status === 'completed' || input.status === 'failed')) {
       await new TenantAgentAdmissionRepository(db).release(
@@ -737,7 +918,10 @@ export async function loadFlowSpecByRefActivity(flowSnapshotRef: string): Promis
   const dbRef = parseDbFlowSnapshotRef(flowSnapshotRef);
   if (dbRef) {
     const db = getProcessDb();
-    const flowSpec = await new FlowDefinitionRepository(db).getPublished(dbRef.flowId, dbRef.version);
+    const flowSpec = await new FlowDefinitionRepository(db).getPublished(
+      dbRef.flowId,
+      dbRef.version,
+    );
     if (!flowSpec) {
       throw new Error(`FlowSpec not found or not executable: ${flowSnapshotRef}`);
     }
@@ -752,12 +936,21 @@ export async function loadFlowSpecByRefActivity(flowSnapshotRef: string): Promis
   throw new Error(`Unknown flow snapshot ref: ${flowSnapshotRef}`);
 }
 
-export async function loadExecutionPlanByRefActivity(executionPlanRef: string, tenantId?: string): Promise<FlowExecutionPlan> {
+export async function loadExecutionPlanByRefActivity(
+  executionPlanRef: string,
+  tenantId?: string,
+): Promise<FlowExecutionPlan> {
   return classifyActivityFailure('loadExecutionPlanByRefActivity', async () => {
     const db = getProcessDb();
-    const plan = await new FlowExecutionPlanRepository(db).getByRef(executionPlanRef, tenantId ? { tenantId } : {});
+    const plan = await new FlowExecutionPlanRepository(db).getByRef(
+      executionPlanRef,
+      tenantId ? { tenantId } : {},
+    );
     if (!plan) {
-      throw ApplicationFailure.nonRetryable(`FlowExecutionPlan not found: ${executionPlanRef}`, 'NOT_FOUND');
+      throw ApplicationFailure.nonRetryable(
+        `FlowExecutionPlan not found: ${executionPlanRef}`,
+        'NOT_FOUND',
+      );
     }
     return flowExecutionPlanSchema.parse(plan);
   });
@@ -793,7 +986,9 @@ function createPiRuntime(input: {
     if (isProductionRuntime(config)) {
       throw new Error('PI_AGENT_MODE=deterministic is not allowed in production');
     }
-    const deterministic = createDeterministicPiStream(parseDeterministicScenario(input.executionPlan.model_policy));
+    const deterministic = createDeterministicPiStream(
+      parseDeterministicScenario(input.executionPlan.model_policy),
+    );
     return {
       model: deterministic.model,
       streamFn: deterministic.streamFn,
@@ -803,7 +998,9 @@ function createPiRuntime(input: {
   if (config.PI_AGENT_MODE === 'model_gateway') {
     const target = input.executionPlan.resolved_model_policy.resolved_targets[0];
     if (!target) {
-      throw new Error(`ModelPolicy has no executable targets: ${input.executionPlan.model_policy_id}@${input.executionPlan.model_policy_version}`);
+      throw new Error(
+        `ModelPolicy has no executable targets: ${input.executionPlan.model_policy_id}@${input.executionPlan.model_policy_version}`,
+      );
     }
     return {
       model: createModelGatewayModel(target),
@@ -817,6 +1014,7 @@ function createPiRuntime(input: {
         timeoutMs: config.MODEL_GATEWAY_TIMEOUT_MS,
         maxRetries: config.MODEL_GATEWAY_MAX_RETRIES,
         maxResponseBytes: config.MODEL_GATEWAY_MAX_RESPONSE_BYTES,
+        maxLedgerResponseBytes: config.MODEL_CALL_LEDGER_MAX_RESPONSE_BYTES,
         allowInsecureHttp: config.MODEL_GATEWAY_ALLOW_INSECURE_HTTP,
         idempotencyHeader: config.MODEL_GATEWAY_IDEMPOTENCY_HEADER,
         userAgent: config.MODEL_GATEWAY_USER_AGENT,
@@ -830,7 +1028,9 @@ function createPiRuntime(input: {
 function parseDeterministicScenario(modelPolicy: string): DeterministicPiScenario {
   const match = /^deterministic:(.+)$/u.exec(modelPolicy);
   if (!match?.[1]) {
-    throw new Error(`Deterministic Pi mode requires model_policy=deterministic:<scenario>, got ${modelPolicy}`);
+    throw new Error(
+      `Deterministic Pi mode requires model_policy=deterministic:<scenario>, got ${modelPolicy}`,
+    );
   }
   const scenario = match[1];
   if (isDeterministicScenario(scenario)) {
@@ -860,7 +1060,9 @@ function isDeterministicScenario(value: string): value is DeterministicPiScenari
 function decisionSummaryForSegment(segmentResult: PiSegmentResult): string {
   switch (segmentResult.status) {
     case 'completed':
-      return segmentResult.final_answer ? segmentResult.final_answer.slice(0, 2000) : 'Pi segment completed';
+      return segmentResult.final_answer
+        ? segmentResult.final_answer.slice(0, 2000)
+        : 'Pi segment completed';
     case 'tool_requested':
       return `Pi requested ${segmentResult.proposed_tool_calls.length} tool call(s)`;
     case 'user_input_required':
@@ -909,10 +1111,7 @@ function sanitizeKeySegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9_.-]/gu, '-');
 }
 
-async function classifyActivityFailure<T>(
-  activityName: string,
-  fn: () => Promise<T>,
-): Promise<T> {
+async function classifyActivityFailure<T>(activityName: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (error) {
@@ -929,8 +1128,14 @@ async function classifyActivityFailure<T>(
 }
 
 function classifyErrorCode(message: string): string | undefined {
-  if (/TENANT_POLICY_HASH_MISMATCH|EXECUTION_PLAN_HASH_MISMATCH|AGENT_MODEL_DENIED_BY_TENANT_POLICY|HANDOFF_DENIED_BY_TENANT_POLICY|TOOL_DENIED_BY_TENANT_POLICY/u.test(message)) {
-    return message.match(/TENANT_POLICY_HASH_MISMATCH|EXECUTION_PLAN_HASH_MISMATCH|AGENT_MODEL_DENIED_BY_TENANT_POLICY|HANDOFF_DENIED_BY_TENANT_POLICY|TOOL_DENIED_BY_TENANT_POLICY/u)?.[0];
+  if (
+    /TENANT_POLICY_HASH_MISMATCH|EXECUTION_PLAN_HASH_MISMATCH|AGENT_MODEL_DENIED_BY_TENANT_POLICY|HANDOFF_DENIED_BY_TENANT_POLICY|TOOL_DENIED_BY_TENANT_POLICY/u.test(
+      message,
+    )
+  ) {
+    return message.match(
+      /TENANT_POLICY_HASH_MISMATCH|EXECUTION_PLAN_HASH_MISMATCH|AGENT_MODEL_DENIED_BY_TENANT_POLICY|HANDOFF_DENIED_BY_TENANT_POLICY|TOOL_DENIED_BY_TENANT_POLICY/u,
+    )?.[0];
   }
   if (/validation|invalid|schema|parse/iu.test(message)) {
     return 'VALIDATION_FAILED';

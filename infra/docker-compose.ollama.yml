@@ -1,0 +1,20 @@
+services:
+  runtime-worker:
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    environment:
+      NODE_ENV: development
+      APP_ENV: development
+      PI_AGENT_MODE: model_gateway
+      MODEL_GATEWAY_MODE: openai_compatible
+      MODEL_GATEWAY_PROTOCOL: openai_chat_completions
+      MODEL_GATEWAY_PROFILE_ID: local-ollama
+      MODEL_GATEWAY_BASE_URL: http://host.docker.internal:11434/v1
+      MODEL_GATEWAY_API_KEY: ollama
+      MODEL_GATEWAY_MODEL: qwen2.5:7b-instruct-q4_K_M
+      MODEL_GATEWAY_TIMEOUT_MS: 300000
+      MODEL_GATEWAY_MAX_RETRIES: 1
+      MODEL_GATEWAY_MAX_RESPONSE_BYTES: 1048576
+      MODEL_GATEWAY_ALLOW_INSECURE_HTTP: true
+      MODEL_GATEWAY_IDEMPOTENCY_HEADER: Idempotency-Key
+      MODEL_GATEWAY_USER_AGENT: durable-agent-runtime-lite/runtime-worker-ollama
