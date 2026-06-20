@@ -2,7 +2,7 @@ import { pathToFileURL } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import type { StandardErrorResponse, StandardSuccessResponse } from '@dar/contracts';
-import { getAppPort, loadConfig } from '@dar/config';
+import { getAppPort, getBuildInfo, loadConfig } from '@dar/config';
 import { createLogger } from '@dar/logger';
 import { AuthError } from '@dar/security';
 import { TenantRuntimePolicyError } from '@dar/db';
@@ -138,6 +138,8 @@ export function buildServer(
     status: 'ok',
     app: appName,
   }));
+
+  server.get('/version', async () => getBuildInfo(appName, config));
 
   server.get('/readyz', async (_request, reply) => {
     if ('check' in readiness) {

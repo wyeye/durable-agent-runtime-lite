@@ -20,4 +20,12 @@ describe('example ModelPolicy references', () => {
       model_policy_hash: hashModelPolicy(policy),
     });
   });
+
+  it('defines the opt-in local Ollama seed policy with the exact release-gate model', async () => {
+    const seedScript = await readFile(new URL('../scripts/seed-examples.ts', import.meta.url), 'utf8');
+
+    expect(seedScript).toContain('SEED_LOCAL_OLLAMA_MODEL_POLICY');
+    expect(seedScript).toContain('local-ollama');
+    expect(seedScript).toContain('qwen2.5:7b-instruct-q4_K_M');
+  });
 });

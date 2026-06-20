@@ -28,6 +28,8 @@ import {
 const repoRootUrl = new URL('..', import.meta.url);
 const tenantId = process.env.SEED_TENANT_ID ?? 'default';
 const defaultDatabaseUrl = 'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime';
+const shouldSeedLocalOllamaModelPolicy = process.env.SEED_LOCAL_OLLAMA_MODEL_POLICY === 'true';
+const localOllamaModelId = 'qwen2.5:7b-instruct-q4_K_M';
 
 async function readJson(path: string): Promise<unknown> {
   return JSON.parse(await readFile(new URL(path, repoRootUrl), 'utf8'));
@@ -69,6 +71,9 @@ export async function seedExamples(databaseUrl = process.env.DATABASE_URL ?? def
       createdBy: 'seed-examples',
     });
     await seedModelPolicy(db, tenantId, modelPolicy);
+    if (shouldSeedLocalOllamaModelPolicy) {
+      await seedModelPolicy(db, tenantId, localOllamaModelPolicy());
+    }
     await upsertAgentSpec(db, agent, { tenantId, status: 'published', createdBy: 'seed-examples' });
     await upsertPromptDefinition(db, prompt, { tenantId, status: 'published', createdBy: 'seed-examples' });
     await new FlowExecutionPlanRepository(db).createForFlow({
@@ -120,6 +125,51 @@ async function seedModelPolicy(db: ReturnType<typeof createDb>, tenantIdValue: s
   });
 }
 
+function localOllamaModelPolicy() {
+  return modelPolicySchema.parse({
+    model_policy_id: 'local_ollama_qwen25_7b_instruct_q4_k_m',
+    version: 1,
+    status: 'published',
+    protocol: 'openai_chat_completions',
+    targets: [
+      {
+        target_id: 'local_ollama_qwen25_7b_instruct_q4_k_m_primary',
+        gateway_profile: 'local-ollama',
+        model_id: localOllamaModelId,
+        priority: 0,
+        enabled: true,
+        capabilities: ['text', 'tools', 'usage'],
+      },
+    ],
+    retry_policy: {
+      max_attempts_per_target: 2,
+      retryable_status_codes: [429, 500, 502, 503, 504],
+      retry_on_timeout: true,
+      retry_on_network_error: true,
+      backoff_ms: 10,
+      max_backoff_ms: 50,
+    },
+    fallback_policy: {
+      enabled: false,
+      ordered_target_ids: [],
+      eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
+      stop_on_auth_error: true,
+      stop_on_validation_error: true,
+      stop_on_policy_denial: true,
+    },
+    request_policy: {
+      temperature: 0,
+      top_p: 1,
+      max_output_tokens: 1000,
+      initial_tool_choice_mode: 'auto',
+      after_tool_result_tool_choice_mode: 'auto',
+      response_format: 'text',
+      allow_parallel_tool_calls: false,
+    },
+    revision: 1,
+  });
+}
+
 async function seedTenantPolicy(db: ReturnType<typeof createDb>, tenantIdValue: string) {
   const repository = new TenantRuntimePolicyRepository(db);
   const existing = await repository.getLatestPublished(tenantIdValue);
@@ -164,6 +214,9 @@ async function seedTenantPolicy(db: ReturnType<typeof createDb>, tenantIdValue: 
       { model_id: 'deterministic:repeated_tool' },
       { model_id: 'model_gateway:model_gateway' },
       { model_id: 'model_gateway:readonly_tool' },
+      ...(shouldSeedLocalOllamaModelPolicy
+        ? [{ model_id: localOllamaModelId }, { model_id: 'local-ollama:local_ollama_qwen25_7b_instruct_q4_k_m' }]
+        : []),
     ],
     denied_models: [],
     allowed_handoffs: [

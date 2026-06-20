@@ -5,7 +5,7 @@
 R0/AR-2A 状态：
 
 - AR-1 Platform Core 已冻结为 `0.8.0`，见 `docs/PLATFORM_CORE_BASELINE.md`。
-- AR-2A 当前为 `PARTIAL`：ModelPolicy、OpenAI-compatible client、tool-call round-trip、ledger 和本地 Ollama probe/runtime smoke 已接入；本机已通过宿主当前代码 + Docker DB/Temporal/Tool Gateway 的本地 Ollama runtime smokes，完整 Docker image rebuild 和 containerized Ollama runtime smoke 尚未完成。
+- AR-2A 当前为 `PARTIAL`：ModelPolicy、OpenAI-compatible client、tool-call round-trip、ledger、本地 Ollama probe 和纯容器化 Ollama runtime gate 已接入并在本机通过；但这份 diff 尚未提交并证明最新 GitHub CI/Integration 全绿，因此不能晋级 `0.9.0-rc.1`。
 
 Durable Agent Runtime Lite 是一个四应用通用 Agent Runtime 骨架：
 
@@ -173,12 +173,18 @@ ollama list
 ollama show qwen2.5:7b-instruct-q4_K_M
 corepack pnpm ollama:probe
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.ollama.yml config
+BUILD_SHA="$(git rev-parse HEAD)" corepack pnpm runtime:assert-containerized
+BUILD_SHA="$(git rev-parse HEAD)" corepack pnpm smoke:ollama-containerized-e2e
 corepack pnpm smoke:ollama-runtime-final-e2e
 corepack pnpm smoke:ollama-runtime-readonly-e2e
 corepack pnpm smoke:ollama-runtime-l3-e2e
 ```
 
 `ollama:probe` 只验证宿主机 Ollama OpenAI-compatible API、精确模型 `qwen2.5:7b-instruct-q4_K_M`、final 文本、结构化 tool call、tool result 后续轮次、JSON object 和 abort。三个 `smoke:ollama-runtime-*` 命令走 `/v1/agent-tasks` 的真实 runtime 路径，要求 DB、Temporal、runtime-worker、runtime-api 和 tool-gateway 使用等效的 Ollama Model Gateway 配置运行；它们不是裸模型 probe。
+
+`smoke:ollama-containerized-e2e` 是 AR-2A-RC 的本地人工 release gate。它要求四个生产 app 都来自 Docker 镜像，只有 Ollama 在宿主机运行；它会断言 `/version` 的 build SHA、`runtime-worker` 的 `model_gateway` / `local-ollama` 环境、`mock-server` 未运行，并检查 DB 中 final/readonly/L3 的 ModelCall、ToolCall、HumanTask、Audit 和 Idempotency 证据。未提交工作树本地验证时使用 `BUILD_SHA="$(git rev-parse HEAD)-dirty"`。
+
+Ollama 不会被普通 GitHub Hosted CI 下载或运行。可选 workflow `.github/workflows/ollama-runtime.yml` 仅支持 `workflow_dispatch`，并要求 `runs-on: [self-hosted, ollama]` 的 runner 已安装 Ollama 且已拉取 `qwen2.5:7b-instruct-q4_K_M`。
 
 `smoke:pi-worker-crash-resume-e2e` 会真实 `SIGKILL` compose 里的
 `runtime-worker`，在 worker 停止期间通过 runtime-api 写入 waiting-user /

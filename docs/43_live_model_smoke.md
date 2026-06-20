@@ -23,10 +23,20 @@ corepack pnpm smoke:model-gateway-live-l3-e2e
 
 If `LIVE_MODEL_GATEWAY_ENABLED` is not `true`, each command prints `skipped: true` and exits 0. If enabled but required configuration is missing, it exits non-zero.
 
-Current local implementation verifies the external OpenAI-compatible protocol and structured tool-call capability directly through `ModelGatewayClient`. The full runtime live chain still needs a protected environment with real credentials to prove:
+Current local implementation verifies the external OpenAI-compatible protocol and structured tool-call capability directly through `ModelGatewayClient`.
+
+For local Ollama, the full runtime chain is covered by:
+
+```bash
+BUILD_SHA="$(git rev-parse HEAD)" corepack pnpm smoke:ollama-containerized-e2e
+```
+
+That command proves:
 
 ```text
 runtime-api -> Temporal -> runtime-worker -> Pi -> Tool Gateway -> Pi final
 ```
 
-Until that protected runtime live chain passes, AR-2A remains `PARTIAL`.
+with the host Ollama OpenAI-compatible API and exact model `qwen2.5:7b-instruct-q4_K_M`.
+
+For external providers, a protected runtime live chain still needs a secure environment with real credentials. Until the containerized gate, full regression, and latest GitHub CI/Integration all pass on the committed diff, AR-2A remains `PARTIAL`.

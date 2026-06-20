@@ -58,6 +58,10 @@ services:
     build:
       context: ..
       dockerfile: apps/tool-gateway/Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-0.8.0}
+        BUILD_SHA: ${BUILD_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     image: durable-agent-runtime/tool-gateway:local
     container_name: dar-tool-gateway
     depends_on:
@@ -85,6 +89,10 @@ services:
     build:
       context: ..
       dockerfile: apps/runtime-worker/Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-0.8.0}
+        BUILD_SHA: ${BUILD_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     image: durable-agent-runtime/runtime-worker:local
     container_name: dar-runtime-worker
     depends_on:
@@ -126,6 +134,10 @@ services:
     build:
       context: ..
       dockerfile: apps/runtime-api/Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-0.8.0}
+        BUILD_SHA: ${BUILD_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     image: durable-agent-runtime/runtime-api:local
     container_name: dar-runtime-api
     depends_on:
@@ -157,6 +169,10 @@ services:
     build:
       context: ..
       dockerfile: apps/control-plane/Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-0.8.0}
+        BUILD_SHA: ${BUILD_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     image: durable-agent-runtime/control-plane:local
     container_name: dar-control-plane
     depends_on:

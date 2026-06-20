@@ -34,6 +34,8 @@ export const runtimeConfigSchema = z.object({
   ),
   APP_ENV: stringSchema('local'),
   APP_VERSION: stringSchema('0.8.0'),
+  BUILD_SHA: stringSchema('unknown'),
+  BUILD_TIME: stringSchema('unknown'),
   HOST: stringSchema('0.0.0.0'),
   PORT: optionalPortSchema,
   DATABASE_URL: urlSchema(
@@ -141,6 +143,13 @@ export const runtimeConfigSchema = z.object({
 export type AppName = z.infer<typeof appNameSchema>;
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>;
 
+export interface BuildInfo {
+  service: AppName;
+  version: string;
+  build_sha: string;
+  build_time: string;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   return runtimeConfigSchema.parse(env);
 }
@@ -170,4 +179,13 @@ export function getToolGatewayUrl(config: RuntimeConfig): string {
 
 export function getRuntimeApiUrl(config: RuntimeConfig): string {
   return config.RUNTIME_API_URL ?? 'http://localhost:3001';
+}
+
+export function getBuildInfo(service: AppName, config: RuntimeConfig): BuildInfo {
+  return {
+    service,
+    version: config.APP_VERSION,
+    build_sha: config.BUILD_SHA,
+    build_time: config.BUILD_TIME,
+  };
 }

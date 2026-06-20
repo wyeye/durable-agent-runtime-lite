@@ -774,6 +774,21 @@ scripts/docker-run-local.sh            # starts local Docker stack
 docs/13_docker_deployment.md           # Docker deployment notes
 ```
 
+### 19.0.1 AR-2A Ollama Container Gate
+
+The local Ollama release gate is a manual validation path, not a fifth production app.
+
+Rules:
+
+- Ollama runs on the host machine only.
+- The exact model is `qwen2.5:7b-instruct-q4_K_M`.
+- The four production apps must run from Docker images.
+- `runtime-worker` must use `PI_AGENT_MODE=model_gateway`, `MODEL_GATEWAY_PROFILE_ID=local-ollama`, and `MODEL_GATEWAY_BASE_URL=http://host.docker.internal:11434/v1`.
+- `mock-server` must not run for the Ollama gate.
+- deterministic Pi must not be used for the Ollama gate.
+- Container acceptance must prove `/version` build metadata and DB model-call evidence, not merely a non-crashing flow.
+- Ordinary GitHub hosted CI must not download or run the 7B Ollama model; use `.github/workflows/ollama-runtime.yml` on `[self-hosted, ollama]`.
+
 Build context rule:
 
 - All Docker builds must use the **repository root** as the Docker build context.

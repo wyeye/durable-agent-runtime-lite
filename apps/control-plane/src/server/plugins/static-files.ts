@@ -2,7 +2,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { join, normalize } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 
-const excludedPrefixes = ['/api/', '/healthz', '/readyz', '/openapi.json', '/docs'];
+const excludedPrefixes = ['/api/', '/healthz', '/readyz', '/version', '/openapi.json', '/docs'];
 
 export async function staticFilesPlugin(server: FastifyInstance, options: { rootDir: string }): Promise<void> {
   server.setNotFoundHandler(async (request, reply) => {

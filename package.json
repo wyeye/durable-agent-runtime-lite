@@ -40,6 +40,8 @@
     "smoke:model-gateway-live-readonly-e2e": "LIVE_MODEL_GATEWAY_SCENARIO=readonly tsx scripts/smoke-model-gateway-live.ts",
     "smoke:model-gateway-live-l3-e2e": "LIVE_MODEL_GATEWAY_SCENARIO=l3 tsx scripts/smoke-model-gateway-live.ts",
     "ollama:probe": "tsx scripts/probe-ollama-model.ts",
+    "runtime:assert-containerized": "tsx scripts/assert-containerized-runtime.ts",
+    "smoke:ollama-containerized-e2e": "tsx scripts/smoke-ollama-containerized-e2e.ts",
     "smoke:ollama-runtime-final-e2e": "PI_SMOKE_SCENARIO=model_gateway_final PI_SMOKE_MODE=model_gateway MODEL_GATEWAY_PROTOCOL=openai_chat_completions MODEL_GATEWAY_PROVIDER=local-ollama MODEL_GATEWAY_MODEL=qwen2.5:7b-instruct-q4_K_M tsx scripts/smoke-pi-e2e.ts",
     "smoke:ollama-runtime-readonly-e2e": "PI_SMOKE_SCENARIO=readonly_tool PI_SMOKE_MODE=model_gateway MODEL_GATEWAY_PROTOCOL=openai_chat_completions MODEL_GATEWAY_PROVIDER=local-ollama MODEL_GATEWAY_MODEL=qwen2.5:7b-instruct-q4_K_M tsx scripts/smoke-pi-e2e.ts",
     "smoke:ollama-runtime-l3-e2e": "PI_SMOKE_SCENARIO=l3_tool PI_SMOKE_MODE=model_gateway MODEL_GATEWAY_PROTOCOL=openai_chat_completions MODEL_GATEWAY_PROVIDER=local-ollama MODEL_GATEWAY_MODEL=qwen2.5:7b-instruct-q4_K_M tsx scripts/smoke-pi-e2e.ts",

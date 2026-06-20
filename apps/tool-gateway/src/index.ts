@@ -9,7 +9,7 @@ import type {
   ToolInvokeResponse,
   ToolPreviewResponse,
 } from '@dar/contracts';
-import { getAppPort, loadConfig } from '@dar/config';
+import { getAppPort, getBuildInfo, loadConfig } from '@dar/config';
 import { createLogger } from '@dar/logger';
 import {
   ServiceAuthError,
@@ -141,6 +141,8 @@ export function buildServerWithReadiness(
     status: 'ok',
     app: appName,
   }));
+
+  server.get('/version', async () => getBuildInfo(appName, config));
 
   server.get('/readyz', async (_request, reply) => {
     if (readiness) {

@@ -60,6 +60,7 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
   await openApiPlugin(app, { config });
   await authPlugin(app, { config });
   await healthRoutes(app, {
+    config,
     readyCheck: options.readyCheck ?? (async () => { await sql`select 1`.execute(requireDb(db)); }),
   });
   await registryRoutes(app, { service: registryService });

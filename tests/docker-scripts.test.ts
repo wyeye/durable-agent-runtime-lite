@@ -28,9 +28,31 @@ describe('docker deployment files', () => {
   it('keeps Node runner images readable by their unprivileged app user', async () => {
     for (const file of dockerfiles) {
       const content = await readFile(file, 'utf8');
-      expect(content).toContain('COPY --from=builder --chown=app:app /repo /repo');
+      expect(content).not.toContain('COPY --from=builder --chown=app:app /repo /repo');
+      expect(content).toContain('COPY --from=builder --chown=app:app /repo/node_modules /repo/node_modules');
+      expect(content).toContain('mkdir -p /repo/runtime-packages');
+      expect(content).toContain('cp -R "$package_dir/dist" "/repo/runtime-packages/$package_name/dist"');
+      expect(content).toContain('COPY --from=builder --chown=app:app /repo/runtime-packages /repo/packages');
+      expect(content).not.toContain('COPY --from=builder --chown=app:app /repo/packages /repo/packages');
+      expect(content).toContain('COPY --from=builder --chown=app:app /repo/apps/');
       expect(content).toContain('--workspace-concurrency=1 build');
       expect(content).toContain('USER app');
+    }
+  });
+
+  it('stamps app images with build args, OCI labels, and frozen pnpm installs', async () => {
+    for (const file of dockerfiles) {
+      const content = await readFile(file, 'utf8');
+      expect(content).toContain('ARG APP_VERSION=0.8.0');
+      expect(content).toContain('ARG BUILD_SHA=unknown');
+      expect(content).toContain('ARG BUILD_TIME=unknown');
+      expect(content).toContain('org.opencontainers.image.version="${APP_VERSION}"');
+      expect(content).toContain('org.opencontainers.image.revision="${BUILD_SHA}"');
+      expect(content).toContain('org.opencontainers.image.created="${BUILD_TIME}"');
+      expect(content).toContain('org.opencontainers.image.source="https://github.com/wyeye/durable-agent-runtime-lite"');
+      expect(content).toContain('pnpm install --frozen-lockfile');
+      expect(content).toContain('CI=true pnpm prune --prod');
+      expect(content).toContain('install --prod --frozen-lockfile --offline');
     }
   });
 
@@ -46,6 +68,7 @@ describe('docker deployment files', () => {
     await expect(stat('Dockerfile')).rejects.toThrow();
     const compose = await readFile('infra/docker-compose.yml', 'utf8');
     expect(compose.match(/context: \.\./g)?.length).toBe(4);
+    expect(compose.match(/BUILD_SHA: \${BUILD_SHA:-unknown}/g)?.length).toBe(4);
     expect(compose).toContain('dockerfile: apps/runtime-api/Dockerfile');
     expect(compose).toContain('dockerfile: apps/tool-gateway/Dockerfile');
     expect(compose).toContain('RUNTIME_API_ROUTE_SOURCE: db');
@@ -61,8 +84,12 @@ describe('docker deployment files', () => {
     const rootPackage = await readFile('package.json', 'utf8');
     expect(rootPackage).toContain('"smoke:temporal-db-e2e": "tsx scripts/smoke-temporal-db-e2e.ts"');
     expect(rootPackage).toContain('"smoke:control-plane-api-e2e": "tsx scripts/smoke-control-plane-api-e2e.ts"');
+    expect(rootPackage).toContain('"runtime:assert-containerized": "tsx scripts/assert-containerized-runtime.ts"');
+    expect(rootPackage).toContain('"smoke:ollama-containerized-e2e": "tsx scripts/smoke-ollama-containerized-e2e.ts"');
     await access('scripts/smoke-temporal-db-e2e.ts', constants.R_OK);
     await access('scripts/smoke-control-plane-api-e2e.ts', constants.R_OK);
+    await access('scripts/assert-containerized-runtime.ts', constants.R_OK);
+    await access('scripts/smoke-ollama-containerized-e2e.ts', constants.R_OK);
   });
 
   it('lets example seeding target the local compose database without extra env', async () => {

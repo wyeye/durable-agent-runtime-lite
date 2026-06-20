@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getAppPort, getToolGatewayUrl, loadConfig } from '../src/index.js';
+import { getAppPort, getBuildInfo, getToolGatewayUrl, loadConfig } from '../src/index.js';
 
 describe('runtime config', () => {
   it('loads local-safe defaults when env is absent', () => {
@@ -10,6 +10,12 @@ describe('runtime config', () => {
     expect(getToolGatewayUrl(config)).toBe('http://localhost:3003');
     expect(config.RUNTIME_WORKER_MODE).toBe('mock');
     expect(config.RUNTIME_API_WORKFLOW_STARTER).toBe('mock');
+    expect(getBuildInfo('runtime-api', config)).toEqual({
+      service: 'runtime-api',
+      version: '0.8.0',
+      build_sha: 'unknown',
+      build_time: 'unknown',
+    });
   });
 
   it('treats empty optional environment values as absent', () => {

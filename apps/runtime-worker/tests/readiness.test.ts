@@ -4,6 +4,25 @@ import { buildServer } from '../src/index.js';
 import type { TemporalWorkerHandle } from '../src/worker.js';
 
 describe('runtime-worker readiness', () => {
+  it('returns build metadata without exposing configuration secrets', async () => {
+    const server = buildServer({
+      mode: 'temporal',
+      state: { status: 'running', ready: true },
+    }, { ...config(), APP_VERSION: '9.9.9-test', BUILD_SHA: 'abc123', BUILD_TIME: '2026-01-01T00:00:00Z' });
+
+    const response = await server.inject({ method: 'GET', url: '/version' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      service: 'runtime-worker',
+      version: '9.9.9-test',
+      build_sha: 'abc123',
+      build_time: '2026-01-01T00:00:00Z',
+    });
+    expect(response.body).not.toContain('dev-only-placeholder');
+
+    await server.close();
+  });
+
   it('returns not_ready after worker stops', async () => {
     const handle: TemporalWorkerHandle = {
       mode: 'mock',
@@ -160,6 +179,8 @@ function config(): RuntimeConfig {
     NODE_ENV: 'development',
     APP_ENV: 'local',
     APP_VERSION: '0.8.0',
+  BUILD_SHA: 'test-sha',
+  BUILD_TIME: '2026-01-01T00:00:00Z',
     HOST: '0.0.0.0',
     DATABASE_URL: 'postgres://user:pass@localhost:5432/db',
     VALKEY_URL: 'redis://localhost:16380',

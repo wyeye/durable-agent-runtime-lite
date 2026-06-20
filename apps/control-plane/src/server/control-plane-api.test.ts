@@ -68,6 +68,29 @@ const tenantPolicySpec: TenantRuntimePolicy = {
 };
 
 describe('control-plane API', () => {
+  it('returns build metadata without exposing service tokens', async () => {
+    const { app, close } = await testApp({
+      configEnv: {
+        APP_VERSION: '9.9.9-test',
+        BUILD_SHA: 'abc123',
+        BUILD_TIME: '2026-01-01T00:00:00Z',
+        CONTROL_PLANE_TOOL_GATEWAY_TOKEN: 'control-plane-token-for-tests',
+      },
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/version' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      service: 'control-plane',
+      version: '9.9.9-test',
+      build_sha: 'abc123',
+      build_time: '2026-01-01T00:00:00Z',
+    });
+    expect(response.body).not.toContain('control-plane-token-for-tests');
+
+    await close();
+  });
+
   it('returns 401 when identity headers are missing for write APIs', async () => {
     const { app, close } = await testApp();
     const response = await app.inject({
@@ -342,6 +365,7 @@ describe('control-plane API', () => {
 });
 
 async function testApp(options: {
+  configEnv?: NodeJS.ProcessEnv;
   registryService?: RegistryApi;
   runtimeApiClient?: FakeRuntimeApiClient;
   toolGatewayClient?: FakeToolGatewayClient;
@@ -355,6 +379,7 @@ async function testApp(options: {
       CONTROL_PLANE_AUTH_MODE: 'header',
       RUNTIME_API_URL: 'http://runtime-api.test',
       TOOL_GATEWAY_URL: 'http://tool-gateway.test',
+      ...(options.configEnv ?? {}),
     }),
     registryService: options.registryService ?? new FakeRegistryApi(),
     runtimeApiClient: options.runtimeApiClient ?? new FakeRuntimeApiClient(),

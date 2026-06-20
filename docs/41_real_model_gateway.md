@@ -53,11 +53,15 @@ Local Ollama validation:
 
 ```bash
 corepack pnpm ollama:probe
+BUILD_SHA="$(git rev-parse HEAD)" corepack pnpm runtime:assert-containerized
+BUILD_SHA="$(git rev-parse HEAD)" corepack pnpm smoke:ollama-containerized-e2e
 corepack pnpm smoke:ollama-runtime-final-e2e
 corepack pnpm smoke:ollama-runtime-readonly-e2e
 corepack pnpm smoke:ollama-runtime-l3-e2e
 ```
 
 `ollama:probe` checks the exact local model `qwen2.5:7b-instruct-q4_K_M`.
-The runtime smoke commands require the Docker/Temporal/DB/tool-gateway stack
-configured with `infra/docker-compose.ollama.yml`.
+The containerized smoke requires Dockerized `runtime-api`, `runtime-worker`,
+`tool-gateway`, and `control-plane`; only Ollama runs on the host. It fails if
+`mock-server` is running, deterministic Pi is enabled, or the DB evidence does
+not show `provider=local-ollama` and model `qwen2.5:7b-instruct-q4_K_M`.

@@ -16,15 +16,42 @@ FROM deps AS builder
 COPY . .
 RUN pnpm --filter @dar/control-plane... --workspace-concurrency=1 build \
   && test -f apps/control-plane/dist/server/server/bootstrap.js \
-  && test -f apps/control-plane/dist/public/index.html
+  && test -f apps/control-plane/dist/public/index.html \
+  && CI=true pnpm prune --prod \
+  && pnpm --filter @dar/control-plane... install --prod --frozen-lockfile --offline \
+  && mkdir -p /repo/runtime-packages \
+  && for package_dir in packages/*; do \
+    package_name="$(basename "$package_dir")"; \
+    if [ -d "$package_dir/dist" ]; then \
+      mkdir -p "/repo/runtime-packages/$package_name"; \
+      cp "$package_dir/package.json" "/repo/runtime-packages/$package_name/package.json"; \
+      cp -R "$package_dir/dist" "/repo/runtime-packages/$package_name/dist"; \
+      if [ -d "$package_dir/node_modules" ]; then cp -R "$package_dir/node_modules" "/repo/runtime-packages/$package_name/node_modules"; fi; \
+    fi; \
+  done
 
 FROM node:24-bookworm-slim AS runner
+ARG APP_VERSION=0.8.0
+ARG BUILD_SHA=unknown
+ARG BUILD_TIME=unknown
+LABEL org.opencontainers.image.version="${APP_VERSION}" \
+  org.opencontainers.image.revision="${BUILD_SHA}" \
+  org.opencontainers.image.created="${BUILD_TIME}" \
+  org.opencontainers.image.source="https://github.com/wyeye/durable-agent-runtime-lite"
 ENV NODE_ENV=production
+ENV APP_VERSION=${APP_VERSION}
+ENV BUILD_SHA=${BUILD_SHA}
+ENV BUILD_TIME=${BUILD_TIME}
 ENV HOST=0.0.0.0
 ENV PORT=3100
 WORKDIR /repo/apps/control-plane
 RUN groupadd --system app && useradd --system --gid app app
-COPY --from=builder --chown=app:app /repo /repo
+COPY --from=builder --chown=app:app /repo/package.json /repo/pnpm-lock.yaml /repo/pnpm-workspace.yaml /repo/
+COPY --from=builder --chown=app:app /repo/node_modules /repo/node_modules
+COPY --from=builder --chown=app:app /repo/runtime-packages /repo/packages
+COPY --from=builder --chown=app:app /repo/apps/control-plane/package.json /repo/apps/control-plane/package.json
+COPY --from=builder --chown=app:app /repo/apps/control-plane/dist /repo/apps/control-plane/dist
+COPY --from=builder --chown=app:app /repo/apps/control-plane/node_modules /repo/apps/control-plane/node_modules
 USER app
 EXPOSE 3100
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || '3100') + '/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"

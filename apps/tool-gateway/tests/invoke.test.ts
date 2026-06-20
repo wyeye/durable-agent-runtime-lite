@@ -136,6 +136,8 @@ const productionConfig = {
   NODE_ENV: 'production',
   APP_ENV: 'production',
   APP_VERSION: '0.8.0',
+  BUILD_SHA: 'test-sha',
+  BUILD_TIME: '2026-01-01T00:00:00Z',
   HOST: '0.0.0.0',
   DATABASE_URL: 'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime',
   VALKEY_URL: 'redis://localhost:16380',

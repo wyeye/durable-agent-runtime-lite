@@ -53,6 +53,8 @@ const config: RuntimeConfig = {
   NODE_ENV: 'production',
   APP_ENV: 'production',
   APP_VERSION: '0.8.0',
+  BUILD_SHA: 'test-sha',
+  BUILD_TIME: '2026-01-01T00:00:00Z',
   HOST: '0.0.0.0',
   DATABASE_URL: 'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime',
   VALKEY_URL: 'redis://localhost:16380',
@@ -99,6 +101,27 @@ const config: RuntimeConfig = {
 };
 
 describe('ToolGatewayReadinessService', () => {
+  it('returns build metadata without exposing service tokens', async () => {
+    const server = buildServerWithReadiness(new ToolService(), {
+      ...config,
+      APP_VERSION: '9.9.9-test',
+      BUILD_SHA: 'abc123',
+      BUILD_TIME: '2026-01-01T00:00:00Z',
+    });
+
+    const response = await server.inject({ method: 'GET', url: '/version' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      service: 'tool-gateway',
+      version: '9.9.9-test',
+      build_sha: 'abc123',
+      build_time: '2026-01-01T00:00:00Z',
+    });
+    expect(response.body).not.toContain('runtime-worker-token-for-tests');
+
+    await server.close();
+  });
+
   it('reports ready when registry, snapshot store, and service auth are valid', async () => {
     const service = new ToolGatewayReadinessService({
       config,

@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-06-19 for R0 + AR-2A local Ollama hardening.
+Last updated: 2026-06-20 for AR-2A-RC local containerized Ollama gate.
 
 ## Platform Version
 
@@ -10,7 +10,7 @@ The root `package.json` version is the authority. `corepack pnpm version:check` 
 
 ## Baseline
 
-- Observed local HEAD and `origin/main` before this pass: `170b327b4dd3cc280095e38eb17734fb10d06d2c`.
+- Observed local HEAD and `origin/main` before this pass: `d2b9e41f13380fa730a6946e110a6ba196ac1b23`.
 - Platform Core Baseline file: `docs/PLATFORM_CORE_BASELINE.md`.
 - Migration head: `012_model_call_attempt_indexes.sql`.
 
@@ -31,7 +31,7 @@ The frozen baseline includes DB-backed registry, immutable execution plans, Temp
 
 **PARTIAL**
 
-Implemented and locally verified in this pass:
+Implemented and locally verified:
 
 - ModelPolicy contracts and Zod DTOs.
 - `model_policy`, `model_call_log`, and `model_call_attempt` migration.
@@ -47,18 +47,33 @@ Implemented and locally verified in this pass:
 - Retry/fallback attempt ledger indexes (`global_attempt_index`, `target_attempt_index`, `fallback_index`).
 - Local Ollama OpenAI-compatible probe script for exact model `qwen2.5:7b-instruct-q4_K_M`.
 - Docker compose override for development/test local Ollama via `host.docker.internal:11434`.
-- Local current-code runtime smokes for Ollama final, readonly tool, and L3 human-confirmed tool paths.
+- `/version` endpoints for all four production apps with `APP_VERSION`, `BUILD_SHA`, and `BUILD_TIME`.
+- Docker image build args and OCI labels for all four production app images.
+- Trimmed runner images that exclude `.git`, `.env`, app/package source, tests, and Ollama models.
+- Container provenance assertion script: `corepack pnpm runtime:assert-containerized`.
+- Containerized Ollama runtime gate: `corepack pnpm smoke:ollama-containerized-e2e`.
+- Optional self-hosted Ollama workflow: `.github/workflows/ollama-runtime.yml`.
 - Mock OpenAI-compatible `/v1/chat/completions` endpoint.
 - Control-plane ModelPolicy registry entry and JSON editor template.
 - Protected live Model Gateway probe commands that skip unless explicitly enabled.
 
+Verified in this local pass:
+
+- Four production images built from the current working tree with build SHA `d2b9e41f13380fa730a6946e110a6ba196ac1b23-dirty`.
+- Docker containers for `control-plane`, `runtime-api`, `runtime-worker`, and `tool-gateway` were healthy.
+- `/version` returned `0.8.0` and the dirty build SHA for all four apps.
+- `runtime-worker` ran with `PI_AGENT_MODE=model_gateway`, `MODEL_GATEWAY_MODE=openai_compatible`, `MODEL_GATEWAY_PROFILE_ID=local-ollama`, and model `qwen2.5:7b-instruct-q4_K_M`.
+- `mock-server` was not running.
+- `smoke:ollama-containerized-e2e` passed final, readonly, and L3 paths through the containerized runtime.
+- DB evidence showed `provider=local-ollama`, exact model id, readonly/L3 two model calls, one readonly tool call, one L3 committed tool call, one approved L3 Human Task, audit events, and idempotency records.
+
 Not completed in this local pass:
 
-- Full protected GitHub live-model runtime workflow with Docker stack, migrations, seed, runtime live smokes, artifacts, and teardown. A protected provider-level probe workflow exists at `.github/workflows/live-model.yml`.
-- Full Docker image rebuild and containerized Ollama runtime smoke after the final AR-2A edits. The local runtime smokes were executed with current host-built runtime-api/runtime-worker code against Docker PostgreSQL, Temporal, and Tool Gateway.
+- Public GitHub Actions for `origin/main` / `d2b9e41f13380fa730a6946e110a6ba196ac1b23` showed CI Run 15 passing and Integration Run 9 failing. This diff is still uncommitted and has not run remotely.
+- Full old smoke, Pi smoke, tenant/deep-chain smoke, crash recovery, and replay were not all rerun after the final Docker/seed documentation edits.
 - Complete Model Usage dashboard and operations model-call query UI.
 
-Because the final Docker image rebuild and containerized Ollama runtime smoke are not complete, this repository must not be labeled `0.9.0-rc.1` yet.
+Because latest CI/Integration and full regression are not yet green for the final diff, this repository must not be labeled `0.9.0-rc.1` yet.
 
 ## Model Gateway Runtime
 
@@ -125,12 +140,14 @@ Local Ollama probe and runtime smokes:
 
 ```bash
 corepack pnpm ollama:probe
+corepack pnpm runtime:assert-containerized
+corepack pnpm smoke:ollama-containerized-e2e
 corepack pnpm smoke:ollama-runtime-final-e2e
 corepack pnpm smoke:ollama-runtime-readonly-e2e
 corepack pnpm smoke:ollama-runtime-l3-e2e
 ```
 
-`ollama:probe` checks the real local Ollama OpenAI-compatible API and exact model availability. The `smoke:ollama-runtime-*` commands use `/v1/agent-tasks` and require the DB, Temporal, runtime-api, runtime-worker, and tool-gateway stack to be running with `infra/docker-compose.ollama.yml`.
+`ollama:probe` checks the real local Ollama OpenAI-compatible API and exact model availability. `runtime:assert-containerized` proves the four app containers are healthy, versioned, and not using mock/deterministic runtime. `smoke:ollama-containerized-e2e` runs final, readonly, and L3 through the containerized runtime and checks DB evidence.
 
 ## Verification In This Pass
 
@@ -144,10 +161,9 @@ corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm build
 corepack pnpm test:temporal-replay
+corepack pnpm runtime:assert-containerized
 corepack pnpm ollama:probe
-corepack pnpm smoke:ollama-runtime-final-e2e
-corepack pnpm smoke:ollama-runtime-readonly-e2e
-corepack pnpm smoke:ollama-runtime-l3-e2e
+corepack pnpm smoke:ollama-containerized-e2e
 docker compose -f infra/docker-compose.yml config
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml config
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.ollama.yml config
@@ -163,7 +179,7 @@ corepack pnpm smoke:model-gateway-live-readonly-e2e
 corepack pnpm smoke:model-gateway-live-l3-e2e
 ```
 
-The Ollama runtime smokes used current host-built `runtime-api` and `runtime-worker` processes with Docker PostgreSQL, Temporal, and Tool Gateway; this proved the real runtime data path but did not prove rebuilt app images.
+The Ollama containerized smoke used Dockerized `runtime-api`, `runtime-worker`, `tool-gateway`, and `control-plane`; only Ollama ran on the host.
 
 ## Next AR-2B Work
 

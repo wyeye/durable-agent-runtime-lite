@@ -36,6 +36,7 @@ import {
   ToolCallLogRepository,
   ToolManifestRepository,
   AuditEventRepository,
+  ModelPolicyRepository,
 } from '../src/index.js';
 
 class FakeQuery {
@@ -237,6 +238,61 @@ describe('db repositories', () => {
       'flow_route_config',
       'tool_manifest',
     ]);
+  });
+
+  it('normalizes legacy ModelPolicy request_policy tool_choice_mode from DB rows', async () => {
+    const now = '2026-01-01T00:00:00.000Z';
+    const db = new FakeDb({
+      model_policy: [
+        {
+          tenant_id: 'tenant_1',
+          model_policy_id: 'legacy_model_policy',
+          version: 1,
+          status: 'published',
+          protocol: 'dar_generate',
+          targets_json: [
+            {
+              target_id: 'primary',
+              gateway_profile: 'local-deterministic',
+              model_id: 'deterministic:final_only',
+              priority: 0,
+              enabled: true,
+              capabilities: ['text'],
+            },
+          ],
+          retry_policy_json: {},
+          fallback_policy_json: {},
+          request_policy_json: {
+            temperature: 0,
+            top_p: 1,
+            max_output_tokens: 1000,
+            tool_choice_mode: 'auto',
+            response_format: 'text',
+            allow_parallel_tool_calls: false,
+          },
+          revision: 1,
+          created_by: null,
+          updated_by: null,
+          published_by: 'seed-examples',
+          created_at: now,
+          updated_at: now,
+          published_at: now,
+        },
+      ],
+    });
+
+    const policy = await new ModelPolicyRepository(db as never).getByIdAndVersion('legacy_model_policy', 1, {
+        tenantId: 'tenant_1',
+      });
+
+    expect(policy).toMatchObject({
+      model_policy_id: 'legacy_model_policy',
+      request_policy: {
+        initial_tool_choice_mode: 'auto',
+        after_tool_result_tool_choice_mode: 'auto',
+      },
+    });
+    expect(policy?.request_policy).not.toHaveProperty('tool_choice_mode');
   });
 
   it('stores and verifies FlowExecutionPlan by immutable ref', async () => {

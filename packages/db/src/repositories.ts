@@ -5025,6 +5025,20 @@ function jsonArray(value: unknown): unknown[] {
   return Array.isArray(parsed) ? parsed : [];
 }
 
+function normalizeModelRequestPolicy(value: unknown): Record<string, unknown> {
+  const policy = { ...(jsonRecord(value) ?? {}) };
+  if (
+    'tool_choice_mode' in policy &&
+    !('initial_tool_choice_mode' in policy) &&
+    !('after_tool_result_tool_choice_mode' in policy)
+  ) {
+    policy.initial_tool_choice_mode = policy.tool_choice_mode;
+    policy.after_tool_result_tool_choice_mode = policy.tool_choice_mode;
+  }
+  delete policy.tool_choice_mode;
+  return policy;
+}
+
 function normalizeWriteStatus(status: SpecStatus | undefined): SpecStatus {
   return status ?? 'published';
 }
@@ -5173,7 +5187,7 @@ function mapModelPolicy(row: Selectable<ModelPolicyTable>): ModelPolicy {
     targets: jsonArray(row.targets_json),
     retry_policy: modelRetryPolicySchema.parse(jsonRecord(row.retry_policy_json) ?? {}),
     fallback_policy: modelFallbackPolicySchema.parse(jsonRecord(row.fallback_policy_json) ?? {}),
-    request_policy: modelRequestPolicySchema.parse(jsonRecord(row.request_policy_json) ?? {}),
+    request_policy: modelRequestPolicySchema.parse(normalizeModelRequestPolicy(row.request_policy_json)),
     revision: row.revision,
     ...(row.created_by ? { created_by: row.created_by } : {}),
     ...(row.updated_by ? { updated_by: row.updated_by } : {}),

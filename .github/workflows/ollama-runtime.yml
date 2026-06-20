@@ -1,0 +1,137 @@
+name: Ollama Runtime Gate
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ollama-containerized-runtime:
+    runs-on: [self-hosted, ollama]
+    timeout-minutes: 180
+
+    env:
+      DATABASE_URL: postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime
+      RUNTIME_API_URL: http://localhost:3000
+      TOOL_GATEWAY_URL: http://localhost:3200
+      RUNTIME_WORKER_URL: http://localhost:3300
+      CONTROL_PLANE_URL: http://localhost:3100
+      TEMPORAL_ADDRESS: localhost:7233
+      TEMPORAL_NAMESPACE: default
+      PI_CRASH_RESULT_FILE: artifacts/pi-worker-crash-resume/result.json
+      TEMPORAL_REPLAY_SMOKE_RESULT_FILE: artifacts/pi-worker-crash-resume/result.json
+      TEMPORAL_REPLAY_FIXTURE_DIR: tests/temporal-replay/histories
+      COMPOSE_PARALLEL_LIMIT: 1
+      DOCKER_BUILDKIT: 1
+      COMPOSE_DOCKER_CLI_BUILD: 1
+      APP_VERSION: 0.8.0
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.0.0
+          run_install: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Verify host prerequisites
+        run: |
+          node --version
+          pnpm --version
+          docker --version
+          ollama --version
+          ollama show qwen2.5:7b-instruct-q4_K_M >/dev/null
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Version check
+        run: pnpm version:check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build workspace
+        run: pnpm build
+
+      - name: Compose config
+        run: |
+          docker compose -f infra/docker-compose.yml config
+          docker compose -f infra/docker-compose.yml -f infra/docker-compose.ollama.yml config
+
+      - name: Build production images
+        run: |
+          BUILD_SHA="${GITHUB_SHA}"
+          BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          docker compose -f infra/docker-compose.yml build \
+            --build-arg APP_VERSION="${APP_VERSION}" \
+            --build-arg BUILD_SHA="${BUILD_SHA}" \
+            --build-arg BUILD_TIME="${BUILD_TIME}" \
+            control-plane runtime-api runtime-worker tool-gateway
+
+      - name: Start dependencies
+        run: docker compose -f infra/docker-compose.yml up -d postgres valkey temporal temporal-ui
+
+      - name: Migrate database
+        run: pnpm db:migrate
+
+      - name: Seed examples with local Ollama policy
+        run: SEED_LOCAL_OLLAMA_MODEL_POLICY=true pnpm seed:examples
+
+      - name: Start app containers
+        run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.ollama.yml up -d tool-gateway runtime-worker runtime-api control-plane
+
+      - name: Assert containerized runtime
+        run: BUILD_SHA="${GITHUB_SHA}" pnpm runtime:assert-containerized
+
+      - name: Ollama probe
+        run: pnpm ollama:probe
+
+      - name: Containerized Ollama final
+        run: pnpm smoke:ollama-runtime-final-e2e
+
+      - name: Containerized Ollama readonly
+        run: pnpm smoke:ollama-runtime-readonly-e2e
+
+      - name: Containerized Ollama L3
+        run: pnpm smoke:ollama-runtime-l3-e2e
+
+      - name: Export real Temporal histories
+        run: pnpm temporal:export-replay-fixtures
+
+      - name: Replay exported histories
+        run: pnpm test:temporal-replay
+
+      - name: Safe Docker diagnostics
+        if: always()
+        run: |
+          mkdir -p artifacts/ollama-runtime
+          docker compose -f infra/docker-compose.yml -f infra/docker-compose.ollama.yml ps > artifacts/ollama-runtime/ps.txt
+          docker compose -f infra/docker-compose.yml -f infra/docker-compose.ollama.yml logs --no-color --tail=500 \
+            runtime-api runtime-worker tool-gateway control-plane \
+            | sed -E 's/(TOKEN|SECRET|PASSWORD|API_KEY)=([^[:space:]]+)/\1=[REDACTED]/g; s/Bearer [A-Za-z0-9_.-]+/Bearer [REDACTED]/g; s/dev-only-[A-Za-z0-9_.-]+-token/dev-only-[REDACTED]-token/g' \
+            > artifacts/ollama-runtime/logs.txt
+
+      - name: Upload Ollama runtime artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ollama-runtime-artifacts
+          path: |
+            artifacts/
+            tests/temporal-replay/histories/
+          retention-days: 7
+
+      - name: Stop Docker stack
+        if: always()
+        run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.ollama.yml down -v

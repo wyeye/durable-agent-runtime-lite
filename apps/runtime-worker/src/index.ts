@@ -1,6 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { getAppPort, loadConfig, type RuntimeConfig } from '@dar/config';
+import { getAppPort, getBuildInfo, loadConfig, type RuntimeConfig } from '@dar/config';
 import { createLogger } from '@dar/logger';
 import { startTemporalWorker, type TemporalWorkerHandle } from './worker.js';
 
@@ -20,6 +20,8 @@ export function buildServer(
     status: 'ok',
     app: appName,
   }));
+
+  server.get('/version', async () => getBuildInfo(appName, config));
 
   server.get('/readyz', async (_request, reply) => {
     const piReady = piReadiness(config);

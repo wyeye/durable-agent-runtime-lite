@@ -25,6 +25,22 @@ This keeps each image explicit while preserving access to `packages/`, `pnpm-loc
 scripts/docker-build-all.sh
 ```
 
+The app images accept build metadata:
+
+```bash
+APP_VERSION=$(node -p "require('./package.json').version")
+BUILD_SHA=$(git rev-parse HEAD)
+BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+docker compose -f infra/docker-compose.yml build \
+  --build-arg APP_VERSION="$APP_VERSION" \
+  --build-arg BUILD_SHA="$BUILD_SHA" \
+  --build-arg BUILD_TIME="$BUILD_TIME" \
+  control-plane runtime-api runtime-worker tool-gateway
+```
+
+Each app exposes `GET /version` with `service`, `version`, `build_sha`, and `build_time`. The final images run as the unprivileged `app` user and include only runtime artifacts: app `dist`, package `dist`, package manifests, and production dependency links. They must not include `.git`, `.env`, tests, app source, package source, or Ollama models.
+
 ## Local run
 
 ```bash
@@ -87,6 +103,40 @@ Production-like Docker paths must not use memory sources, `defaultRouteSpecs`, `
 Local compose sets dev-only service-token placeholders for the `runtime-worker -> tool-gateway` and `control-plane -> tool-gateway` calls. Real deployments must inject `TOOL_GATEWAY_RUNTIME_WORKER_TOKEN`, `TOOL_GATEWAY_CONTROL_PLANE_TOKEN`, `RUNTIME_WORKER_TOOL_GATEWAY_TOKEN`, and `CONTROL_PLANE_TOOL_GATEWAY_TOKEN` through environment or secret management.
 
 Successful smoke output includes `ok: true`, a `task_run_id`, a `workflow_id`, `completed` task status, approved `human_task`, committed `tool_call_log`, DB audit events for `knowledge.search`, `tool.preview`, `human_task.approve`, `tool.commit`, and DB idempotency records for tool invoke/commit.
+
+## Containerized Ollama Release Gate
+
+The Ollama gate is for local/manual release validation, not ordinary hosted CI. Ollama stays on the host; the four production apps run from Docker images.
+
+Prerequisites:
+
+```bash
+ollama show qwen2.5:7b-instruct-q4_K_M
+curl --fail --silent http://localhost:11434/v1/models
+corepack pnpm ollama:probe
+```
+
+Start the stack:
+
+```bash
+docker compose -f infra/docker-compose.yml up -d postgres valkey temporal temporal-ui
+corepack pnpm db:migrate
+SEED_LOCAL_OLLAMA_MODEL_POLICY=true corepack pnpm seed:examples
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.ollama.yml up -d tool-gateway runtime-worker runtime-api control-plane
+```
+
+Run the gate:
+
+```bash
+BUILD_SHA="$(git rev-parse HEAD)" corepack pnpm runtime:assert-containerized
+BUILD_SHA="$(git rev-parse HEAD)" corepack pnpm smoke:ollama-containerized-e2e
+```
+
+For local uncommitted changes, build and assert with `$(git rev-parse HEAD)-dirty`.
+
+The gate checks that `mock-server` is not running, `runtime-worker` uses `PI_AGENT_MODE=model_gateway`, `MODEL_GATEWAY_PROFILE_ID=local-ollama`, `MODEL_GATEWAY_MODEL=qwen2.5:7b-instruct-q4_K_M`, and `MODEL_GATEWAY_BASE_URL=http://host.docker.internal:11434/v1`. It then runs final, readonly, and L3 smokes and verifies DB evidence for model calls, tool calls, human tasks, audit events, and idempotency records.
+
+If Docker builds appear stuck at `pnpm install`, check whether Docker buildx is available. Docker classic builder cannot use BuildKit cache mounts and may repeatedly download pnpm dependencies when `COPY packages ./packages` changes. Do not switch package managers or use non-frozen installs to hide the problem.
 
 The seeded flow uses L3 governance for `record.write.mock`:
 

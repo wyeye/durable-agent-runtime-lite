@@ -29,6 +29,7 @@ jobs:
       TEMPORAL_REPLAY_SMOKE_RESULT_FILE: artifacts/pi-worker-crash-resume/result.json
       TEMPORAL_REPLAY_FIXTURE_DIR: tests/temporal-replay/histories
       COMPOSE_PARALLEL_LIMIT: 1
+      APP_VERSION: 0.8.0
 
     steps:
       - uses: actions/checkout@v7
@@ -78,7 +79,14 @@ jobs:
         run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml config
 
       - name: Build production images
-        run: docker compose -f infra/docker-compose.yml build control-plane runtime-api runtime-worker tool-gateway
+        run: |
+          BUILD_SHA="${GITHUB_SHA}"
+          BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          docker compose -f infra/docker-compose.yml build \
+            --build-arg APP_VERSION="${APP_VERSION}" \
+            --build-arg BUILD_SHA="${BUILD_SHA}" \
+            --build-arg BUILD_TIME="${BUILD_TIME}" \
+            control-plane runtime-api runtime-worker tool-gateway
 
       - name: Start dependencies
         run: docker compose -f infra/docker-compose.yml up -d postgres valkey temporal temporal-ui
@@ -120,23 +128,52 @@ jobs:
           throw new Error('runtime stack did not become ready');
           NODE
 
-      - name: Old smoke tests
-        run: |
-          pnpm smoke:temporal-db-e2e
-          pnpm smoke:control-plane-api-e2e
-          pnpm smoke:control-plane-ui-e2e
+      - name: Smoke temporal DB E2E
+        run: pnpm smoke:temporal-db-e2e
 
-      - name: Pi deterministic smoke tests
-        run: |
-          pnpm smoke:pi-readonly-e2e
-          pnpm smoke:pi-l3-e2e
-          pnpm smoke:pi-user-input-e2e
-          pnpm smoke:pi-handoff-e2e
+      - name: Smoke control-plane API E2E
+        run: pnpm smoke:control-plane-api-e2e
+
+      - name: Smoke control-plane UI E2E
+        run: pnpm smoke:control-plane-ui-e2e
+
+      - name: Pi readonly deterministic smoke
+        run: pnpm smoke:pi-readonly-e2e
+
+      - name: Pi L3 deterministic smoke
+        run: pnpm smoke:pi-l3-e2e
+
+      - name: Pi user-input deterministic smoke
+        run: pnpm smoke:pi-user-input-e2e
+
+      - name: Pi handoff deterministic smoke
+        run: pnpm smoke:pi-handoff-e2e
 
       - name: Switch worker to model gateway smoke mode
         run: |
           PI_AGENT_MODE=model_gateway \
             docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d runtime-worker
+
+      - name: Wait for model-gateway worker readiness
+        run: |
+          node - <<'NODE'
+          const deadline = Date.now() + 60_000;
+          while (Date.now() < deadline) {
+            try {
+              const response = await fetch('http://localhost:3300/readyz');
+              const body = await response.json().catch(() => ({}));
+              if (response.ok && body?.checks?.pi_agent_mode === 'model_gateway') {
+                console.log(JSON.stringify(body.checks));
+                process.exit(0);
+              }
+              console.log(`runtime-worker readiness ${response.status}: ${JSON.stringify(body)}`);
+            } catch (error) {
+              console.log(`runtime-worker readiness probe failed: ${error.message}`);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+          throw new Error('runtime-worker did not enter model_gateway mode');
+          NODE
 
       - name: Pi model gateway smoke test
         run: pnpm smoke:pi-model-gateway-e2e
@@ -172,18 +209,26 @@ jobs:
       - name: Worker crash smoke
         run: pnpm smoke:pi-worker-crash-resume-e2e
 
-      - name: Tenant policy smoke tests
-        run: |
-          pnpm smoke:tenant-policy-e2e
-          pnpm smoke:tenant-policy-snapshot-e2e
-          pnpm smoke:tenant-concurrency-e2e
+      - name: Tenant policy smoke
+        run: pnpm smoke:tenant-policy-e2e
 
-      - name: Tenant deep-chain smoke tests
-        run: |
-          pnpm smoke:tenant-flow-agent-e2e
-          pnpm smoke:tenant-handoff-lineage-e2e
-          pnpm smoke:tenant-policy-crash-snapshot-e2e
-          pnpm smoke:tenant-admission-reconcile-e2e
+      - name: Tenant policy snapshot smoke
+        run: pnpm smoke:tenant-policy-snapshot-e2e
+
+      - name: Tenant concurrency smoke
+        run: pnpm smoke:tenant-concurrency-e2e
+
+      - name: Tenant flow-agent smoke
+        run: pnpm smoke:tenant-flow-agent-e2e
+
+      - name: Tenant handoff lineage smoke
+        run: pnpm smoke:tenant-handoff-lineage-e2e
+
+      - name: Tenant policy crash snapshot smoke
+        run: pnpm smoke:tenant-policy-crash-snapshot-e2e
+
+      - name: Tenant admission reconcile smoke
+        run: pnpm smoke:tenant-admission-reconcile-e2e
 
       - name: Export real Temporal histories
         run: pnpm temporal:export-replay-fixtures
