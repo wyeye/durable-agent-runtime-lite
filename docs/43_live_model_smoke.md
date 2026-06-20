@@ -39,4 +39,4 @@ runtime-api -> Temporal -> runtime-worker -> Pi -> Tool Gateway -> Pi final
 
 with the host Ollama OpenAI-compatible API and exact model `qwen2.5:7b-instruct-q4_K_M`.
 
-For external providers, a protected runtime live chain still needs a secure environment with real credentials. Until the containerized gate, full regression, and latest GitHub CI/Integration all pass on the committed diff, AR-2A remains `PARTIAL`.
+For external providers, a protected runtime live chain still needs a secure environment with real credentials. AR-2A local Ollama implementation is complete, but no tag, GitHub Release, or version promotion is implied; the platform version remains `0.8.0` during development.

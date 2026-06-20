@@ -271,6 +271,8 @@ export interface ModelPolicyReleaseOptions extends ModelPolicyWriteOptions {
   expectedRevision?: number;
   releaseNote?: string;
   metadataJson?: Record<string, unknown>;
+  evaluationGateDecisionId?: string;
+  evaluationGateOverrideId?: string;
 }
 
 export interface ModelPolicyRollbackOptions extends ModelPolicyReleaseOptions {
@@ -5736,6 +5738,8 @@ async function appendModelPolicyRelease(
       protocol: policy.protocol,
       target_count: policy.targets.length,
     },
+    ...(options.evaluationGateDecisionId ? { evaluation_gate_decision_id: options.evaluationGateDecisionId } : {}),
+    ...(options.evaluationGateOverrideId ? { evaluation_gate_override_id: options.evaluationGateOverrideId } : {}),
   });
 }
 

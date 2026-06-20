@@ -2,7 +2,7 @@
 
 ## R0 Platform Core Freeze
 
-Status: complete for version and baseline documentation, with AR-2A marked partial.
+Status: complete for version and baseline documentation, with AR-2A marked implementation complete and no version promotion.
 
 - Freeze AR-1 core architecture.
 - Keep exactly four production apps.

@@ -1,5 +1,7 @@
 import type {
   CapabilityRelease,
+  EvaluationGateDecision,
+  EvaluationGateOverride,
   RegistryResourceType,
   RegistryValidationResult,
   SpecStatus,
@@ -8,6 +10,8 @@ import {
   AgentSpecRepository,
   AuditEventRepository,
   CapabilityReleaseRepository,
+  EvaluationGateError,
+  EvaluationGateService,
   type Database,
   FlowExecutionPlanRepository,
   FlowDefinitionRepository,
@@ -24,6 +28,16 @@ export interface RegistryReleaseServiceOptions {
   operatorId: string;
   releaseNote?: string;
   metadata?: Record<string, unknown>;
+  evaluationGateMode?: 'disabled' | 'advisory' | 'required';
+  evaluationCandidateBundleHash?: string;
+  evaluationGateDecisionId?: string;
+  evaluationGateOverrideId?: string;
+}
+
+interface PublishGateResult {
+  decision?: EvaluationGateDecision;
+  override?: EvaluationGateOverride;
+  warning?: string;
 }
 
 export interface SetGrayOptions extends RegistryReleaseServiceOptions {
@@ -62,6 +76,10 @@ export class RegistryReleaseService {
       const repository = service.getRepository(resourceType);
       const previous = await repository.getLatestPublishedVersion(resourceId, { tenantId: tenant(options) });
       const current = await repository.getByIdAndVersion(resourceId, version, { tenantId: tenant(options) });
+      if (!current) {
+        throw new Error(`Registry version not found for ${resourceType}:${resourceId}@${version}`);
+      }
+      const gate = await service.assertEvaluationGate(resourceType, resourceId, version, current.sha256, options);
       if (current?.status === 'draft') {
         await repository.markValidated(resourceId, version, { tenantId: tenant(options), operatorId: options.operatorId });
       }
@@ -81,11 +99,15 @@ export class RegistryReleaseService {
         action: 'publish',
         targetStatus: 'published',
         validation,
-        options,
+        options: withGateMetadata(options, gate),
+        gate,
         ...(previous ? { previousVersion: previous.version } : {}),
       });
       await service.appendAudit(resourceType, resourceId, version, 'registry.publish', 'succeeded', options, {
         release_id: release.release_id,
+        ...(gate.decision ? { evaluation_gate_decision_id: gate.decision.gate_decision_id } : {}),
+        ...(gate.override ? { evaluation_gate_override_id: gate.override.override_id } : {}),
+        ...(gate.warning ? { evaluation_gate_warning: gate.warning } : {}),
         ...(executionPlan ? { execution_plan_ref: executionPlan.execution_plan_ref, execution_plan_hash: executionPlan.execution_plan_hash } : {}),
       });
       return release;
@@ -308,6 +330,7 @@ export class RegistryReleaseService {
     previousVersion?: number;
     validation?: RegistryValidationResult;
     options: RegistryReleaseServiceOptions;
+    gate?: PublishGateResult;
   }): Promise<CapabilityRelease> {
     return new CapabilityReleaseRepository(this.db).append({
       tenant_id: tenant(input.options),
@@ -321,6 +344,8 @@ export class RegistryReleaseService {
       ...(input.validation ? { validation_result: input.validation } : {}),
       ...(input.options.releaseNote ? { release_note: input.options.releaseNote } : {}),
       metadata_json: input.options.metadata ?? {},
+      ...(input.gate?.decision ? { evaluation_gate_decision_id: input.gate.decision.gate_decision_id } : {}),
+      ...(input.gate?.override ? { evaluation_gate_override_id: input.gate.override.override_id } : {}),
     });
   }
 
@@ -344,8 +369,96 @@ export class RegistryReleaseService {
       payload,
     });
   }
+
+  private async assertEvaluationGate(
+    resourceType: RegistryResourceType,
+    resourceId: string,
+    version: number,
+    resourceHash: string,
+    options: RegistryReleaseServiceOptions,
+  ): Promise<PublishGateResult> {
+    if (resourceType !== 'prompt' && resourceType !== 'agent') {
+      return {};
+    }
+    const mode = options.evaluationGateMode ?? 'advisory';
+    if (mode === 'disabled') {
+      return { warning: 'evaluation gate disabled' };
+    }
+    if (!options.evaluationCandidateBundleHash) {
+      if (mode === 'advisory') {
+        return { warning: 'EVALUATION_CANDIDATE_BUNDLE_HASH_REQUIRED: Evaluation candidate bundle hash is required' };
+      }
+      throw new EvaluationGateError(
+        'EVALUATION_CANDIDATE_BUNDLE_HASH_REQUIRED',
+        'Evaluation candidate bundle hash is required',
+        { resource_type: resourceType, resource_id: resourceId, resource_version: version },
+      );
+    }
+    if (!/^[a-f0-9]{64}$/u.test(options.evaluationCandidateBundleHash)) {
+      if (mode === 'advisory') {
+        return { warning: 'EVALUATION_CANDIDATE_BUNDLE_HASH_INVALID: Evaluation candidate bundle hash must be sha256 hex' };
+      }
+      throw new EvaluationGateError(
+        'EVALUATION_CANDIDATE_BUNDLE_HASH_INVALID',
+        'Evaluation candidate bundle hash must be sha256 hex',
+        { resource_type: resourceType, resource_id: resourceId, resource_version: version },
+      );
+    }
+    const result = await new EvaluationGateService(this.db).assertPublishAllowed({
+      resourceType,
+      resourceId,
+      resourceVersion: version,
+      resourceHash,
+      candidateBundleHash: options.evaluationCandidateBundleHash,
+      operatorId: options.operatorId,
+      tenantId: tenant(options),
+      mode,
+    });
+    if (
+      options.evaluationGateDecisionId &&
+      result.decision?.gate_decision_id !== options.evaluationGateDecisionId
+    ) {
+      throw new EvaluationGateError(
+        'EVALUATION_GATE_DECISION_MISMATCH',
+        'Evaluation gate decision id does not match the exact candidate gate decision',
+        { resource_type: resourceType, resource_id: resourceId, resource_version: version },
+      );
+    }
+    if (
+      options.evaluationGateOverrideId &&
+      result.override?.override_id !== options.evaluationGateOverrideId
+    ) {
+      throw new EvaluationGateError(
+        'EVALUATION_GATE_OVERRIDE_MISMATCH',
+        'Evaluation gate override id does not match the exact candidate gate override',
+        { resource_type: resourceType, resource_id: resourceId, resource_version: version },
+      );
+    }
+    return result;
+  }
 }
 
 function tenant(options: { tenantId?: string }): string {
   return options.tenantId ?? 'default';
+}
+
+function withGateMetadata(
+  options: RegistryReleaseServiceOptions,
+  gate: PublishGateResult,
+): RegistryReleaseServiceOptions {
+  return {
+    ...options,
+    metadata: {
+      ...(options.metadata ?? {}),
+      ...(options.evaluationCandidateBundleHash ? {
+        evaluation_candidate_bundle_hash: options.evaluationCandidateBundleHash,
+      } : {}),
+      ...(gate.decision ? {
+        evaluation_gate_decision_id: gate.decision.gate_decision_id,
+        evaluation_candidate_bundle_hash: gate.decision.candidate_bundle_hash,
+      } : {}),
+      ...(gate.override ? { evaluation_gate_override_id: gate.override.override_id } : {}),
+      ...(gate.warning ? { evaluation_gate_warning: gate.warning } : {}),
+    },
+  };
 }

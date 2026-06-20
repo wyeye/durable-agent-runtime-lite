@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-06-20 for AR-2A-RC local containerized Ollama gate.
+Last updated: 2026-06-20 for AR-2B development pass.
 
 ## Platform Version
 
@@ -10,9 +10,9 @@ The root `package.json` version is the authority. `corepack pnpm version:check` 
 
 ## Baseline
 
-- Observed local HEAD and `origin/main` before this pass: `d2b9e41f13380fa730a6946e110a6ba196ac1b23`.
+- Observed local HEAD and `origin/main` before this pass: `27598fee653fadc33ae9dc8d40fba4b806bf0d85`.
 - Platform Core Baseline file: `docs/PLATFORM_CORE_BASELINE.md`.
-- Migration head: `012_model_call_attempt_indexes.sql`.
+- Migration head: `013_evaluation_and_release_gates.sql`.
 
 ## AR-1 Platform Core
 
@@ -29,7 +29,9 @@ The frozen baseline includes DB-backed registry, immutable execution plans, Temp
 
 ## AR-2A Status
 
-**PARTIAL**
+**AR-2A IMPLEMENTATION COMPLETE**
+
+No tag, release, or version promotion has been performed. Platform version remains `0.8.0` during development.
 
 Implemented and locally verified:
 
@@ -67,13 +69,12 @@ Verified in this local pass:
 - `smoke:ollama-containerized-e2e` passed final, readonly, and L3 paths through the containerized runtime.
 - DB evidence showed `provider=local-ollama`, exact model id, readonly/L3 two model calls, one readonly tool call, one L3 committed tool call, one approved L3 Human Task, audit events, and idempotency records.
 
-Not completed in this local pass:
+Remote evidence checked for `origin/main` / `27598fee653fadc33ae9dc8d40fba4b806bf0d85`:
 
-- Public GitHub Actions for `origin/main` / `d2b9e41f13380fa730a6946e110a6ba196ac1b23` showed CI Run 15 passing and Integration Run 9 failing. This diff is still uncommitted and has not run remotely.
-- Full old smoke, Pi smoke, tenant/deep-chain smoke, crash recovery, and replay were not all rerun after the final Docker/seed documentation edits.
-- Complete Model Usage dashboard and operations model-call query UI.
+- GitHub CI Run 18 passed.
+- GitHub Integration Run 12 passed.
 
-Because latest CI/Integration and full regression are not yet green for the final diff, this repository must not be labeled `0.9.0-rc.1` yet.
+This repository must still not be labeled `0.9.0-rc.1`; AR-2A completion is a development status, not a version promotion.
 
 ## Model Gateway Runtime
 
@@ -183,7 +184,19 @@ The Ollama containerized smoke used Dockerized `runtime-api`, `runtime-worker`, 
 
 ## Next AR-2B Work
 
-- Run full Docker build and integrated smoke suite after credentials are available.
-- Run the protected `.github/workflows/live-model.yml` provider probes against real credentials.
-- Promote AR-2A only after protected live final, readonly, and L3 checks plus containerized Docker runtime smokes pass without deterministic Pi or mock-server.
-- Add evaluation and release gate metrics in AR-2B.
+Current AR-2B status: `AR-2B PARTIAL`.
+
+Implemented in this development pass:
+
+- Evaluation dataset, case, subject snapshot, execution plan, run, result, gate policy, gate decision, and override contracts.
+- Forward migration `013_evaluation_and_release_gates.sql`.
+- DB repositories, stable hashes, deterministic scoring, same-dataset regression comparison, and publish gate decision checks.
+- `prompt`, `agent`, and `model_policy` Registry publish gate hooks with exact candidate bundle hash checks.
+- `capability_release` now stores evaluation gate decision and override ids.
+
+Still open:
+
+- Temporal-backed evaluation worker and runner.
+- Real Ollama Evaluation E2E.
+- Control-plane evaluation pages.
+- Evaluation smoke scripts, CI workflow coverage, and full regression suite rerun.

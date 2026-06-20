@@ -25,7 +25,7 @@ import { loadConfig } from '@dar/config';
 import { ControlPlaneHttpError } from './utils/http.js';
 import { createApp } from './app.js';
 import type { RegistryApi, ActorOptions } from './services/registry-api-service.js';
-import type { RegistryResourceRecord } from '@dar/db';
+import { EvaluationGateError, type RegistryResourceRecord } from '@dar/db';
 
 const authHeaders = {
   'x-user-id': 'operator_1',
@@ -242,6 +242,26 @@ describe('control-plane API', () => {
     await close();
   });
 
+  it('maps evaluation publish gate failures to standard errors', async () => {
+    const service = new FakeRegistryApi();
+    service.publishGateError = true;
+    const { app, close } = await testApp({ registryService: service });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/prompts/prompt_api/versions/1/publish',
+      headers: authHeaders,
+      payload: { release_note: 'publish without evaluation gate' },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error).toMatchObject({
+      code: 'EVALUATION_CANDIDATE_BUNDLE_HASH_REQUIRED',
+      message: 'Evaluation candidate bundle hash is required',
+    });
+    await close();
+  });
+
   it('exposes release list and OpenAPI', async () => {
     const { app, close } = await testApp();
     const releases = await app.inject({
@@ -405,6 +425,7 @@ class FakeRegistryApi implements RegistryApi {
   lastSpec?: unknown;
   conflict = false;
   validationCanPublish = true;
+  publishGateError = false;
 
   async list(): Promise<PaginatedResponse<never>> {
     return { items: [], page: 1, page_size: 20, total: 0 };
@@ -445,6 +466,13 @@ class FakeRegistryApi implements RegistryApi {
 
   async publish(resourceType: RegistryResourceType) {
     this.lastResourceType = resourceType;
+    if (this.publishGateError) {
+      throw new EvaluationGateError(
+        'EVALUATION_CANDIDATE_BUNDLE_HASH_REQUIRED',
+        'Evaluation candidate bundle hash is required',
+        { resource_type: resourceType, resource_id: 'prompt_api', resource_version: 1 },
+      );
+    }
     if (!this.validationCanPublish) {
       throw new Error('Registry validation failed');
     }

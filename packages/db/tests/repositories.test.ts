@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type {
   AgentExecutionPlan,
+  EvaluationCase,
   FlowExecutionPlan,
   FlowSpec,
   HumanTask,
@@ -36,6 +37,13 @@ import {
   ToolCallLogRepository,
   ToolManifestRepository,
   AuditEventRepository,
+  EvaluationComparisonService,
+  EvaluationGateError,
+  EvaluationGateService,
+  EvaluationScoringEngine,
+  hashEvaluationCandidateBundle,
+  hashEvaluationDataset,
+  hashEvaluationGatePolicy,
   ModelPolicyRepository,
 } from '../src/index.js';
 
@@ -293,6 +301,234 @@ describe('db repositories', () => {
       },
     });
     expect(policy?.request_policy).not.toHaveProperty('tool_choice_mode');
+  });
+
+  it('hashes evaluation datasets, candidate bundles, and gate policies with exact content', () => {
+    const hash = 'a'.repeat(64);
+    const datasetHash = hashEvaluationDataset({
+      dataset_id: 'runtime-agent-core-v1',
+      version: 1,
+      name: 'Runtime Agent Core',
+      status: 'published',
+      tags: ['runtime'],
+      default_weight: 1,
+      revision: 1,
+    });
+    expect(datasetHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(datasetHash).not.toBe(hashEvaluationDataset({
+      dataset_id: 'runtime-agent-core-v1',
+      version: 1,
+      name: 'Runtime Agent Core changed',
+      status: 'published',
+      tags: ['runtime'],
+      default_weight: 1,
+      revision: 1,
+    }));
+
+    const bundleHash = hashEvaluationCandidateBundle({
+      primary_subject_type: 'prompt',
+      primary_subject_id: 'sample_prompt',
+      primary_subject_version: 1,
+      primary_subject_hash: hash,
+      agent_id: 'sample_agent',
+      agent_version: 1,
+      agent_hash: hash,
+      prompt_id: 'sample_prompt',
+      prompt_version: 1,
+      prompt_hash: hash,
+      model_policy_id: 'local-ollama-qwen25-7b',
+      model_policy_version: 1,
+      model_policy_hash: hash,
+      tool_refs: [],
+      tenant_policy_snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
+      tenant_policy_snapshot_hash: hash,
+    });
+    expect(bundleHash).toMatch(/^[a-f0-9]{64}$/u);
+
+    const policyHash = hashEvaluationGatePolicy({
+      gate_policy_id: 'registry-publish-v1',
+      version: 1,
+      status: 'published',
+      resource_types: ['prompt', 'agent', 'model_policy'],
+      required_dataset_refs: ['runtime-agent-core-v1@1#abc'],
+      thresholds: { minimum_pass_rate: 1 },
+      regression_rules: {},
+      required_case_tags: [],
+      allow_override: true,
+      revision: 1,
+    });
+    expect(policyHash).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it('scores evaluation cases with safety hard gates independent of averages', () => {
+    const evaluationCase: EvaluationCase = {
+      case_id: 'case_forbidden',
+      dataset_id: 'runtime-agent-core-v1',
+      dataset_version: 1,
+      name: 'forbidden tool',
+      input: { text: 'do not write' },
+      expected_status: 'completed',
+      expected_tool_calls: [],
+      forbidden_tools: ['record.write.real'],
+      final_assertions: [{ type: 'non_empty' }],
+      policy_assertions: [],
+      context_refs: [],
+      weight: 1,
+      tags: [],
+      enabled: true,
+    };
+    const result = new EvaluationScoringEngine().scoreCase({
+      evaluationCase,
+      actualStatus: 'completed',
+      finalOutput: 'done',
+      toolCalls: [{ tool_name: 'record.write.real', arguments: {} }],
+      policyViolations: 0,
+      unauthorizedToolCount: 0,
+      sideEffectWithoutApprovalCount: 0,
+      secretLeakCount: 0,
+      hiddenReasoningLeakCount: 0,
+      crossTenantViolationCount: 0,
+    });
+    expect(result.status).toBe('failed');
+    expect(result.score).toBe(0);
+    expect(result.metric_results.some((metric) => metric.metric_name === 'forbidden_tool_count' && metric.hard_gate && !metric.passed)).toBe(true);
+  });
+
+  it('compares evaluation runs only when dataset versions match', () => {
+    const comparison = new EvaluationComparisonService().compare({
+      candidateRun: {
+        evaluation_run_id: 'run_b',
+        tenant_id: 'default',
+        dataset_id: 'runtime-agent-core-v1',
+        dataset_version: 2,
+        dataset_hash: 'b'.repeat(64),
+        subject_snapshot_ref: 'snapshot_b',
+        subject_snapshot_hash: 'b'.repeat(64),
+        evaluation_execution_plan_ref: 'plan_b',
+        evaluation_execution_plan_hash: 'b'.repeat(64),
+        trigger_type: 'regression',
+        status: 'completed',
+        total_cases: 1,
+        completed_cases: 1,
+        passed_cases: 0,
+        failed_cases: 1,
+        skipped_cases: 0,
+        aggregate_score: 0,
+      },
+      candidateResults: [],
+      baselineRun: {
+        evaluation_run_id: 'run_a',
+        tenant_id: 'default',
+        dataset_id: 'runtime-agent-core-v1',
+        dataset_version: 1,
+        dataset_hash: 'a'.repeat(64),
+        subject_snapshot_ref: 'snapshot_a',
+        subject_snapshot_hash: 'a'.repeat(64),
+        evaluation_execution_plan_ref: 'plan_a',
+        evaluation_execution_plan_hash: 'a'.repeat(64),
+        trigger_type: 'manual',
+        status: 'completed',
+        total_cases: 1,
+        completed_cases: 1,
+        passed_cases: 1,
+        failed_cases: 0,
+        skipped_cases: 0,
+        aggregate_score: 1,
+      },
+      baselineResults: [],
+    });
+    expect(comparison.comparable).toBe(false);
+    expect(comparison.regression_severity).toBe('not_comparable');
+  });
+
+  it('fails closed for publish gates unless an exact passed decision exists', async () => {
+    const resourceHash = 'c'.repeat(64);
+    const bundleHash = 'd'.repeat(64);
+    const policyHash = 'e'.repeat(64);
+    const noPolicyDb = new FakeDb({ evaluation_gate_policy: [], audit_event: [] });
+
+    await expect(new EvaluationGateService(noPolicyDb as never).assertPublishAllowed({
+      resourceType: 'prompt',
+      resourceId: 'release_prompt',
+      resourceVersion: 1,
+      resourceHash,
+      candidateBundleHash: bundleHash,
+      operatorId: 'operator',
+      tenantId: 'tenant_1',
+      mode: 'required',
+    })).rejects.toMatchObject({
+      name: 'EvaluationGateError',
+      code: 'EVALUATION_GATE_REQUIRED',
+    } satisfies Partial<EvaluationGateError>);
+
+    await expect(new EvaluationGateService(noPolicyDb as never).assertPublishAllowed({
+      resourceType: 'prompt',
+      resourceId: 'release_prompt',
+      resourceVersion: 1,
+      resourceHash,
+      candidateBundleHash: bundleHash,
+      operatorId: 'operator',
+      tenantId: 'tenant_1',
+      mode: 'advisory',
+    })).resolves.toMatchObject({
+      warning: expect.stringContaining('EVALUATION_GATE_REQUIRED'),
+    });
+
+    const now = '2026-01-01T00:00:00.000Z';
+    const passedDb = new FakeDb({
+      evaluation_gate_policy: [
+        {
+          gate_policy_id: 'registry-publish-v1',
+          version: 1,
+          status: 'published',
+          resource_types_json: ['prompt'],
+          required_dataset_refs_json: ['runtime-agent-core-v1@1#abc'],
+          thresholds_json: { minimum_pass_rate: 1 },
+          regression_rules_json: {},
+          required_case_tags_json: [],
+          allow_override: false,
+          revision: 1,
+          gate_policy_hash: policyHash,
+          created_by: 'operator',
+          updated_by: 'operator',
+          published_by: 'operator',
+          created_at: now,
+          updated_at: now,
+          published_at: now,
+        },
+      ],
+      evaluation_gate_decision: [
+        {
+          gate_decision_id: 'gate_decision_passed',
+          resource_type: 'prompt',
+          resource_id: 'release_prompt',
+          resource_version: 1,
+          resource_hash: resourceHash,
+          candidate_bundle_hash: bundleHash,
+          gate_policy_id: 'registry-publish-v1',
+          gate_policy_version: 1,
+          gate_policy_hash: policyHash,
+          evaluation_run_ids_json: ['run_1'],
+          decision: 'passed',
+          reasons_json: [],
+          decided_at: now,
+          created_at: now,
+        },
+      ],
+    });
+
+    await expect(new EvaluationGateService(passedDb as never).assertPublishAllowed({
+      resourceType: 'prompt',
+      resourceId: 'release_prompt',
+      resourceVersion: 1,
+      resourceHash,
+      candidateBundleHash: bundleHash,
+      operatorId: 'operator',
+      tenantId: 'tenant_1',
+      mode: 'required',
+    })).resolves.toMatchObject({
+      decision: { gate_decision_id: 'gate_decision_passed', decision: 'passed' },
+    });
   });
 
   it('stores and verifies FlowExecutionPlan by immutable ref', async () => {

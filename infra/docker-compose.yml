@@ -191,6 +191,7 @@ services:
       TOOL_GATEWAY_URL: http://tool-gateway:3200
       CONTROL_PLANE_TOOL_GATEWAY_TOKEN: ${CONTROL_PLANE_TOOL_GATEWAY_TOKEN:-dev-only-control-plane-token}
       CONTROL_PLANE_AUTH_MODE: header
+      EVALUATION_GATE_MODE: ${EVALUATION_GATE_MODE:-required}
       CONTROL_PLANE_SWAGGER_ENABLED: "true"
       LOG_LEVEL: info
     ports:

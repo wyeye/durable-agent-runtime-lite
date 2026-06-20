@@ -8,7 +8,7 @@ The following remain outside V1 unless explicitly approved:
 - A second Agent Loop outside Pi Agent Core.
 - Direct Pi access to DB, Temporal Client, Tool Gateway, shell, filesystem, MCP, or business APIs.
 - Complex visual flow designer.
-- AR-2B evaluation system and release scoring.
+- Full AR-2B Temporal evaluation runner, Ollama evaluation E2E, and evaluation UI pages until explicitly completed.
 - AR-2C semantic routing expansion.
 - Real business-system adapters.
 - Production use of `devtools/mock-server`.

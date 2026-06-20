@@ -5,7 +5,7 @@ import type {
   StandardErrorResponse,
   StandardSuccessResponse,
 } from '@dar/contracts';
-import { RegistryRepositoryError } from '@dar/db';
+import { EvaluationGateError, RegistryRepositoryError } from '@dar/db';
 import { AuthError } from '@dar/security';
 
 export class ControlPlaneHttpError extends Error {
@@ -82,6 +82,17 @@ export function mapError(error: unknown): { statusCode: number; body: StandardEr
   if (error instanceof RegistryRepositoryError) {
     return {
       statusCode: statusForRegistryError(error.code),
+      body: fail({
+        code: error.code,
+        message: error.message,
+        details: scrubDetails(error.details),
+      }, requestId),
+    };
+  }
+
+  if (error instanceof EvaluationGateError) {
+    return {
+      statusCode: 422,
       body: fail({
         code: error.code,
         message: error.message,

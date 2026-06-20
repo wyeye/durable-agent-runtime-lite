@@ -42,7 +42,10 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
   const createdDb = needsDb ? createDb({ databaseUrl: config.DATABASE_URL }) : undefined;
   const db = options.db ?? createdDb;
   const app = Fastify({ logger: false });
-  const registryService: RegistryApi = options.registryService ?? new RegistryApiService(requireDb(db));
+  const registryService: RegistryApi = options.registryService ?? new RegistryApiService(
+    requireDb(db),
+    { evaluationGateMode: config.EVALUATION_GATE_MODE },
+  );
   const runtimeApiClient = options.runtimeApiClient ?? new RuntimeApiClient(getRuntimeApiUrl(config));
   const toolGatewayClient = options.toolGatewayClient ?? new ToolGatewayClient(
     getToolGatewayUrl(config),
@@ -107,6 +110,9 @@ function validateControlPlaneConfig(config: RuntimeConfig): void {
   }
   if (isProduction && !config.CONTROL_PLANE_TOOL_GATEWAY_TOKEN) {
     throw new Error('CONTROL_PLANE_TOOL_GATEWAY_TOKEN is required in production');
+  }
+  if (isProduction && config.EVALUATION_GATE_MODE !== 'required') {
+    throw new Error('EVALUATION_GATE_MODE=required is required in production');
   }
 }
 

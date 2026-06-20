@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const toolRiskLevelSchema = z.enum(['L0', 'L1', 'L2', 'L3', 'L4']);
 export const riskLevelSchema = toolRiskLevelSchema;
+const releaseSha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 export const toolInvokeModeSchema = z.enum(['preview', 'commit']);
 export const toolPolicyDecisionSchema = z.enum(['allow', 'deny', 'require_human_confirm']);
 export const tenantRuntimePolicyStatusSchema = z.enum([
@@ -619,6 +620,9 @@ export const validateResourceRequestSchema = z.object({
 export const publishResourceRequestSchema = z.object({
   release_note: z.string().min(1),
   metadata_json: jsonObjectSchema.default({}),
+  evaluation_candidate_bundle_hash: releaseSha256Schema.optional(),
+  evaluation_gate_decision_id: z.string().min(1).optional(),
+  evaluation_gate_override_id: z.string().min(1).optional(),
 });
 
 export const grayResourceRequestSchema = publishResourceRequestSchema.extend({
@@ -717,6 +721,8 @@ export const capabilityReleaseSchema = z.object({
   validation_result: registryValidationResultSchema.optional(),
   release_note: z.string().optional(),
   metadata_json: jsonObjectSchema.default({}),
+  evaluation_gate_decision_id: z.string().min(1).optional(),
+  evaluation_gate_override_id: z.string().min(1).optional(),
   created_at: z.string().datetime().optional(),
 });
 
@@ -934,6 +940,17 @@ export const toolAdapterSchema = z.object({
   config: jsonObjectSchema.optional(),
 });
 
+export const toolEvaluationModeSchema = z.enum(['deny', 'preview_only', 'sandbox_commit']);
+export const toolResultRedactionPolicySchema = z.enum(['none', 'mask_sensitive', 'summary_only']);
+export const toolEvaluationPolicySchema = z
+  .object({
+    allowed_in_evaluation: z.boolean().default(false),
+    mode: toolEvaluationModeSchema.default('deny'),
+    allowed_tenants: z.array(z.string().min(1)).default([]),
+    result_redaction_policy: toolResultRedactionPolicySchema.default('mask_sensitive'),
+  })
+  .strict();
+
 export const toolManifestSchema = z.object({
   tool_name: z.string().min(1),
   version: z.string().min(1),
@@ -944,6 +961,9 @@ export const toolManifestSchema = z.object({
   input_schema: jsonObjectSchema.optional(),
   output_schema: jsonObjectSchema.optional(),
   required_permissions: z.array(z.string()).default([]),
+  evaluation_policy: toolEvaluationPolicySchema.default(() =>
+    toolEvaluationPolicySchema.parse({}),
+  ),
   status: specStatusSchema.optional(),
   sha256: z.string().optional(),
 });
@@ -1884,7 +1904,7 @@ export type RouteDecision = z.infer<typeof routeDecisionSchema>;
 export type RouteResult = z.infer<typeof routeResultSchema>;
 export type AgentSpec = z.infer<typeof agentSpecSchema>;
 export type PromptDefinition = z.infer<typeof promptDefinitionSchema>;
-export type ToolManifest = z.infer<typeof toolManifestSchema>;
+export type ToolManifest = z.input<typeof toolManifestSchema>;
 export type FlowExecutionPlanTool = z.infer<typeof flowExecutionPlanToolSchema>;
 export type FlowExecutionPlanAgent = z.infer<typeof flowExecutionPlanAgentSchema>;
 export type FlowExecutionPlan = z.infer<typeof flowExecutionPlanSchema>;
@@ -1941,3 +1961,4 @@ export type AgentRunQuery = z.infer<typeof agentRunQuerySchema>;
 export type AgentStepQuery = z.infer<typeof agentStepQuerySchema>;
 export type WorkflowStartRequest = z.infer<typeof workflowStartRequestSchema>;
 export type WorkflowStartResponse = z.infer<typeof workflowStartResponseSchema>;
+export * from './evaluation.js';

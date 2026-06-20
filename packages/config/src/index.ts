@@ -125,6 +125,18 @@ export const runtimeConfigSchema = z.object({
   ),
   TENANT_ADMISSION_STALE_AFTER_MS: positiveIntSchema(300_000),
   TENANT_ADMISSION_MAX_RECONCILE_BATCH: positiveIntSchema(50),
+  EVALUATION_WORKER_ENABLED: z.preprocess(emptyToUndefined, z.coerce.boolean().default(false)),
+  EVALUATION_TASK_QUEUE: stringSchema('evaluation-worker-main'),
+  EVALUATION_MAX_CONCURRENT_RUNS: positiveIntSchema(1),
+  EVALUATION_MAX_CONCURRENT_CASES: positiveIntSchema(2),
+  EVALUATION_CASE_TIMEOUT_MS: positiveIntSchema(120_000),
+  EVALUATION_GATE_MODE: z.preprocess(
+    emptyToUndefined,
+    z.enum(['disabled', 'advisory', 'required']).default('advisory'),
+  ),
+  EVALUATION_OUTPUT_MAX_BYTES: positiveIntSchema(1_000_000),
+  EVALUATION_REGEX_TIMEOUT_MS: positiveIntSchema(250),
+  SEED_EVALUATION_DATASETS: z.preprocess(emptyToUndefined, z.coerce.boolean().default(false)),
   TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED: z.preprocess(
     emptyToUndefined,
     z.coerce.boolean().default(false),

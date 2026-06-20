@@ -11,6 +11,13 @@ import {
   cloneVersionRequestSchema,
   createDraftRequestSchema,
   dashboardSummaryResponseSchema,
+  evaluationCandidateBundleSchema,
+  evaluationCaseSchema,
+  evaluationDatasetSchema,
+  evaluationExecutionPlanSchema,
+  evaluationGateDecisionSchema,
+  evaluationGatePolicySchema,
+  evaluationOverrideRequestSchema,
   flowExecutionPlanSchema,
   flowSpecSchema,
   grayResourceRequestSchema,
@@ -369,6 +376,133 @@ describe('contracts schemas', () => {
         idempotency_key: 'task_1:record.write.mock:preview',
       }).risk_level,
     ).toBe('L3');
+  });
+
+  it('validates evaluation datasets, cases, plans, and gates without dynamic code', () => {
+    const hash = 'a'.repeat(64);
+    const dataset = evaluationDatasetSchema.parse({
+      dataset_id: 'runtime-agent-core-v1',
+      version: 1,
+      name: 'Runtime Agent Core',
+      status: 'published',
+      tags: ['runtime'],
+      dataset_hash: hash,
+    });
+    expect(dataset.default_weight).toBe(1);
+
+    const evaluationCase = evaluationCaseSchema.parse({
+      case_id: 'case_final',
+      dataset_id: dataset.dataset_id,
+      dataset_version: dataset.version,
+      name: 'final only',
+      input: { text: 'answer directly' },
+      expected_status: 'completed',
+      expected_tool_calls: [
+        {
+          tool_name: 'knowledge.search',
+          min_calls: 1,
+          max_calls: 1,
+          argument_match_mode: 'subset',
+          expected_arguments: { query: 'durable runtime' },
+        },
+      ],
+      forbidden_tools: ['record.write.real'],
+      final_assertions: [{ type: 'non_empty' }],
+    });
+    expect(evaluationCase.final_assertions[0]?.type).toBe('non_empty');
+    expect(() =>
+      evaluationCaseSchema.parse({
+        ...evaluationCase,
+        final_assertions: [{ type: 'regex', value: 'x'.repeat(513) }],
+      }),
+    ).toThrow();
+
+    const bundle = evaluationCandidateBundleSchema.parse({
+      primary_subject_type: 'prompt',
+      primary_subject_id: 'sample_prompt',
+      primary_subject_version: 1,
+      primary_subject_hash: hash,
+      agent_id: 'sample_agent',
+      agent_version: 1,
+      agent_hash: hash,
+      prompt_id: 'sample_prompt',
+      prompt_version: 1,
+      prompt_hash: hash,
+      model_policy_id: 'local-ollama-qwen25-7b',
+      model_policy_version: 1,
+      model_policy_hash: hash,
+      tool_refs: [
+        {
+          tool_name: 'knowledge.search',
+          tool_version: '1.0.0',
+          tool_sha256: hash,
+          risk_level: 'L1',
+        },
+      ],
+      tenant_policy_snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
+      tenant_policy_snapshot_hash: hash,
+    });
+    expect(bundle.primary_subject_type).toBe('prompt');
+
+    expect(
+      evaluationGatePolicySchema.parse({
+        gate_policy_id: 'registry-publish-v1',
+        version: 1,
+        status: 'published',
+        resource_types: ['prompt', 'agent', 'model_policy'],
+        required_dataset_refs: ['runtime-agent-core-v1@1#aaaaaaaa'],
+        thresholds: { minimum_pass_rate: 1 },
+        allow_override: true,
+        gate_policy_hash: hash,
+      }).allow_override,
+    ).toBe(true);
+
+    expect(
+      evaluationGateDecisionSchema.parse({
+        gate_decision_id: 'decision_1',
+        resource_type: 'prompt',
+        resource_id: 'sample_prompt',
+        resource_version: 1,
+        resource_hash: hash,
+        candidate_bundle_hash: hash,
+        gate_policy_id: 'registry-publish-v1',
+        gate_policy_version: 1,
+        gate_policy_hash: hash,
+        evaluation_run_ids: ['run_1'],
+        decision: 'passed',
+        decided_at: '2026-01-01T00:00:00.000Z',
+      }).decision,
+    ).toBe('passed');
+
+    expect(() =>
+      evaluationOverrideRequestSchema.parse({
+        gate_decision_id: 'decision_1',
+        resource_hash: hash,
+        scope: 'single_resource_hash',
+        reason: 'too short',
+      }),
+    ).toThrow();
+
+    expect(() =>
+      evaluationExecutionPlanSchema.parse({
+        evaluation_execution_plan_id: 'eval_plan_1',
+        evaluation_execution_plan_ref: 'db://evaluation-execution-plan/eval_plan_1',
+        subject_snapshot_ref: 'db://evaluation-subject-snapshot/snapshot_1',
+        subject_snapshot_hash: hash,
+        tenant_id: 'default',
+        dataset_id: dataset.dataset_id,
+        dataset_version: dataset.version,
+        dataset_hash: hash,
+        candidate_bundle_hash: hash,
+        resolved_agent_plan: {},
+        tools: [],
+        tenant_policy_snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
+        tenant_policy_snapshot_hash: hash,
+        budget: {},
+        plan_hash: hash,
+        created_at: '2026-01-01T00:00:00.000Z',
+      }),
+    ).toThrow();
   });
 
   it('validates immutable FlowExecutionPlan schema', () => {

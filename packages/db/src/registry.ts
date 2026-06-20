@@ -681,6 +681,8 @@ export class CapabilityReleaseRepository {
       validation_result: unknown | null;
       release_note: string | null;
       metadata_json: unknown;
+      evaluation_gate_decision_id: string | null;
+      evaluation_gate_override_id: string | null;
       created_at: Date | string;
     }>`
       insert into capability_release (
@@ -696,6 +698,8 @@ export class CapabilityReleaseRepository {
         validation_result,
         release_note,
         metadata_json,
+        evaluation_gate_decision_id,
+        evaluation_gate_override_id,
         created_at
       ) values (
         ${release.release_id},
@@ -710,6 +714,8 @@ export class CapabilityReleaseRepository {
         ${release.validation_result ?? null},
         ${release.release_note ?? null},
         ${release.metadata_json},
+        ${release.evaluation_gate_decision_id ?? null},
+        ${release.evaluation_gate_override_id ?? null},
         ${release.created_at ?? new Date().toISOString()}
       )
       returning *
@@ -775,6 +781,8 @@ type ReleaseRow = {
   validation_result: unknown | null;
   release_note: string | null;
   metadata_json: unknown;
+  evaluation_gate_decision_id: string | null;
+  evaluation_gate_override_id: string | null;
   created_at: Date | string;
 };
 
@@ -851,6 +859,8 @@ function mapRelease(row: ReleaseRow | undefined): CapabilityRelease {
     validation_result: row.validation_result ?? undefined,
     release_note: row.release_note ?? undefined,
     metadata_json: isRecord(row.metadata_json) ? row.metadata_json : {},
+    evaluation_gate_decision_id: row.evaluation_gate_decision_id ?? undefined,
+    evaluation_gate_override_id: row.evaluation_gate_override_id ?? undefined,
     created_at: toIso(row.created_at),
   });
 }

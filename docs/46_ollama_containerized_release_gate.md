@@ -4,11 +4,11 @@ This is the AR-2A-RC local release gate for proving the real runtime path with a
 
 ## Status
 
-Current status: `AR-2A PARTIAL`.
+Current status: `AR-2A IMPLEMENTATION COMPLETE`.
 
-The local containerized Ollama gate has passed against images built from the current working tree, but AR-2A is not ready for promotion until the same diff is committed, pushed, and the latest GitHub CI and Integration runs are green.
+The local containerized Ollama final, readonly, and L3 gate passed, and remote CI/Integration passed on `origin/main@27598fe`.
 
-Keep the platform version at `0.8.0` until promotion is approved.
+No tag, GitHub Release, or version promotion has been performed. Keep the platform version at `0.8.0` during development.
 
 ## Runtime Shape
 
@@ -147,9 +147,9 @@ runs-on: [self-hosted, ollama]
 
 The self-hosted runner must already have Docker, Ollama, and `qwen2.5:7b-instruct-q4_K_M`.
 
-## Promotion Rule
+## Development Completion Rule
 
-Use `AR-2A READY_FOR_PROMOTION` only after:
+AR-2A implementation evidence requires:
 
 - four production images build;
 - container provenance assertion passes;
@@ -159,4 +159,4 @@ Use `AR-2A READY_FOR_PROMOTION` only after:
 - old smoke, Pi smoke, tenant/deep-chain smoke, crash recovery, and replay pass;
 - latest CI and latest Integration pass on the committed diff.
 
-Until then, keep `AR-2A PARTIAL`.
+This status does not imply a package version bump, Git tag, or GitHub Release.

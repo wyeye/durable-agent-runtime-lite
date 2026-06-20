@@ -5,7 +5,8 @@
 R0/AR-2A 状态：
 
 - AR-1 Platform Core 已冻结为 `0.8.0`，见 `docs/PLATFORM_CORE_BASELINE.md`。
-- AR-2A 当前为 `PARTIAL`：ModelPolicy、OpenAI-compatible client、tool-call round-trip、ledger、本地 Ollama probe 和纯容器化 Ollama runtime gate 已接入并在本机通过；但这份 diff 尚未提交并证明最新 GitHub CI/Integration 全绿，因此不能晋级 `0.9.0-rc.1`。
+- AR-2A 当前为 `IMPLEMENTATION COMPLETE`：本地容器化 Ollama final/readonly/L3 gate 通过，mock-server 和 deterministic Pi 未参与，远端 `origin/main@27598fe` 的 CI 与 Integration 均通过。没有创建 tag、GitHub Release 或版本晋级，平台版本仍为 `0.8.0`。
+- AR-2B 当前为 `PARTIAL`：Evaluation 数据模型、评分/回归比较基础、Registry Publish Gate 的 exact hash fail-closed 基础路径已接入；Temporal 评测 runner、Ollama Evaluation E2E 和 control-plane 评测页面仍未完成。
 
 Durable Agent Runtime Lite 是一个四应用通用 Agent Runtime 骨架：
 

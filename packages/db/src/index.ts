@@ -175,6 +175,8 @@ export interface CapabilityReleaseTable {
   validation_result: Json | null;
   release_note: string | null;
   metadata_json: Json;
+  evaluation_gate_decision_id: string | null;
+  evaluation_gate_override_id: string | null;
   created_at: Timestamp;
 }
 
@@ -397,6 +399,182 @@ export interface ModelCallAttemptTable {
   created_at: Timestamp;
 }
 
+export interface EvaluationDatasetTable {
+  dataset_id: string;
+  version: number;
+  status: string;
+  name: string;
+  description: string | null;
+  domain: string | null;
+  tags_json: Json;
+  default_weight: number;
+  revision: number;
+  dataset_hash: string;
+  created_by: string | null;
+  updated_by: string | null;
+  published_by: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  published_at: Timestamp | null;
+}
+
+export interface EvaluationCaseTable {
+  case_id: string;
+  dataset_id: string;
+  dataset_version: number;
+  name: string;
+  description: string | null;
+  input_json: Json;
+  context_refs_json: Json;
+  expected_status: string | null;
+  expected_tool_calls_json: Json;
+  forbidden_tools_json: Json;
+  final_assertions_json: Json;
+  policy_assertions_json: Json;
+  latency_budget_ms: number | null;
+  input_token_budget: number | null;
+  output_token_budget: number | null;
+  total_token_budget: number | null;
+  cost_budget: number | null;
+  weight: number;
+  tags_json: Json;
+  enabled: boolean;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface EvaluationSubjectSnapshotTable {
+  subject_snapshot_id: string;
+  subject_snapshot_ref: string;
+  primary_subject_type: string;
+  primary_subject_id: string;
+  primary_subject_version: number;
+  primary_subject_hash: string;
+  candidate_bundle_json: Json;
+  candidate_bundle_hash: string;
+  created_at: Timestamp;
+}
+
+export interface EvaluationExecutionPlanTable {
+  evaluation_execution_plan_id: string;
+  evaluation_execution_plan_ref: string;
+  subject_snapshot_ref: string;
+  subject_snapshot_hash: string;
+  tenant_id: string;
+  dataset_id: string;
+  dataset_version: number;
+  dataset_hash: string;
+  candidate_bundle_hash: string;
+  plan_json: Json;
+  plan_hash: string;
+  created_at: Timestamp;
+}
+
+export interface EvaluationRunTable {
+  evaluation_run_id: string;
+  tenant_id: string;
+  dataset_id: string;
+  dataset_version: number;
+  dataset_hash: string;
+  subject_snapshot_ref: string;
+  subject_snapshot_hash: string;
+  evaluation_execution_plan_ref: string;
+  evaluation_execution_plan_hash: string;
+  baseline_run_id: string | null;
+  trigger_type: string;
+  status: string;
+  total_cases: number;
+  completed_cases: number;
+  passed_cases: number;
+  failed_cases: number;
+  skipped_cases: number;
+  aggregate_score: number | null;
+  started_at: Timestamp | null;
+  completed_at: Timestamp | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_by: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface EvaluationCaseResultTable {
+  evaluation_case_result_id: string;
+  evaluation_run_id: string;
+  case_id: string;
+  status: string;
+  score: number | null;
+  metric_results_json: Json;
+  actual_status: string | null;
+  task_run_id: string | null;
+  agent_run_id: string | null;
+  model_call_ids_json: Json;
+  tool_call_ids_json: Json;
+  final_output_ref: string | null;
+  safe_output_json: Json | null;
+  latency_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  estimated_cost: number | null;
+  error_code: string | null;
+  error_message: string | null;
+  started_at: Timestamp | null;
+  completed_at: Timestamp | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface EvaluationGatePolicyTable {
+  gate_policy_id: string;
+  version: number;
+  status: string;
+  resource_types_json: Json;
+  required_dataset_refs_json: Json;
+  thresholds_json: Json;
+  regression_rules_json: Json;
+  required_case_tags_json: Json;
+  allow_override: boolean;
+  revision: number;
+  gate_policy_hash: string;
+  created_by: string | null;
+  updated_by: string | null;
+  published_by: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  published_at: Timestamp | null;
+}
+
+export interface EvaluationGateDecisionTable {
+  gate_decision_id: string;
+  resource_type: string;
+  resource_id: string;
+  resource_version: number;
+  resource_hash: string;
+  candidate_bundle_hash: string;
+  gate_policy_id: string;
+  gate_policy_version: number;
+  gate_policy_hash: string;
+  evaluation_run_ids_json: Json;
+  decision: string;
+  reasons_json: Json;
+  decided_at: Timestamp;
+  created_at: Timestamp;
+}
+
+export interface EvaluationGateOverrideTable {
+  override_id: string;
+  gate_decision_id: string;
+  resource_type: string;
+  resource_id: string;
+  resource_version: number;
+  resource_hash: string;
+  operator_id: string;
+  reason: string;
+  expires_at: Timestamp | null;
+  created_at: Timestamp;
+}
+
 export interface AgentStepTable {
   agent_step_id: string;
   agent_run_id: string;
@@ -456,6 +634,15 @@ export interface Database {
   model_policy: ModelPolicyTable;
   model_call_log: ModelCallLogTable;
   model_call_attempt: ModelCallAttemptTable;
+  evaluation_dataset: EvaluationDatasetTable;
+  evaluation_case: EvaluationCaseTable;
+  evaluation_subject_snapshot: EvaluationSubjectSnapshotTable;
+  evaluation_execution_plan: EvaluationExecutionPlanTable;
+  evaluation_run: EvaluationRunTable;
+  evaluation_case_result: EvaluationCaseResultTable;
+  evaluation_gate_policy: EvaluationGatePolicyTable;
+  evaluation_gate_decision: EvaluationGateDecisionTable;
+  evaluation_gate_override: EvaluationGateOverrideTable;
 }
 
 export interface CreateDbOptions {
@@ -516,5 +703,6 @@ export class InMemoryRepository<TRecord extends { id: string }> implements Repos
 
 export { sql };
 export * from './repositories.js';
+export * from './evaluation-repositories.js';
 export * from './registry.js';
 export * from './tenant-policy.js';
