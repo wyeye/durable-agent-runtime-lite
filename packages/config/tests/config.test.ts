@@ -23,4 +23,10 @@ describe('runtime config', () => {
     expect(config.PORT).toBeUndefined();
     expect(getAppPort('tool-gateway', config)).toBe(3003);
   });
+
+  it('parses explicit control-plane static serving flags', () => {
+    expect(loadConfig({ CONTROL_PLANE_STATIC_ENABLED: 'true' }).CONTROL_PLANE_STATIC_ENABLED).toBe(true);
+    expect(loadConfig({ CONTROL_PLANE_STATIC_ENABLED: 'false' }).CONTROL_PLANE_STATIC_ENABLED).toBe(false);
+    expect(loadConfig({ CONTROL_PLANE_STATIC_ENABLED: '' }).CONTROL_PLANE_STATIC_ENABLED).toBe(false);
+  });
 });

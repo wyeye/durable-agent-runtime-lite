@@ -168,6 +168,8 @@ docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml 
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d mock-server tool-gateway runtime-worker runtime-api control-plane
 ```
 
+The override keeps the control-plane server in development mode for smoke-only publish-gate settings and sets `CONTROL_PLANE_STATIC_ENABLED=true` so `/registry/*` still serves the built SPA.
+
 The override sets:
 
 ```text

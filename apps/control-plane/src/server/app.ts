@@ -80,7 +80,7 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
     }, 'control-plane request completed');
   });
 
-  if (config.NODE_ENV === 'production' || options.staticRoot) {
+  if (shouldServeStaticFiles(config, options)) {
     await staticFilesPlugin(app, { rootDir: options.staticRoot ?? defaultStaticRoot() });
   }
 
@@ -95,6 +95,13 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
 export async function buildServer(options: ControlPlaneAppOptions = {}): Promise<FastifyInstance> {
   const handle = await createApp(options);
   return handle.app;
+}
+
+export function shouldServeStaticFiles(
+  config: Pick<RuntimeConfig, 'NODE_ENV' | 'CONTROL_PLANE_STATIC_ENABLED'>,
+  options: Pick<ControlPlaneAppOptions, 'staticRoot'> = {},
+): boolean {
+  return config.NODE_ENV === 'production' || config.CONTROL_PLANE_STATIC_ENABLED || Boolean(options.staticRoot);
 }
 
 function validateControlPlaneConfig(config: RuntimeConfig): void {

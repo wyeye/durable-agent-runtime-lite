@@ -23,7 +23,7 @@ import type {
 } from '@dar/contracts';
 import { loadConfig } from '@dar/config';
 import { ControlPlaneHttpError } from './utils/http.js';
-import { createApp } from './app.js';
+import { createApp, shouldServeStaticFiles } from './app.js';
 import type { RegistryApi, ActorOptions } from './services/registry-api-service.js';
 import { EvaluationGateError, type RegistryResourceRecord } from '@dar/db';
 
@@ -291,6 +291,27 @@ describe('control-plane API', () => {
     expect(apiMissing.statusCode).toBe(404);
     expect(apiMissing.headers['content-type']).toContain('application/json');
     await close();
+  });
+
+  it('can explicitly serve built SPA assets in non-production smoke environments', () => {
+    const base = {
+      DATABASE_URL: 'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime',
+      CONTROL_PLANE_AUTH_MODE: 'header',
+      RUNTIME_API_URL: 'http://runtime-api.test',
+      TOOL_GATEWAY_URL: 'http://tool-gateway.test',
+    };
+    expect(shouldServeStaticFiles(loadConfig({
+      ...base,
+      NODE_ENV: 'development',
+      APP_ENV: 'development',
+      CONTROL_PLANE_STATIC_ENABLED: 'true',
+    }))).toBe(true);
+    expect(shouldServeStaticFiles(loadConfig({
+      ...base,
+      NODE_ENV: 'development',
+      APP_ENV: 'development',
+      CONTROL_PLANE_STATIC_ENABLED: 'false',
+    }))).toBe(false);
   });
 
   it('BFF forwards identity headers and maps downstream outage to 503', async () => {

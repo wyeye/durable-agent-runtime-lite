@@ -26,6 +26,19 @@ const portSchema = (defaultValue: number) =>
   z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).max(65_535).default(defaultValue));
 const positiveIntSchema = (defaultValue: number) =>
   z.preprocess(emptyToUndefined, z.coerce.number().int().positive().default(defaultValue));
+const booleanEnvSchema = (defaultValue: boolean) =>
+  z.preprocess((value) => {
+    if (value === '') {
+      return undefined;
+    }
+    if (value === 'true') {
+      return true;
+    }
+    if (value === 'false') {
+      return false;
+    }
+    return value;
+  }, z.boolean().default(defaultValue));
 
 export const runtimeConfigSchema = z.object({
   NODE_ENV: z.preprocess(
@@ -150,6 +163,7 @@ export const runtimeConfigSchema = z.object({
     z.enum(['header', 'disabled']).default('header'),
   ),
   CONTROL_PLANE_SWAGGER_ENABLED: z.preprocess(emptyToUndefined, z.coerce.boolean().default(true)),
+  CONTROL_PLANE_STATIC_ENABLED: booleanEnvSchema(false),
 });
 
 export type AppName = z.infer<typeof appNameSchema>;
