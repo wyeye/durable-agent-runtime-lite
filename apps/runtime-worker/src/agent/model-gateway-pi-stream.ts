@@ -217,12 +217,9 @@ async function callModelWithLedger(
         protocol: input.executionPlan.resolved_model_policy.protocol,
         target,
         toolNameCodec,
-        maxRetries: Math.min(
-          Math.max(target.max_retries ?? 0, 0),
-          Math.max(
-            input.executionPlan.resolved_model_policy.retry_policy.max_attempts_per_target - 1,
-            0,
-          ),
+        maxRetries: maxRetriesForTarget(
+          target,
+          input.executionPlan.resolved_model_policy.retry_policy.max_attempts_per_target,
         ),
         retryableStatusCodes:
           input.executionPlan.resolved_model_policy.retry_policy.retryable_status_codes,
@@ -287,6 +284,11 @@ async function callModelWithLedger(
     }
   }
   throw lastError instanceof Error ? lastError : new Error('Model Gateway call failed');
+}
+
+function maxRetriesForTarget(target: ModelTarget, maxAttemptsPerTarget: number): number {
+  const policyMaxRetries = Math.max(maxAttemptsPerTarget - 1, 0);
+  return Math.min(Math.max(target.max_retries ?? policyMaxRetries, 0), policyMaxRetries);
 }
 
 function resolveAllowedTargets(options: ModelGatewayPiStreamOptions): ModelTarget[] {

@@ -583,6 +583,113 @@ describe('PiAgentAdapter', () => {
       );
     }
   });
+
+  it('uses ModelPolicy retry attempts when a target does not override max_retries', async () => {
+    let requestCount = 0;
+    const server = await import('node:http').then(({ createServer }) =>
+      createServer((request, response) => {
+        if (request.url !== '/v1/chat/completions') {
+          response.statusCode = 404;
+          response.end();
+          return;
+        }
+        request.resume();
+        request.on('end', () => {
+          requestCount += 1;
+          response.setHeader('content-type', 'application/json');
+          if (requestCount === 1) {
+            response.statusCode = 429;
+            response.end(JSON.stringify({ error: { message: 'rate limited' } }));
+            return;
+          }
+          response.end(
+            JSON.stringify({
+              id: 'chatcmpl_retry_success',
+              model: 'dar-local-model',
+              choices: [
+                {
+                  finish_reason: 'tool_calls',
+                  message: {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: 'call_retry_1',
+                        type: 'function',
+                        function: {
+                          name: 'tool_knowledge_search_f2405c6159c9',
+                          arguments: JSON.stringify({ query: 'after rate limit' }),
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+              usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+            }),
+          );
+        });
+      }),
+    );
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('server did not bind to a TCP port');
+    }
+    const basePlan = plan('model_gateway:readonly_tool');
+    const executionPlan = {
+      ...basePlan,
+      resolved_model_policy: {
+        ...basePlan.resolved_model_policy,
+        retry_policy: {
+          ...basePlan.resolved_model_policy.retry_policy,
+          max_attempts_per_target: 2,
+        },
+      },
+    };
+    const target = firstModelTarget(executionPlan);
+    expect(target.max_retries).toBeUndefined();
+    const ledger = createModelCallLedgerDb();
+    try {
+      const result = await runPiAgentSegment({
+        executionPlan,
+        model: createModelGatewayModel(target),
+        streamFn: createModelGatewayPiStream({
+          db: ledger.db,
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          apiKey: 'test-key',
+          executionPlan,
+          agentRun: agentRunFor(executionPlan),
+          segmentIndex: 0,
+          timeoutMs: 5_000,
+          maxRetries: 1,
+          maxResponseBytes: 1_000_000,
+          maxLedgerResponseBytes: 1_048_576,
+          allowInsecureHttp: true,
+          idempotencyHeader: 'Idempotency-Key',
+          userAgent: 'durable-agent-runtime-lite/runtime-worker-test',
+          allowedModelIds: new Set([target.model_id]),
+        }),
+        initialUserInput: 'rate_limit_then_success',
+        segmentIndex: 0,
+        budgetRemaining: executionPlan.budget,
+        maxContextBytes: 262_144,
+      });
+
+      expect(result.segmentResult.status).toBe('tool_requested');
+      expect(requestCount).toBe(2);
+      expect(ledger.modelCalls[0]).toMatchObject({
+        status: 'succeeded',
+        attempt_count: 2,
+      });
+      expect(ledger.attempts.map((attempt) => attempt.target_attempt_index)).toEqual([0, 1]);
+      expect(ledger.attempts.map((attempt) => attempt.status)).toEqual(['failed', 'succeeded']);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
 });
 
 function plan(modelPolicy: string): AgentExecutionPlan {

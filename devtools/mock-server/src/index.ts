@@ -9,6 +9,7 @@ interface GenerateRequest {
 interface OpenAiChatRequest {
   model?: string;
   messages?: Array<{ role: string; content?: string | null }>;
+  tools?: Array<{ function?: { name?: string } }>;
 }
 
 type MockContentBlock =
@@ -79,6 +80,7 @@ export function buildServer() {
     return openAiResponseForScenario(scenario, {
       ...(body.model ? { model: body.model } : {}),
       messages,
+      toolAliases: toolAliasesFromOpenAiTools(body.tools ?? []),
     });
   });
 
@@ -163,11 +165,17 @@ function finalResponse(model: string, text: string): MockGenerateResponse {
   };
 }
 
-function openAiResponseForScenario(scenario: string, request: GenerateRequest) {
+function openAiResponseForScenario(
+  scenario: string,
+  request: GenerateRequest & { toolAliases?: ToolAliasMap },
+) {
   const response = responseForScenario(scenario, request);
   const message = response.message;
   const contentBlocks = message.content;
-  const toolCalls = contentBlocks.filter(isToolCallBlock);
+  const toolCalls = contentBlocks.filter(isToolCallBlock).map((block) => ({
+    ...block,
+    name: request.toolAliases?.[block.name] ?? block.name,
+  }));
   const text = contentBlocks.filter(isTextBlock).map((block) => block.text).join('\n') || null;
   return {
     id: response.id,
@@ -199,6 +207,30 @@ function openAiResponseForScenario(scenario: string, request: GenerateRequest) {
       total_tokens: response.usage.total_tokens,
     },
   };
+}
+
+interface ToolAliasMap {
+  [canonicalName: string]: string;
+}
+
+const knownOpenAiToolAliases: ToolAliasMap = {
+  'knowledge.search': 'tool_knowledge_search_f2405c6159c9',
+  'record.write.mock': 'tool_record_write_mock_a0195543d17f',
+  request_user_input: 'request_user_input',
+  handoff_to_workflow: 'handoff_to_workflow',
+};
+
+function toolAliasesFromOpenAiTools(tools: Array<{ function?: { name?: string } }>): ToolAliasMap {
+  const providerToolNames = new Set(
+    tools.map((tool) => tool.function?.name).filter((name): name is string => Boolean(name)),
+  );
+  const aliases: ToolAliasMap = {};
+  for (const [canonicalName, providerName] of Object.entries(knownOpenAiToolAliases)) {
+    if (providerToolNames.has(providerName)) {
+      aliases[canonicalName] = providerName;
+    }
+  }
+  return aliases;
 }
 
 function isTextBlock(block: MockContentBlock): block is Extract<MockContentBlock, { type: 'text' }> {
