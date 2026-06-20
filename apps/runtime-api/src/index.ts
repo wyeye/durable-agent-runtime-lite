@@ -5,10 +5,11 @@ import type { StandardErrorResponse, StandardSuccessResponse } from '@dar/contra
 import { getAppPort, getBuildInfo, loadConfig } from '@dar/config';
 import { createLogger } from '@dar/logger';
 import { AuthError } from '@dar/security';
-import { TenantRuntimePolicyError } from '@dar/db';
+import { EvaluationRepositoryError, TenantRuntimePolicyError } from '@dar/db';
 import { HumanTaskService } from './modules/human-task/human-task-service.js';
 import { createRuntimeApiTaskService, TaskService } from './modules/task/task-service.js';
 import { AgentRunService } from './modules/task/agent-run-service.js';
+import { EvaluationRunService } from './modules/evaluation/evaluation-run-service.js';
 import { RuntimeApiReadinessService, type ReadinessResult } from './modules/readiness/runtime-api-readiness-service.js';
 import {
   readAuth,
@@ -76,6 +77,21 @@ function toErrorResponse(error: unknown, traceId?: string): StandardErrorRespons
     }
     return response;
   }
+  if (error instanceof EvaluationRepositoryError) {
+    const response: StandardErrorResponse = {
+      success: false,
+      data: null,
+      error: {
+        code: error.code,
+        message: error.message,
+        ...(Object.keys(error.details).length > 0 ? { details: error.details } : {}),
+      },
+    };
+    if (traceId) {
+      response.trace_id = traceId;
+    }
+    return response;
+  }
 
   const response: StandardErrorResponse = {
     success: false,
@@ -103,6 +119,15 @@ function errorStatus(error: unknown): number {
   if (error instanceof TenantRuntimePolicyError) {
     return error.statusCode;
   }
+  if (error instanceof EvaluationRepositoryError) {
+    if (error.code.endsWith('_NOT_FOUND')) {
+      return 404;
+    }
+    if (error.code.includes('REQUIRED') || error.code.includes('MISMATCH') || error.code === 'TENANT_REQUIRED') {
+      return 400;
+    }
+    return 409;
+  }
   return 500;
 }
 
@@ -129,6 +154,7 @@ export function buildServer(
   readiness: RuntimeApiReadiness | RuntimeApiReadinessChecker = { routeSource: 'memory', workflowStarter: 'mock' },
   humanTaskService = new HumanTaskService(),
   agentRunService = new AgentRunService(),
+  evaluationRunService: EvaluationRunService | undefined = undefined,
   config = loadConfig(),
 ): FastifyInstance {
   const server = Fastify({ logger: false });
@@ -224,6 +250,108 @@ export function buildServer(
     try {
       const auth = requireWriteAuth(request);
       return toSuccessResponse(await taskService.createAgentTask(withAuthBody(request, request.body, auth)), traceId);
+    } catch (error) {
+      reply.code(errorStatus(error));
+      return toErrorResponse(error, traceId);
+    }
+  });
+
+  server.post('/v1/evaluation-runs', async (request, reply) => {
+    const traceId = getTraceId(request.body);
+    try {
+      if (!evaluationRunService) {
+        reply.code(503);
+        return toErrorResponse(new EvaluationRepositoryError(
+          'EVALUATION_RUNTIME_UNAVAILABLE',
+          'Evaluation runtime requires database-backed runtime-api',
+        ), traceId);
+      }
+      const auth = requireWriteAuth(request);
+      return toSuccessResponse(await evaluationRunService.create(withAuthBody(request, request.body, auth)), traceId);
+    } catch (error) {
+      reply.code(errorStatus(error));
+      return toErrorResponse(error, traceId);
+    }
+  });
+
+  server.get('/v1/evaluation-runs', async (request, reply) => {
+    try {
+      if (!evaluationRunService) {
+        reply.code(503);
+        return toErrorResponse(new EvaluationRepositoryError(
+          'EVALUATION_RUNTIME_UNAVAILABLE',
+          'Evaluation runtime requires database-backed runtime-api',
+        ));
+      }
+      const auth = request.authContext ? readAuth(request) : undefined;
+      return toSuccessResponse(await evaluationRunService.list(withAuthQuery(request.query, auth)));
+    } catch (error) {
+      reply.code(errorStatus(error));
+      return toErrorResponse(error);
+    }
+  });
+
+  server.get('/v1/evaluation-runs/:runId', async (request, reply) => {
+    const { runId } = request.params as { runId: string };
+    try {
+      if (!evaluationRunService) {
+        reply.code(503);
+        return toErrorResponse(new EvaluationRepositoryError(
+          'EVALUATION_RUNTIME_UNAVAILABLE',
+          'Evaluation runtime requires database-backed runtime-api',
+        ));
+      }
+      const auth = request.authContext ? readAuth(request) : undefined;
+      const run = await evaluationRunService.get(runId, withAuthQuery(request.query, auth));
+      if (!run) {
+        reply.code(404);
+        return {
+          success: false,
+          data: null,
+          error: { code: 'EVALUATION_RUN_NOT_FOUND', message: 'EvaluationRun not found' },
+        };
+      }
+      return toSuccessResponse(run);
+    } catch (error) {
+      reply.code(errorStatus(error));
+      return toErrorResponse(error);
+    }
+  });
+
+  server.get('/v1/evaluation-runs/:runId/results', async (request, reply) => {
+    const { runId } = request.params as { runId: string };
+    try {
+      if (!evaluationRunService) {
+        reply.code(503);
+        return toErrorResponse(new EvaluationRepositoryError(
+          'EVALUATION_RUNTIME_UNAVAILABLE',
+          'Evaluation runtime requires database-backed runtime-api',
+        ));
+      }
+      const auth = request.authContext ? readAuth(request) : undefined;
+      return toSuccessResponse({
+        evaluation_run_id: runId,
+        results: await evaluationRunService.listResults(runId, withAuthQuery(request.query, auth)),
+      });
+    } catch (error) {
+      reply.code(errorStatus(error));
+      return toErrorResponse(error);
+    }
+  });
+
+  server.post('/v1/evaluation-runs/:runId/cancel', async (request, reply) => {
+    const { runId } = request.params as { runId: string };
+    const traceId = getTraceId(request.body);
+    try {
+      if (!evaluationRunService) {
+        reply.code(503);
+        return toErrorResponse(new EvaluationRepositoryError(
+          'EVALUATION_RUNTIME_UNAVAILABLE',
+          'Evaluation runtime requires database-backed runtime-api',
+        ), traceId);
+      }
+      const auth = requireWriteAuth(request);
+      return toSuccessResponse(await evaluationRunService.cancel(runId, withAuthBody(request, request.body, auth)), traceId);
     } catch (error) {
       reply.code(errorStatus(error));
       return toErrorResponse(error, traceId);
@@ -369,13 +497,13 @@ export function buildServer(
 
 export async function start(): Promise<void> {
   const config = loadConfig();
-  const { taskService, humanTaskService, agentRunService, close, db, routeSource } = createRuntimeApiTaskService(config);
+  const { taskService, humanTaskService, agentRunService, evaluationRunService, close, db, routeSource } = createRuntimeApiTaskService(config);
   const readiness = new RuntimeApiReadinessService({
     config,
     ...(db ? { db } : {}),
     ...(routeSource ? { routeSource } : {}),
   });
-  const server = buildServer(taskService, readiness, humanTaskService, agentRunService, config);
+  const server = buildServer(taskService, readiness, humanTaskService, agentRunService, evaluationRunService, config);
   const port = getAppPort(appName, config);
 
   server.addHook('onClose', async () => {

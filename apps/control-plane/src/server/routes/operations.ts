@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import {
   humanTaskDecisionRequestSchema,
   humanTaskQuerySchema,
+  evaluationRunCreateRequestSchema,
+  evaluationRunQuerySchema,
   agentRunQuerySchema,
   agentStepQuerySchema,
   operationAuditQuerySchema,
@@ -122,6 +124,62 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
     const { agentRunId } = request.params as { agentRunId: string };
     const query = agentStepQuerySchema.omit({ agent_run_id: true }).parse(request.query);
     return ok(await options.runtimeApiClient.listAgentSteps(agentRunId, withTenant({ ...query, tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request))), auth.request_id);
+  });
+
+  server.get('/api/v1/evaluation-runs', {
+    schema: { querystring: jsonSchema(evaluationRunQuerySchema) },
+  }, async (request) => {
+    const auth = requirePermission(request, 'operations:read');
+    const query = evaluationRunQuerySchema.parse(request.query);
+    return ok(await options.runtimeApiClient.listEvaluationRuns(
+      withTenant({ ...query, tenant_id: auth.tenant_id }),
+      forward(auth, requestIdOf(request)),
+    ), auth.request_id);
+  });
+
+  server.post('/api/v1/evaluation-runs', {
+    schema: { body: jsonSchema(evaluationRunCreateRequestSchema.partial({ tenant_id: true })) },
+  }, async (request) => {
+    const auth = requirePermission(request, 'registry:publish');
+    const body = {
+      ...asObject(request.body),
+      tenant_id: auth.tenant_id,
+      user_id: auth.user_id,
+      request_id: requestIdOf(request) ?? auth.request_id,
+    };
+    return ok(await options.runtimeApiClient.createEvaluationRun(body, forward(auth, requestIdOf(request))), auth.request_id);
+  });
+
+  server.get('/api/v1/evaluation-runs/:runId', async (request) => {
+    const auth = requirePermission(request, 'operations:read');
+    const { runId } = request.params as { runId: string };
+    return ok(await options.runtimeApiClient.getEvaluationRun(
+      runId,
+      withTenant({ tenant_id: auth.tenant_id }),
+      forward(auth, requestIdOf(request)),
+    ), auth.request_id);
+  });
+
+  server.get('/api/v1/evaluation-runs/:runId/results', async (request) => {
+    const auth = requirePermission(request, 'operations:read');
+    const { runId } = request.params as { runId: string };
+    return ok(await options.runtimeApiClient.listEvaluationRunResults(
+      runId,
+      withTenant({ tenant_id: auth.tenant_id }),
+      forward(auth, requestIdOf(request)),
+    ), auth.request_id);
+  });
+
+  server.post('/api/v1/evaluation-runs/:runId/cancel', async (request) => {
+    const auth = requirePermission(request, 'registry:publish');
+    const { runId } = request.params as { runId: string };
+    const body = {
+      ...asObject(request.body),
+      tenant_id: auth.tenant_id,
+      user_id: auth.user_id,
+      request_id: requestIdOf(request) ?? auth.request_id,
+    };
+    return ok(await options.runtimeApiClient.cancelEvaluationRun(runId, body, forward(auth, requestIdOf(request))), auth.request_id);
   });
 
   server.get('/api/v1/operations/audit-events', {

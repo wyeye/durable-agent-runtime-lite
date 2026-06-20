@@ -194,6 +194,11 @@ export interface ToolCallLogCreateInput {
   policy_decision: ToolCallLog['policy_decision'];
   status: ToolCallLog['status'];
   mode?: ToolCallLog['mode'];
+  execution_context_type?: ToolCallLog['execution_context_type'];
+  evaluation_run_id?: string;
+  evaluation_case_id?: string;
+  evaluation_execution_plan_ref?: string;
+  evaluation_execution_plan_hash?: string;
   duration_ms?: number;
   idempotency_key?: string;
   input_hash?: string;
@@ -210,6 +215,11 @@ export interface ToolCallLogUpdateInput {
   status?: ToolCallLog['status'];
   policy_decision?: ToolCallLog['policy_decision'];
   mode?: ToolCallLog['mode'];
+  execution_context_type?: ToolCallLog['execution_context_type'];
+  evaluation_run_id?: string;
+  evaluation_case_id?: string;
+  evaluation_execution_plan_ref?: string;
+  evaluation_execution_plan_hash?: string;
   duration_ms?: number;
   output_hash?: string;
   error_code?: string;
@@ -240,6 +250,8 @@ export interface ListAuditEventsOptions extends RepositoryTenantOptions {
 
 export interface ListToolCallLogsOptions extends RepositoryTenantOptions {
   taskRunId?: string;
+  evaluationRunId?: string;
+  evaluationCaseId?: string;
   toolName?: string;
   status?: ToolCallLog['status'];
   limit?: number;
@@ -3150,6 +3162,11 @@ export class ToolCallLogRepository {
       error_code: toolCallLog.error_code ?? null,
       adapter_type: toolCallLog.adapter_type ?? null,
       mode: toolCallLog.mode ?? null,
+      execution_context_type: toolCallLog.execution_context_type ?? input.execution_context_type ?? null,
+      evaluation_run_id: toolCallLog.evaluation_run_id ?? input.evaluation_run_id ?? null,
+      evaluation_case_id: toolCallLog.evaluation_case_id ?? input.evaluation_case_id ?? null,
+      evaluation_execution_plan_ref: toolCallLog.evaluation_execution_plan_ref ?? input.evaluation_execution_plan_ref ?? null,
+      evaluation_execution_plan_hash: toolCallLog.evaluation_execution_plan_hash ?? input.evaluation_execution_plan_hash ?? null,
       preview_json: toolCallLog.preview_json ? toDbJson(toolCallLog.preview_json) : null,
       result_json: toolCallLog.result_json ? toDbJson(toolCallLog.result_json) : null,
       tenant_policy_snapshot_ref:
@@ -3191,6 +3208,21 @@ export class ToolCallLogRepository {
     if (input.mode) {
       rowUpdate.mode = input.mode;
     }
+    if (input.execution_context_type !== undefined) {
+      rowUpdate.execution_context_type = input.execution_context_type;
+    }
+    if (input.evaluation_run_id !== undefined) {
+      rowUpdate.evaluation_run_id = input.evaluation_run_id;
+    }
+    if (input.evaluation_case_id !== undefined) {
+      rowUpdate.evaluation_case_id = input.evaluation_case_id;
+    }
+    if (input.evaluation_execution_plan_ref !== undefined) {
+      rowUpdate.evaluation_execution_plan_ref = input.evaluation_execution_plan_ref;
+    }
+    if (input.evaluation_execution_plan_hash !== undefined) {
+      rowUpdate.evaluation_execution_plan_hash = input.evaluation_execution_plan_hash;
+    }
     if (input.duration_ms !== undefined) {
       rowUpdate.duration_ms = input.duration_ms;
     }
@@ -3230,6 +3262,12 @@ export class ToolCallLogRepository {
     }
     if (options.taskRunId) {
       query = query.where('task_run_id', '=', options.taskRunId);
+    }
+    if (options.evaluationRunId) {
+      query = query.where('evaluation_run_id', '=', options.evaluationRunId);
+    }
+    if (options.evaluationCaseId) {
+      query = query.where('evaluation_case_id', '=', options.evaluationCaseId);
     }
     if (options.toolName) {
       query = query.where('tool_name', '=', options.toolName);
@@ -5554,6 +5592,21 @@ function mapToolCallLog(row: Selectable<ToolCallLogTable>): ToolCallLog {
   }
   if (row.mode) {
     toolCallLog.mode = row.mode as ToolCallLog['mode'];
+  }
+  if (row.execution_context_type) {
+    toolCallLog.execution_context_type = row.execution_context_type as ToolCallLog['execution_context_type'];
+  }
+  if (row.evaluation_run_id) {
+    toolCallLog.evaluation_run_id = row.evaluation_run_id;
+  }
+  if (row.evaluation_case_id) {
+    toolCallLog.evaluation_case_id = row.evaluation_case_id;
+  }
+  if (row.evaluation_execution_plan_ref) {
+    toolCallLog.evaluation_execution_plan_ref = row.evaluation_execution_plan_ref;
+  }
+  if (row.evaluation_execution_plan_hash) {
+    toolCallLog.evaluation_execution_plan_hash = row.evaluation_execution_plan_hash;
   }
   if (row.duration_ms !== null) {
     toolCallLog.duration_ms = row.duration_ms;

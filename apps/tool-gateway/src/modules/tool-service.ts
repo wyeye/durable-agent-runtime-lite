@@ -61,6 +61,11 @@ export interface ToolCallLogUpdateInput {
   status?: ToolCallLog['status'];
   policy_decision?: ToolPolicyDecision;
   mode?: 'preview' | 'commit';
+  execution_context_type?: ToolCallLog['execution_context_type'];
+  evaluation_run_id?: string;
+  evaluation_case_id?: string;
+  evaluation_execution_plan_ref?: string;
+  evaluation_execution_plan_hash?: string;
   duration_ms?: number;
   output_hash?: string;
   error_code?: string;
@@ -265,6 +270,20 @@ export class ToolService {
     }
 
     const { manifest } = manifestResult;
+    const evaluationPolicy = await this.enforceEvaluationPolicy(request, manifest, 'preview');
+    if (evaluationPolicy.decision === 'deny') {
+      return toolPreviewResponseSchema.parse({
+        tool_call_id: `tool_call_${randomUUID()}`,
+        tool_name: request.tool_name,
+        tool_version: request.tool_version,
+        mode: 'preview',
+        status: 'denied',
+        policy: evaluationPolicy.policy,
+        error: evaluationPolicy.policy.error,
+        audit_event_id: (await this.auditDenied(request, 'tool.preview', evaluationPolicy.reasonCode, evaluationPolicy.message)).event_id,
+        idempotency_key: request.idempotency_key,
+      });
+    }
     const tenantPolicy = await this.enforceTenantPolicy(request, manifest, 'preview');
     if (tenantPolicy.decision === 'deny') {
       return toolPreviewResponseSchema.parse({
@@ -295,6 +314,11 @@ export class ToolService {
       policy_decision: policy.decision,
       status: policy.decision === 'allow' ? 'previewed' : policy.decision === 'deny' ? 'denied' : 'pending_confirmation',
       mode: 'preview',
+      execution_context_type: request.execution_context_type,
+      ...(request.evaluation_run_id ? { evaluation_run_id: request.evaluation_run_id } : {}),
+      ...(request.evaluation_case_id ? { evaluation_case_id: request.evaluation_case_id } : {}),
+      ...(request.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: request.evaluation_execution_plan_ref } : {}),
+      ...(request.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: request.evaluation_execution_plan_hash } : {}),
       idempotency_key: request.idempotency_key,
       input_hash: inputHash,
       adapter_type: manifest.adapter.type,
@@ -321,6 +345,11 @@ export class ToolService {
         task_run_id: taskRunId,
         input_hash: inputHash,
         policy_decision: policy.decision,
+        execution_context_type: request.execution_context_type,
+        ...(request.evaluation_run_id ? { evaluation_run_id: request.evaluation_run_id } : {}),
+        ...(request.evaluation_case_id ? { evaluation_case_id: request.evaluation_case_id } : {}),
+        ...(request.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: request.evaluation_execution_plan_ref } : {}),
+        ...(request.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: request.evaluation_execution_plan_hash } : {}),
         ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
         policy_decision_code: policy.reason,
       },
@@ -359,6 +388,10 @@ export class ToolService {
     }
 
     const { manifest } = manifestResult;
+    const evaluationPolicy = await this.enforceEvaluationPolicy(request, manifest, 'commit');
+    if (evaluationPolicy.decision === 'deny') {
+      return this.auditAndReturnCommitDenied(request, evaluationPolicy.reasonCode, evaluationPolicy.message);
+    }
     const tenantPolicy = await this.enforceTenantPolicy(request, manifest, 'commit');
     if (tenantPolicy.decision === 'deny') {
       return this.auditAndReturnCommitDenied(request, tenantPolicy.reasonCode, tenantPolicy.message);
@@ -410,6 +443,11 @@ export class ToolService {
     const updated = await this.toolCallLogStore.update(request.tool_call_id, {
       status: 'committed',
       mode: 'commit',
+      execution_context_type: request.execution_context_type,
+      ...(request.evaluation_run_id ? { evaluation_run_id: request.evaluation_run_id } : {}),
+      ...(request.evaluation_case_id ? { evaluation_case_id: request.evaluation_case_id } : {}),
+      ...(request.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: request.evaluation_execution_plan_ref } : {}),
+      ...(request.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: request.evaluation_execution_plan_hash } : {}),
       duration_ms: durationMs,
       output_hash: outputHash,
       result_json: result,
@@ -436,6 +474,11 @@ export class ToolService {
         task_run_id: taskRunId,
         output_hash: outputHash,
         policy_decision: policy.decision,
+        execution_context_type: request.execution_context_type,
+        ...(request.evaluation_run_id ? { evaluation_run_id: request.evaluation_run_id } : {}),
+        ...(request.evaluation_case_id ? { evaluation_case_id: request.evaluation_case_id } : {}),
+        ...(request.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: request.evaluation_execution_plan_ref } : {}),
+        ...(request.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: request.evaluation_execution_plan_hash } : {}),
         ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
         policy_decision_code: policy.reason,
       },
@@ -475,6 +518,15 @@ export class ToolService {
     }
 
     const { manifest } = manifestResult;
+    const evaluationPolicy = await this.enforceEvaluationPolicy(request, manifest, 'invoke');
+    if (evaluationPolicy.decision === 'deny') {
+      return this.auditAndReturnDenied(
+        request,
+        evaluationPolicy.reasonCode,
+        evaluationPolicy.message,
+        evaluationPolicy.policy,
+      );
+    }
     const tenantPolicy = await this.enforceTenantPolicy(request, manifest, 'invoke');
     if (tenantPolicy.decision === 'deny') {
       return this.auditAndReturnDenied(
@@ -542,6 +594,11 @@ export class ToolService {
       policy_decision: policy.decision,
       status: 'committed',
       mode: 'commit',
+      execution_context_type: request.execution_context_type,
+      ...(request.evaluation_run_id ? { evaluation_run_id: request.evaluation_run_id } : {}),
+      ...(request.evaluation_case_id ? { evaluation_case_id: request.evaluation_case_id } : {}),
+      ...(request.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: request.evaluation_execution_plan_ref } : {}),
+      ...(request.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: request.evaluation_execution_plan_hash } : {}),
       duration_ms: durationMs,
       idempotency_key: request.idempotency_key,
       input_hash: inputHash,
@@ -569,6 +626,11 @@ export class ToolService {
         input_hash: inputHash,
         output_hash: outputHash,
         policy_decision: policy.decision,
+        execution_context_type: request.execution_context_type,
+        ...(request.evaluation_run_id ? { evaluation_run_id: request.evaluation_run_id } : {}),
+        ...(request.evaluation_case_id ? { evaluation_case_id: request.evaluation_case_id } : {}),
+        ...(request.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: request.evaluation_execution_plan_ref } : {}),
+        ...(request.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: request.evaluation_execution_plan_hash } : {}),
         ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
         policy_decision_code: policy.reason,
       },
@@ -634,6 +696,39 @@ export class ToolService {
     }
 
     return { manifest };
+  }
+
+  private async enforceEvaluationPolicy(
+    request: ToolInvokeRequest | ToolPreviewRequest | ToolCommitRequest,
+    manifest: ToolManifest,
+    operation: 'invoke' | 'preview' | 'commit',
+  ): Promise<{ decision: 'allow' } | { decision: 'deny'; reasonCode: string; message: string; policy: PolicyEvaluationResult }> {
+    if (request.execution_context_type !== 'evaluation') {
+      return { decision: 'allow' };
+    }
+    const policy = manifest.evaluation_policy ?? {
+      allowed_in_evaluation: false,
+      mode: 'deny' as const,
+      allowed_tenants: [],
+      result_redaction_policy: 'mask_sensitive' as const,
+    };
+    if (!policy.allowed_in_evaluation || policy.mode === 'deny') {
+      return tenantPolicyDenied(manifest.risk_level, 'TOOL_DENIED_BY_EVALUATION_POLICY', 'Tool is not allowed in evaluation context');
+    }
+    const allowedTenants = policy.allowed_tenants ?? [];
+    if (allowedTenants.length > 0 && !allowedTenants.includes(request.tenant_id)) {
+      return tenantPolicyDenied(manifest.risk_level, 'TOOL_DENIED_BY_EVALUATION_POLICY', 'Tenant is not allowed to use this tool in evaluation');
+    }
+    if (policy.mode === 'preview_only' && operation !== 'preview') {
+      return tenantPolicyDenied(manifest.risk_level, 'TOOL_EVALUATION_PREVIEW_ONLY', 'Tool evaluation policy allows preview only');
+    }
+    if (policy.mode === 'sandbox_commit' && manifest.adapter.type !== 'mock') {
+      return tenantPolicyDenied(manifest.risk_level, 'TOOL_EVALUATION_SANDBOX_REQUIRED', 'Evaluation sandbox commit requires a mock adapter');
+    }
+    if (!request.evaluation_run_id || !request.evaluation_case_id || !request.evaluation_execution_plan_ref || !request.evaluation_execution_plan_hash) {
+      return tenantPolicyDenied(manifest.risk_level, 'TOOL_EVALUATION_CONTEXT_REQUIRED', 'Evaluation tool calls require run, case and execution plan identity');
+    }
+    return { decision: 'allow' };
   }
 
   private async enforceTenantPolicy(
@@ -702,6 +797,11 @@ export class ToolService {
         tool_version: request.tool_version,
         ...(request.tool_sha256 ? { tool_sha256: request.tool_sha256 } : {}),
         task_run_id: getTaskRunId(request.task_context),
+        execution_context_type: request.execution_context_type,
+        ...(request.evaluation_run_id ? { evaluation_run_id: request.evaluation_run_id } : {}),
+        ...(request.evaluation_case_id ? { evaluation_case_id: request.evaluation_case_id } : {}),
+        ...(request.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: request.evaluation_execution_plan_ref } : {}),
+        ...(request.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: request.evaluation_execution_plan_hash } : {}),
         ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
         ...(request.tenant_policy_hash ? { tenant_policy_hash: request.tenant_policy_hash } : {}),
         ...(request.execution_plan_ref ? { execution_plan_ref: request.execution_plan_ref } : {}),
@@ -732,6 +832,11 @@ export class ToolService {
         tool_version: request.tool_version,
         ...(request.tool_sha256 ? { tool_sha256: request.tool_sha256 } : {}),
         task_run_id: getTaskRunId(request.task_context),
+        execution_context_type: request.execution_context_type,
+        ...(request.evaluation_run_id ? { evaluation_run_id: request.evaluation_run_id } : {}),
+        ...(request.evaluation_case_id ? { evaluation_case_id: request.evaluation_case_id } : {}),
+        ...(request.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: request.evaluation_execution_plan_ref } : {}),
+        ...(request.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: request.evaluation_execution_plan_hash } : {}),
         ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
         ...(request.tenant_policy_hash ? { tenant_policy_hash: request.tenant_policy_hash } : {}),
         ...(request.execution_plan_ref ? { execution_plan_ref: request.execution_plan_ref } : {}),
@@ -822,6 +927,11 @@ export class ToolService {
         tool_version: request.tool_version,
         ...(request.tool_sha256 ? { tool_sha256: request.tool_sha256 } : {}),
         task_run_id: getTaskRunId(request.task_context),
+        execution_context_type: request.execution_context_type,
+        ...(request.evaluation_run_id ? { evaluation_run_id: request.evaluation_run_id } : {}),
+        ...(request.evaluation_case_id ? { evaluation_case_id: request.evaluation_case_id } : {}),
+        ...(request.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: request.evaluation_execution_plan_ref } : {}),
+        ...(request.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: request.evaluation_execution_plan_hash } : {}),
         idempotency_key: request.idempotency_key,
       },
     });
@@ -982,6 +1092,11 @@ function hashInvokeRequest(request: ToolInvokeRequest): string {
     task_context: request.task_context,
     arguments: request.arguments,
     risk_level: request.risk_level,
+    execution_context_type: request.execution_context_type,
+    evaluation_run_id: request.evaluation_run_id,
+    evaluation_case_id: request.evaluation_case_id,
+    evaluation_execution_plan_ref: request.evaluation_execution_plan_ref,
+    evaluation_execution_plan_hash: request.evaluation_execution_plan_hash,
   });
 }
 
@@ -996,6 +1111,11 @@ function hashCommitRequest(request: ToolCommitRequest): string {
     user_context: request.user_context,
     task_context: request.task_context,
     arguments: request.arguments,
+    execution_context_type: request.execution_context_type,
+    evaluation_run_id: request.evaluation_run_id,
+    evaluation_case_id: request.evaluation_case_id,
+    evaluation_execution_plan_ref: request.evaluation_execution_plan_ref,
+    evaluation_execution_plan_hash: request.evaluation_execution_plan_hash,
   });
 }
 

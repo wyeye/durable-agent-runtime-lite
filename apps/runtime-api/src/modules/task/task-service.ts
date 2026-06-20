@@ -38,6 +38,7 @@ import { routeByRules } from '../router/rule-router.js';
 import { DbRouteSpecSource, MemoryRouteSpecSource, type RouteSpecSource } from '../router/route-source.js';
 import { createWorkflowStarter, TemporalHumanTaskSignalSender, type WorkflowStarter } from '../workflow/workflow-starter.js';
 import { HumanTaskService } from '../human-task/human-task-service.js';
+import { EvaluationRunService } from '../evaluation/evaluation-run-service.js';
 import { AgentRunService, DbAgentRunStore, DbAgentStepStore } from './agent-run-service.js';
 import { createRequestId, createTaskRunId } from './task-id.js';
 import { DbTaskRunStore, InMemoryTaskRunStore, type TaskRunStore } from './task-store.js';
@@ -600,6 +601,7 @@ export interface RuntimeApiTaskServiceHandle {
   taskService: TaskService;
   humanTaskService: HumanTaskService;
   agentRunService: AgentRunService;
+  evaluationRunService?: EvaluationRunService;
   db?: Kysely<Database>;
   routeSource?: RouteSpecSource;
   close(): Promise<void>;
@@ -638,6 +640,7 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
         new DbAgentRunStore(new AgentRunRepository(db)),
         new DbAgentStepStore(new AgentStepRepository(db)),
       ),
+      evaluationRunService: new EvaluationRunService({ db, config }),
       db,
       routeSource,
       close: async () => closeDb(db),

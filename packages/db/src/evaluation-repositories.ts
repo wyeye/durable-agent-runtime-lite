@@ -49,6 +49,7 @@ import type {
   Database,
   EvaluationCaseResultTable,
   EvaluationCaseTable,
+  EvaluationComparisonTable,
   EvaluationDatasetTable,
   EvaluationExecutionPlanTable,
   EvaluationGateDecisionTable,
@@ -59,14 +60,19 @@ import type {
 } from './index.js';
 import {
   AgentExecutionPlanRepository,
+  AgentRunRepository,
   AgentSpecRepository,
   AuditEventRepository,
   hashJson,
+  HumanTaskRepository,
   hashModelPolicy,
+  ModelCallLogRepository,
   ModelPolicyRepository,
   parseAgentOutputSchema,
   PromptDefinitionRepository,
   stableStringify,
+  TaskRunRepository,
+  ToolCallLogRepository,
   ToolManifestRepository,
 } from './repositories.js';
 import { TenantRuntimePolicyResolver } from './tenant-policy.js';
@@ -108,6 +114,8 @@ export interface CreateEvaluationRunInput {
   createdBy?: string;
   baselineRunId?: string;
   totalCases?: number;
+  workflowId?: string;
+  workflowRunId?: string;
 }
 
 export interface UpsertEvaluationCaseResultInput
@@ -116,6 +124,45 @@ export interface UpsertEvaluationCaseResultInput
     'evaluation_case_result_id' | 'created_at' | 'updated_at'
   > {
   evaluation_case_result_id?: string;
+}
+
+export interface EvaluationEvidenceSnapshot {
+  actual_status: string;
+  final_output?: unknown;
+  tool_calls: Array<{
+    tool_call_id: string;
+    tool_name: string;
+    tool_version: string;
+    status: string;
+    policy_decision: string;
+    arguments_hash?: string;
+    result_ref?: string;
+    mode?: string;
+  }>;
+  tool_call_order: string[];
+  tool_arguments: Array<{ tool_name: string; input_hash?: string }>;
+  tool_results_refs: string[];
+  unauthorized_tool_count: number;
+  forbidden_tool_count: number;
+  side_effect_without_approval_count: number;
+  duplicate_tool_call_count: number;
+  duplicate_commit_count: number;
+  policy_violation_count: number;
+  cross_tenant_violation_count: number;
+  secret_leak_count: number;
+  hidden_reasoning_leak_count: number;
+  model_call_count: number;
+  fallback_count: number;
+  latency: { ms?: number };
+  tokens: { input?: number; output?: number; total?: number };
+  cost: { estimated?: number };
+  system_error?: { code?: string; message?: string };
+  refs: {
+    task_run_id?: string;
+    agent_run_id?: string;
+    model_call_ids: string[];
+    tool_call_ids: string[];
+  };
 }
 
 export interface EvaluationSubjectSnapshotBuildInput {
@@ -452,6 +499,12 @@ export class EvaluationRunRepository {
       subject_snapshot_hash: input.subjectSnapshotHash,
       evaluation_execution_plan_ref: input.evaluationExecutionPlanRef,
       evaluation_execution_plan_hash: input.evaluationExecutionPlanHash,
+      workflow_id: input.workflowId ?? null,
+      workflow_run_id: input.workflowRunId ?? null,
+      cancellation_requested_at: null,
+      system_error_cases: 0,
+      execution_started_at: null,
+      evidence_collection_status: 'not_started',
       baseline_run_id: input.baselineRunId ?? null,
       trigger_type: input.triggerType,
       status: 'queued',
@@ -511,7 +564,37 @@ export class EvaluationRunRepository {
   async markRunning(runId: string): Promise<EvaluationRun> {
     const row = await this.db
       .updateTable('evaluation_run')
-      .set({ status: 'running', started_at: new Date(), updated_at: new Date() })
+      .set({
+        status: 'running',
+        started_at: new Date(),
+        execution_started_at: new Date(),
+        evidence_collection_status: 'partial',
+        updated_at: new Date(),
+      })
+      .where('evaluation_run_id', '=', runId)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return mapEvaluationRun(row);
+  }
+
+  async attachWorkflow(runId: string, workflowId: string, workflowRunId?: string): Promise<EvaluationRun> {
+    const row = await this.db
+      .updateTable('evaluation_run')
+      .set({
+        workflow_id: workflowId,
+        workflow_run_id: workflowRunId ?? null,
+        updated_at: new Date(),
+      })
+      .where('evaluation_run_id', '=', runId)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return mapEvaluationRun(row);
+  }
+
+  async markCancellationRequested(runId: string): Promise<EvaluationRun> {
+    const row = await this.db
+      .updateTable('evaluation_run')
+      .set({ cancellation_requested_at: new Date(), updated_at: new Date() })
       .where('evaluation_run_id', '=', runId)
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -527,7 +610,9 @@ export class EvaluationRunRepository {
         passed_cases: aggregate.passed_cases,
         failed_cases: aggregate.failed_cases,
         skipped_cases: aggregate.skipped_cases,
+        system_error_cases: Number(aggregate.metric_summary.system_error_cases ?? 0),
         aggregate_score: aggregate.weighted_score,
+        evidence_collection_status: 'completed',
         completed_at: new Date(),
         updated_at: new Date(),
       })
@@ -544,6 +629,7 @@ export class EvaluationRunRepository {
         status: 'failed',
         error_code: code,
         error_message: message,
+        evidence_collection_status: 'failed',
         completed_at: new Date(),
         updated_at: new Date(),
       })
@@ -566,9 +652,17 @@ export class EvaluationCaseResultRepository {
       evaluation_case_result_id: parsed.evaluation_case_result_id,
       evaluation_run_id: parsed.evaluation_run_id,
       case_id: parsed.case_id,
+      workflow_id: parsed.workflow_id ?? null,
+      workflow_run_id: parsed.workflow_run_id ?? null,
       status: parsed.status,
       score: parsed.score ?? null,
       metric_results_json: parsed.metric_results,
+      evidence_snapshot_json: parsed.evidence_snapshot ?? null,
+      evidence_hash: parsed.evidence_hash ?? null,
+      candidate_fidelity_verified: parsed.candidate_fidelity_verified,
+      assertion_failure_count: parsed.assertion_failure_count,
+      hard_gate_failure_count: parsed.hard_gate_failure_count,
+      system_error_class: parsed.system_error_class ?? null,
       actual_status: parsed.actual_status ?? null,
       task_run_id: parsed.task_run_id ?? null,
       agent_run_id: parsed.agent_run_id ?? null,
@@ -595,6 +689,14 @@ export class EvaluationCaseResultRepository {
           status: row.status,
           score: row.score,
           metric_results_json: row.metric_results_json,
+          workflow_id: row.workflow_id,
+          workflow_run_id: row.workflow_run_id,
+          evidence_snapshot_json: row.evidence_snapshot_json,
+          evidence_hash: row.evidence_hash,
+          candidate_fidelity_verified: row.candidate_fidelity_verified,
+          assertion_failure_count: row.assertion_failure_count,
+          hard_gate_failure_count: row.hard_gate_failure_count,
+          system_error_class: row.system_error_class,
           actual_status: row.actual_status,
           task_run_id: row.task_run_id,
           agent_run_id: row.agent_run_id,
@@ -627,6 +729,49 @@ export class EvaluationCaseResultRepository {
       .orderBy('case_id', 'asc')
       .execute();
     return rows.map(mapEvaluationCaseResult);
+  }
+}
+
+export class EvaluationComparisonRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async create(comparison: EvaluationComparison, createdBy?: string): Promise<EvaluationComparison> {
+    const parsed = evaluationComparisonSchema.parse(comparison);
+    const row: Insertable<EvaluationComparisonTable> = {
+      comparison_id: parsed.comparison_id,
+      candidate_run_id: parsed.candidate_run_id,
+      baseline_run_id: parsed.baseline_run_id,
+      dataset_id: parsed.dataset_id ?? '',
+      dataset_version: parsed.dataset_version ?? 1,
+      dataset_hash: parsed.dataset_hash ?? '0'.repeat(64),
+      comparable: parsed.comparable,
+      result_json: parsed,
+      created_by: createdBy ?? parsed.created_by ?? null,
+      created_at: parsed.created_at ?? new Date(),
+    };
+    const saved = await this.db
+      .insertInto('evaluation_comparison')
+      .values(row)
+      .onConflict((oc) =>
+        oc.columns(['candidate_run_id', 'baseline_run_id']).doUpdateSet({
+          comparable: row.comparable,
+          result_json: row.result_json,
+          created_by: row.created_by,
+          created_at: row.created_at,
+        }),
+      )
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return mapEvaluationComparison(saved);
+  }
+
+  async get(comparisonId: string): Promise<EvaluationComparison | undefined> {
+    const row = await this.db
+      .selectFrom('evaluation_comparison')
+      .selectAll()
+      .where('comparison_id', '=', comparisonId)
+      .executeTakeFirst();
+    return row ? mapEvaluationComparison(row) : undefined;
   }
 }
 
@@ -1202,6 +1347,7 @@ export class EvaluationScoringEngine {
       metric_summary: {
         denominator,
         hard_gate_failure_count: hardGateFailures.length,
+        system_error_cases: input.results.filter((result) => result.status === 'system_error').length,
       },
     });
   }
@@ -1216,15 +1362,23 @@ export class EvaluationComparisonService {
   }): EvaluationComparison {
     if (
       input.candidateRun.dataset_id !== input.baselineRun.dataset_id ||
-      input.candidateRun.dataset_version !== input.baselineRun.dataset_version
+      input.candidateRun.dataset_version !== input.baselineRun.dataset_version ||
+      input.candidateRun.dataset_hash !== input.baselineRun.dataset_hash
     ) {
       return evaluationComparisonSchema.parse({
         comparison_id: `eval_cmp_${randomUUID()}`,
         candidate_run_id: input.candidateRun.evaluation_run_id,
         baseline_run_id: input.baselineRun.evaluation_run_id,
         comparable: false,
+        dataset_id: input.candidateRun.dataset_id,
+        dataset_version: input.candidateRun.dataset_version,
+        dataset_hash: input.candidateRun.dataset_hash,
         regression_severity: 'not_comparable',
-        reasons: ['Dataset version mismatch'],
+        reasons: ['Dataset id/version/hash mismatch'],
+        result: {
+          candidate_dataset: `${input.candidateRun.dataset_id}@${input.candidateRun.dataset_version}#${input.candidateRun.dataset_hash}`,
+          baseline_dataset: `${input.baselineRun.dataset_id}@${input.baselineRun.dataset_version}#${input.baselineRun.dataset_hash}`,
+        },
         created_at: new Date().toISOString(),
       });
     }
@@ -1258,6 +1412,7 @@ export class EvaluationComparisonService {
       comparable: true,
       dataset_id: input.candidateRun.dataset_id,
       dataset_version: input.candidateRun.dataset_version,
+      dataset_hash: input.candidateRun.dataset_hash,
       overall_score_delta: (input.candidateRun.aggregate_score ?? 0) - (input.baselineRun.aggregate_score ?? 0),
       pass_rate_delta: passRate(input.candidateRun) - passRate(input.baselineRun),
       newly_failed_cases: newlyFailed,
@@ -1265,8 +1420,123 @@ export class EvaluationComparisonService {
       unchanged_failures: unchangedFailures,
       regression_severity: severity(newlyFailed.length, safetyRegression),
       reasons: safetyRegression ? ['Safety hard gate regression'] : [],
+      result: {
+        newly_failed_cases: newlyFailed,
+        newly_passed_cases: newlyPassed,
+        unchanged_failures: unchangedFailures,
+      },
       created_at: new Date().toISOString(),
     });
+  }
+}
+
+export class EvaluationEvidenceCollector {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async collect(input: {
+    tenantId: string;
+    evaluationRunId: string;
+    caseId: string;
+    taskRunId: string;
+    agentRunId?: string;
+    startedAtMs?: number;
+  }): Promise<EvaluationEvidenceSnapshot> {
+    const taskRun = await new TaskRunRepository(this.db).get(input.taskRunId);
+    if (!taskRun || taskRun.tenant_id !== input.tenantId) {
+      throw new EvaluationRepositoryError('EVALUATION_EVIDENCE_TASK_NOT_FOUND', 'TaskRun evidence not found');
+    }
+    const agentRuns = input.agentRunId
+      ? [await new AgentRunRepository(this.db).get(input.agentRunId, { tenantId: input.tenantId })].filter((run): run is NonNullable<typeof run> => Boolean(run))
+      : await new AgentRunRepository(this.db).list({ tenantId: input.tenantId, taskRunId: input.taskRunId, limit: 10 });
+    const agentRun = agentRuns[0];
+    const toolCallsByEvaluation = await new ToolCallLogRepository(this.db).list({
+      tenantId: input.tenantId,
+      evaluationRunId: input.evaluationRunId,
+      evaluationCaseId: input.caseId,
+      limit: 100,
+    });
+    const toolCalls = toolCallsByEvaluation.length > 0
+      ? toolCallsByEvaluation
+      : await new ToolCallLogRepository(this.db).list({ tenantId: input.tenantId, taskRunId: input.taskRunId, limit: 100 });
+    const modelCalls = await new ModelCallLogRepository(this.db).list({
+      tenantId: input.tenantId,
+      taskRunId: input.taskRunId,
+      ...(agentRun ? { agentRunId: agentRun.agent_run_id } : {}),
+      limit: 100,
+    });
+    const humanTasks = await new HumanTaskRepository(this.db).list({
+      tenantId: input.tenantId,
+      taskRunId: input.taskRunId,
+      limit: 100,
+    });
+    const auditEvents = await new AuditEventRepository(this.db).list({
+      tenantId: input.tenantId,
+      taskRunId: input.taskRunId,
+      limit: 200,
+    });
+    const duplicateToolCallCount = countDuplicates(toolCalls.map((call) => `${call.tool_name}:${call.input_hash ?? ''}`));
+    const duplicateCommitCount = countDuplicates(
+      toolCalls
+        .filter((call) => call.status === 'committed')
+        .map((call) => `${call.tool_name}:${call.idempotency_key ?? call.input_hash ?? ''}`),
+    );
+    const policyViolationCount = auditEvents.filter((event) =>
+      event.result === 'denied' || String(event.reason ?? '').includes('POLICY'),
+    ).length;
+    const sideEffectWithoutApprovalCount = toolCalls.filter((call) =>
+      call.risk_level === 'L3' &&
+      call.status === 'committed' &&
+      !humanTasks.some((task) => task.status === 'approved' && task.payload.tool_call_id === call.tool_call_id),
+    ).length;
+    const latencyMs = agentRun?.completed_at && agentRun.started_at
+      ? Math.max(0, new Date(agentRun.completed_at).getTime() - new Date(agentRun.started_at).getTime())
+      : input.startedAtMs
+        ? Math.max(0, Date.now() - input.startedAtMs)
+        : undefined;
+    return {
+      actual_status: agentRun?.status ?? taskRun.status,
+      ...(agentRun?.error_message ? { final_output: { error_message: agentRun.error_message } } : {}),
+      tool_calls: toolCalls.map((call) => ({
+        tool_call_id: call.tool_call_id,
+        tool_name: call.tool_name,
+        tool_version: call.tool_version,
+        status: call.status,
+        policy_decision: call.policy_decision,
+        ...(call.input_hash ? { arguments_hash: call.input_hash } : {}),
+        ...(call.output_hash ? { result_ref: `sha256:${call.output_hash}` } : {}),
+        ...(call.mode ? { mode: call.mode } : {}),
+      })),
+      tool_call_order: toolCalls.map((call) => call.tool_name),
+      tool_arguments: toolCalls.map((call) => ({ tool_name: call.tool_name, ...(call.input_hash ? { input_hash: call.input_hash } : {}) })),
+      tool_results_refs: toolCalls.flatMap((call) => call.output_hash ? [`sha256:${call.output_hash}`] : []),
+      unauthorized_tool_count: auditEvents.filter((event) => event.reason === 'TOOL_DENIED_BY_TENANT_POLICY').length,
+      forbidden_tool_count: 0,
+      side_effect_without_approval_count: sideEffectWithoutApprovalCount,
+      duplicate_tool_call_count: duplicateToolCallCount,
+      duplicate_commit_count: duplicateCommitCount,
+      policy_violation_count: policyViolationCount,
+      cross_tenant_violation_count: taskRun.tenant_id === input.tenantId ? 0 : 1,
+      secret_leak_count: auditEvents.some((event) => stableStringify(event.payload).match(/secret|token|password/iu)) ? 1 : 0,
+      hidden_reasoning_leak_count: auditEvents.some((event) => stableStringify(event.payload).match(/chain.of.thought|hidden_reasoning/iu)) ? 1 : 0,
+      model_call_count: modelCalls.length || agentRun?.model_call_count || 0,
+      fallback_count: agentRun?.fallback_count ?? modelCalls.reduce((sum, call) => sum + call.fallback_index, 0),
+      latency: latencyMs !== undefined ? { ms: latencyMs } : {},
+      tokens: {
+        ...(agentRun?.input_tokens ? { input: agentRun.input_tokens } : {}),
+        ...(agentRun?.output_tokens ? { output: agentRun.output_tokens } : {}),
+        ...(agentRun?.total_tokens ? { total: agentRun.total_tokens } : {}),
+      },
+      cost: agentRun?.estimated_cost !== undefined ? { estimated: agentRun.estimated_cost } : {},
+      ...(agentRun?.status === 'failed' || taskRun.status === 'failed'
+        ? { system_error: { ...(agentRun?.error_code ? { code: agentRun.error_code } : {}), ...(agentRun?.error_message ? { message: agentRun.error_message } : {}) } }
+        : {}),
+      refs: {
+        task_run_id: taskRun.task_run_id,
+        ...(agentRun ? { agent_run_id: agentRun.agent_run_id } : {}),
+        model_call_ids: modelCalls.map((call) => call.model_call_id),
+        tool_call_ids: toolCalls.map((call) => call.tool_call_id),
+      },
+    };
   }
 }
 
@@ -1602,6 +1872,12 @@ function mapEvaluationRun(row: Selectable<EvaluationRunTable>): EvaluationRun {
     subject_snapshot_hash: row.subject_snapshot_hash,
     evaluation_execution_plan_ref: row.evaluation_execution_plan_ref,
     evaluation_execution_plan_hash: row.evaluation_execution_plan_hash,
+    ...(row.workflow_id ? { workflow_id: row.workflow_id } : {}),
+    ...(row.workflow_run_id ? { workflow_run_id: row.workflow_run_id } : {}),
+    ...(row.cancellation_requested_at ? { cancellation_requested_at: toIso(row.cancellation_requested_at) } : {}),
+    system_error_cases: row.system_error_cases,
+    ...(row.execution_started_at ? { execution_started_at: toIso(row.execution_started_at) } : {}),
+    evidence_collection_status: row.evidence_collection_status,
     ...(row.baseline_run_id ? { baseline_run_id: row.baseline_run_id } : {}),
     trigger_type: row.trigger_type,
     status: row.status,
@@ -1626,9 +1902,17 @@ function mapEvaluationCaseResult(row: Selectable<EvaluationCaseResultTable>): Ev
     evaluation_case_result_id: row.evaluation_case_result_id,
     evaluation_run_id: row.evaluation_run_id,
     case_id: row.case_id,
+    ...(row.workflow_id ? { workflow_id: row.workflow_id } : {}),
+    ...(row.workflow_run_id ? { workflow_run_id: row.workflow_run_id } : {}),
     status: row.status,
     ...(row.score !== null ? { score: Number(row.score) } : {}),
     metric_results: jsonArray(row.metric_results_json),
+    ...(row.evidence_snapshot_json !== null ? { evidence_snapshot: jsonRecord(row.evidence_snapshot_json) ?? {} } : {}),
+    ...(row.evidence_hash ? { evidence_hash: row.evidence_hash } : {}),
+    candidate_fidelity_verified: row.candidate_fidelity_verified,
+    assertion_failure_count: row.assertion_failure_count,
+    hard_gate_failure_count: row.hard_gate_failure_count,
+    ...(row.system_error_class ? { system_error_class: row.system_error_class } : {}),
     ...(row.actual_status ? { actual_status: row.actual_status } : {}),
     ...(row.task_run_id ? { task_run_id: row.task_run_id } : {}),
     ...(row.agent_run_id ? { agent_run_id: row.agent_run_id } : {}),
@@ -1647,6 +1931,21 @@ function mapEvaluationCaseResult(row: Selectable<EvaluationCaseResultTable>): Ev
     ...(row.completed_at ? { completed_at: toIso(row.completed_at) } : {}),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
+  });
+}
+
+function mapEvaluationComparison(row: Selectable<EvaluationComparisonTable>): EvaluationComparison {
+  return evaluationComparisonSchema.parse({
+    ...(jsonRecord(row.result_json) ?? {}),
+    comparison_id: row.comparison_id,
+    candidate_run_id: row.candidate_run_id,
+    baseline_run_id: row.baseline_run_id,
+    dataset_id: row.dataset_id,
+    dataset_version: row.dataset_version,
+    dataset_hash: row.dataset_hash,
+    comparable: row.comparable,
+    ...(row.created_by ? { created_by: row.created_by } : {}),
+    created_at: toIso(row.created_at),
   });
 }
 
@@ -1916,6 +2215,19 @@ function severity(newFailures: number, safetyRegression: boolean): EvaluationCom
     return 'medium';
   }
   return 'none';
+}
+
+function countDuplicates(values: string[]): number {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const value of values.filter(Boolean)) {
+    if (seen.has(value)) {
+      duplicates.add(value);
+      continue;
+    }
+    seen.add(value);
+  }
+  return duplicates.size;
 }
 
 function primarySubjectHash(

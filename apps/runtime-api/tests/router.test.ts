@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RuntimeConfig } from '@dar/config';
-import type { HumanTask, RouteSpec, TaskRun, WorkflowStartResponse } from '@dar/contracts';
+import type { EvaluationRun, HumanTask, RouteSpec, TaskRun, WorkflowStartResponse } from '@dar/contracts';
 import type { HumanTaskDecisionSignalInput, UserInputResponseSignalInput } from '@dar/temporal';
 import { buildServer } from '../src/index.js';
 import {
@@ -139,7 +139,7 @@ const auditorHeaders = {
 
 describe('runtime-api router and task endpoints', () => {
   it('returns build metadata without exposing configuration secrets', async () => {
-    const server = buildServer(undefined, undefined, undefined, undefined, {
+    const server = buildServer(undefined, undefined, undefined, undefined, undefined, {
       ...headerAuthConfig,
       APP_VERSION: '9.9.9-test',
       BUILD_SHA: 'abc123',
@@ -697,7 +697,7 @@ describe('runtime-api router and task endpoints', () => {
   });
 
   it('requires production identity headers and rejects body identity mismatch', async () => {
-    const server = buildServer(undefined, undefined, undefined, undefined, headerAuthConfig);
+    const server = buildServer(undefined, undefined, undefined, undefined, undefined, headerAuthConfig);
 
     const missing = await server.inject({
       method: 'POST',
@@ -759,6 +759,7 @@ describe('runtime-api router and task endpoints', () => {
       undefined,
       undefined,
       undefined,
+      undefined,
       headerAuthConfig,
     );
 
@@ -783,7 +784,7 @@ describe('runtime-api router and task endpoints', () => {
   });
 
   it('rejects cross-tenant query and auditor writes under header auth', async () => {
-    const server = buildServer(undefined, undefined, undefined, undefined, headerAuthConfig);
+    const server = buildServer(undefined, undefined, undefined, undefined, undefined, headerAuthConfig);
 
     const crossTenant = await server.inject({
       method: 'GET',
@@ -805,4 +806,108 @@ describe('runtime-api router and task endpoints', () => {
 
     await server.close();
   });
+
+  it('fails closed for evaluation runs when the runtime is not DB-backed', async () => {
+    const server = buildServer(undefined, undefined, undefined, undefined, undefined, headerAuthConfig);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/evaluation-runs',
+      headers: operatorHeaders,
+      payload: {
+        dataset_id: 'runtime-agent-core-v1',
+        dataset_version: 1,
+        evaluation_execution_plan_ref: 'db://evaluation-execution-plan/plan_1',
+        evaluation_execution_plan_hash: 'a'.repeat(64),
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error.code).toBe('EVALUATION_RUNTIME_UNAVAILABLE');
+
+    await server.close();
+  });
+
+  it('starts evaluation runs with authenticated header identity', async () => {
+    const createCalls: unknown[] = [];
+    const evaluationRunService = {
+      async create(input: unknown) {
+        createCalls.push(input);
+        return {
+          evaluation_run: evaluationRun(),
+          workflow_start: {
+            workflow_id: 'evaluation-run-tenant_1-run_1',
+            task_run_id: 'run_1',
+            started: true,
+            mode: 'mock',
+          },
+        };
+      },
+      async list() {
+        return [evaluationRun()];
+      },
+      async get() {
+        return evaluationRun();
+      },
+      async listResults() {
+        return [];
+      },
+      async cancel() {
+        return evaluationRun({ cancellation_requested_at: new Date('2025-01-01T00:00:00.000Z').toISOString() });
+      },
+    };
+    const server = buildServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      evaluationRunService as never,
+      headerAuthConfig,
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/evaluation-runs',
+      headers: operatorHeaders,
+      payload: {
+        dataset_id: 'runtime-agent-core-v1',
+        dataset_version: 1,
+        evaluation_execution_plan_ref: 'db://evaluation-execution-plan/plan_1',
+        evaluation_execution_plan_hash: 'a'.repeat(64),
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(createCalls[0]).toMatchObject({
+      tenant_id: 'tenant_1',
+      user_id: 'operator_1',
+      request_id: 'req_auth_1',
+    });
+
+    await server.close();
+  });
 });
+
+function evaluationRun(overrides: Partial<EvaluationRun> = {}): EvaluationRun {
+  return {
+    evaluation_run_id: 'run_1',
+    tenant_id: 'tenant_1',
+    dataset_id: 'runtime-agent-core-v1',
+    dataset_version: 1,
+    dataset_hash: 'a'.repeat(64),
+    subject_snapshot_ref: 'db://evaluation-subject-snapshot/snapshot_1',
+    subject_snapshot_hash: 'b'.repeat(64),
+    evaluation_execution_plan_ref: 'db://evaluation-execution-plan/plan_1',
+    evaluation_execution_plan_hash: 'c'.repeat(64),
+    trigger_type: 'manual',
+    status: 'queued',
+    total_cases: 0,
+    completed_cases: 0,
+    passed_cases: 0,
+    failed_cases: 0,
+    skipped_cases: 0,
+    system_error_cases: 0,
+    evidence_collection_status: 'not_started',
+    ...overrides,
+  };
+}

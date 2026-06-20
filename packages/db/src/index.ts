@@ -142,6 +142,11 @@ export interface ToolCallLogTable {
   error_code: string | null;
   adapter_type: string | null;
   mode: string | null;
+  execution_context_type: string | null;
+  evaluation_run_id: string | null;
+  evaluation_case_id: string | null;
+  evaluation_execution_plan_ref: string | null;
+  evaluation_execution_plan_hash: string | null;
   preview_json: Json | null;
   result_json: Json | null;
   tenant_policy_snapshot_ref: string | null;
@@ -480,6 +485,12 @@ export interface EvaluationRunTable {
   subject_snapshot_hash: string;
   evaluation_execution_plan_ref: string;
   evaluation_execution_plan_hash: string;
+  workflow_id: string | null;
+  workflow_run_id: string | null;
+  cancellation_requested_at: Timestamp | null;
+  system_error_cases: number;
+  execution_started_at: Timestamp | null;
+  evidence_collection_status: string;
   baseline_run_id: string | null;
   trigger_type: string;
   status: string;
@@ -502,9 +513,17 @@ export interface EvaluationCaseResultTable {
   evaluation_case_result_id: string;
   evaluation_run_id: string;
   case_id: string;
+  workflow_id: string | null;
+  workflow_run_id: string | null;
   status: string;
   score: number | null;
   metric_results_json: Json;
+  evidence_snapshot_json: Json | null;
+  evidence_hash: string | null;
+  candidate_fidelity_verified: boolean;
+  assertion_failure_count: number;
+  hard_gate_failure_count: number;
+  system_error_class: string | null;
   actual_status: string | null;
   task_run_id: string | null;
   agent_run_id: string | null;
@@ -572,6 +591,19 @@ export interface EvaluationGateOverrideTable {
   operator_id: string;
   reason: string;
   expires_at: Timestamp | null;
+  created_at: Timestamp;
+}
+
+export interface EvaluationComparisonTable {
+  comparison_id: string;
+  candidate_run_id: string;
+  baseline_run_id: string;
+  dataset_id: string;
+  dataset_version: number;
+  dataset_hash: string;
+  comparable: boolean;
+  result_json: Json;
+  created_by: string | null;
   created_at: Timestamp;
 }
 
@@ -643,6 +675,7 @@ export interface Database {
   evaluation_gate_policy: EvaluationGatePolicyTable;
   evaluation_gate_decision: EvaluationGateDecisionTable;
   evaluation_gate_override: EvaluationGateOverrideTable;
+  evaluation_comparison: EvaluationComparisonTable;
 }
 
 export interface CreateDbOptions {

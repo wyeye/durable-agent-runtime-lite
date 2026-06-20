@@ -586,6 +586,78 @@ describe('tool-gateway invoke', () => {
     await server.close();
   });
 
+  it('denies evaluation tool calls unless the manifest explicitly allows evaluation', async () => {
+    const registry = new MutableRegistry([dbKnowledgeSearchTool]);
+    const server = buildServer(new ToolService({ registry }));
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/knowledge.search/invoke',
+      payload: {
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_eval_denied' },
+        arguments: { query: 'hello' },
+        idempotency_key: 'task_eval_denied:knowledge.search',
+        execution_context_type: 'evaluation',
+        evaluation_run_id: 'eval_run_1',
+        evaluation_case_id: 'case_1',
+        evaluation_execution_plan_ref: 'db://evaluation-execution-plan/plan_1',
+        evaluation_execution_plan_hash: 'a'.repeat(64),
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe('TOOL_DENIED_BY_EVALUATION_POLICY');
+    await server.close();
+  });
+
+  it('allows evaluation tool calls only with exact evaluation context identity and records it', async () => {
+    const toolCallLogStore = new InMemoryToolCallLogStore();
+    const registry = new MutableRegistry([{
+      ...dbKnowledgeSearchTool,
+      evaluation_policy: {
+        allowed_in_evaluation: true,
+        mode: 'sandbox_commit',
+        allowed_tenants: ['tenant_1'],
+        result_redaction_policy: 'summary_only',
+        maximum_calls_per_case: 2,
+      },
+    }]);
+    const server = buildServer(new ToolService({ registry, toolCallLogStore }));
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/knowledge.search/invoke',
+      payload: {
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_eval_allowed' },
+        arguments: { query: 'hello' },
+        idempotency_key: 'task_eval_allowed:knowledge.search',
+        execution_context_type: 'evaluation',
+        evaluation_run_id: 'eval_run_1',
+        evaluation_case_id: 'case_1',
+        evaluation_execution_plan_ref: 'db://evaluation-execution-plan/plan_1',
+        evaluation_execution_plan_hash: 'a'.repeat(64),
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.status).toBe('succeeded');
+    const [recorded] = await toolCallLogStore.list({ tenantId: 'tenant_1', evaluationRunId: 'eval_run_1', evaluationCaseId: 'case_1' });
+    expect(recorded).toMatchObject({
+      execution_context_type: 'evaluation',
+      evaluation_run_id: 'eval_run_1',
+      evaluation_case_id: 'case_1',
+      evaluation_execution_plan_ref: 'db://evaluation-execution-plan/plan_1',
+      evaluation_execution_plan_hash: 'a'.repeat(64),
+    });
+    await server.close();
+  });
+
   it('loads the exact tool version locked by the execution plan', async () => {
     const registry = new MutableRegistry([
       {

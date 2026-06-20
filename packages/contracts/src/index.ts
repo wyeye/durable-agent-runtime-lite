@@ -948,6 +948,7 @@ export const toolEvaluationPolicySchema = z
     mode: toolEvaluationModeSchema.default('deny'),
     allowed_tenants: z.array(z.string().min(1)).default([]),
     result_redaction_policy: toolResultRedactionPolicySchema.default('mask_sensitive'),
+    maximum_calls_per_case: z.number().int().positive().optional(),
   })
   .strict();
 
@@ -1064,6 +1065,11 @@ export const toolInvokeRequestSchema = z.object({
   tenant_policy_hash: sha256Schema.optional(),
   execution_plan_ref: z.string().min(1).optional(),
   execution_plan_hash: sha256Schema.optional(),
+  execution_context_type: z.enum(['runtime', 'evaluation']).default('runtime'),
+  evaluation_run_id: z.string().min(1).optional(),
+  evaluation_case_id: z.string().min(1).optional(),
+  evaluation_execution_plan_ref: z.string().min(1).optional(),
+  evaluation_execution_plan_hash: sha256Schema.optional(),
   request_id: z.string().min(1).optional(),
 });
 
@@ -1101,6 +1107,11 @@ export const toolPreviewRequestSchema = z.object({
   tenant_policy_hash: sha256Schema.optional(),
   execution_plan_ref: z.string().min(1).optional(),
   execution_plan_hash: sha256Schema.optional(),
+  execution_context_type: z.enum(['runtime', 'evaluation']).default('runtime'),
+  evaluation_run_id: z.string().min(1).optional(),
+  evaluation_case_id: z.string().min(1).optional(),
+  evaluation_execution_plan_ref: z.string().min(1).optional(),
+  evaluation_execution_plan_hash: sha256Schema.optional(),
   request_id: z.string().min(1).optional(),
 });
 
@@ -1131,6 +1142,11 @@ export const toolCommitRequestSchema = z.object({
   tenant_policy_hash: sha256Schema.optional(),
   execution_plan_ref: z.string().min(1).optional(),
   execution_plan_hash: sha256Schema.optional(),
+  execution_context_type: z.enum(['runtime', 'evaluation']).default('runtime'),
+  evaluation_run_id: z.string().min(1).optional(),
+  evaluation_case_id: z.string().min(1).optional(),
+  evaluation_execution_plan_ref: z.string().min(1).optional(),
+  evaluation_execution_plan_hash: sha256Schema.optional(),
   request_id: z.string().min(1).optional(),
 });
 
@@ -1295,6 +1311,11 @@ export const toolCallLogSchema = z.object({
   policy_decision: toolPolicyDecisionSchema,
   status: toolCallLogStatusSchema,
   mode: toolInvokeModeSchema.optional(),
+  execution_context_type: z.enum(['runtime', 'evaluation']).optional(),
+  evaluation_run_id: z.string().min(1).optional(),
+  evaluation_case_id: z.string().min(1).optional(),
+  evaluation_execution_plan_ref: z.string().min(1).optional(),
+  evaluation_execution_plan_hash: sha256Schema.optional(),
   duration_ms: z.number().int().nonnegative().optional(),
   idempotency_key: z.string().optional(),
   input_hash: z.string().optional(),

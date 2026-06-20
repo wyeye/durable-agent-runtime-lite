@@ -11,12 +11,22 @@ import {
 import {
   TASK_QUEUES,
   WORKFLOW_SIGNALS,
+  type EvaluationRunWorkflowInput,
   type HumanTaskDecisionSignalInput,
   type UserInputResponseSignalInput,
 } from '@dar/temporal';
 
 export interface WorkflowStarter {
   start(request: WorkflowStartRequest): Promise<WorkflowStartResponse>;
+}
+
+export interface EvaluationWorkflowStartRequest extends EvaluationRunWorkflowInput {
+  workflow_id: string;
+}
+
+export interface EvaluationWorkflowStarter {
+  startEvaluationRun(request: EvaluationWorkflowStartRequest): Promise<WorkflowStartResponse>;
+  cancelEvaluationRun(workflowId: string): Promise<void>;
 }
 
 export class MockWorkflowStarter implements WorkflowStarter {
@@ -29,6 +39,22 @@ export class MockWorkflowStarter implements WorkflowStarter {
       started: true,
       mode: 'mock',
     });
+  }
+}
+
+export class MockEvaluationWorkflowStarter implements EvaluationWorkflowStarter {
+  async startEvaluationRun(request: EvaluationWorkflowStartRequest): Promise<WorkflowStartResponse> {
+    return workflowStartResponseSchema.parse({
+      workflow_id: request.workflow_id,
+      run_id: `mock_${randomUUID()}`,
+      task_run_id: request.evaluation_run_id,
+      started: true,
+      mode: 'mock',
+    });
+  }
+
+  async cancelEvaluationRun(): Promise<void> {
+    return undefined;
   }
 }
 
@@ -58,6 +84,36 @@ export class TemporalWorkflowStarter implements WorkflowStarter {
       started: true,
       mode: 'temporal',
     });
+  }
+}
+
+export class TemporalEvaluationWorkflowStarter implements EvaluationWorkflowStarter {
+  private readonly clientPromise: Promise<Client>;
+
+  constructor(private readonly config: RuntimeConfig = loadConfig()) {
+    this.clientPromise = createTemporalClient(config);
+  }
+
+  async startEvaluationRun(request: EvaluationWorkflowStartRequest): Promise<WorkflowStartResponse> {
+    const client = await this.clientPromise;
+    const handle = await client.workflow.start('evaluationRunWorkflow', {
+      taskQueue: this.config.EVALUATION_TASK_QUEUE,
+      workflowId: request.workflow_id,
+      args: [request],
+    });
+
+    return workflowStartResponseSchema.parse({
+      workflow_id: handle.workflowId,
+      run_id: handle.firstExecutionRunId,
+      task_run_id: request.evaluation_run_id,
+      started: true,
+      mode: 'temporal',
+    });
+  }
+
+  async cancelEvaluationRun(workflowId: string): Promise<void> {
+    const client = await this.clientPromise;
+    await client.workflow.getHandle(workflowId).cancel();
   }
 }
 
@@ -92,6 +148,13 @@ export function createWorkflowStarter(config: RuntimeConfig = loadConfig()): Wor
     return new TemporalWorkflowStarter(config);
   }
   return new MockWorkflowStarter();
+}
+
+export function createEvaluationWorkflowStarter(config: RuntimeConfig = loadConfig()): EvaluationWorkflowStarter {
+  if (config.RUNTIME_API_WORKFLOW_STARTER === 'temporal') {
+    return new TemporalEvaluationWorkflowStarter(config);
+  }
+  return new MockEvaluationWorkflowStarter();
 }
 
 async function createTemporalClient(config: RuntimeConfig): Promise<Client> {

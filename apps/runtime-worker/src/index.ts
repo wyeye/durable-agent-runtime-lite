@@ -8,8 +8,9 @@ const appName = 'runtime-worker' as const;
 const logger = createLogger(appName);
 
 export function buildServer(
-  worker: Pick<TemporalWorkerHandle, 'mode' | 'state'> = {
+  worker: Pick<TemporalWorkerHandle, 'mode' | 'state' | 'taskQueues' | 'evaluationTaskQueue' | 'evaluationState'> = {
     mode: 'mock',
+    taskQueues: ['runtime-worker-main'],
     state: { status: 'running', ready: true },
   },
   config: RuntimeConfig = loadConfig(),
@@ -25,20 +26,26 @@ export function buildServer(
 
   server.get('/readyz', async (_request, reply) => {
     const piReady = piReadiness(config);
-    if (!worker.state.ready || !piReady.ready) {
+    const evaluationReady = !config.EVALUATION_WORKER_ENABLED || Boolean(worker.evaluationState?.ready);
+    if (!worker.state.ready || !evaluationReady || !piReady.ready) {
       reply.code(503);
     }
     return {
-      status: worker.state.ready && piReady.ready ? 'ready' : 'not_ready',
+      status: worker.state.ready && evaluationReady && piReady.ready ? 'ready' : 'not_ready',
       app: appName,
       checks: {
         config: 'ok',
         temporal_worker: worker.mode,
         worker_status: worker.state.status,
+        task_queues: worker.taskQueues,
+        evaluation_worker_enabled: config.EVALUATION_WORKER_ENABLED,
+        evaluation_task_queue: config.EVALUATION_TASK_QUEUE,
+        evaluation_worker_status: worker.evaluationState?.status ?? 'disabled',
         pi_agent_mode: config.PI_AGENT_MODE,
         pi_agent: piReady.status,
         model_gateway_profile: config.MODEL_GATEWAY_PROFILE_ID,
         ...(worker.state.error ? { worker_error: worker.state.error } : {}),
+        ...(worker.evaluationState?.error ? { evaluation_worker_error: worker.evaluationState.error } : {}),
         ...(piReady.error ? { pi_error: piReady.error } : {}),
       },
     };

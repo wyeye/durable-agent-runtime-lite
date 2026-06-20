@@ -6,6 +6,8 @@ import type {
   AgentRunRecord,
   AgentStepRecord,
   CapabilityRelease,
+  EvaluationCaseResult,
+  EvaluationRun,
   FlowSpec,
   HumanTaskDecisionResponse,
   HumanTaskGetResponse,
@@ -628,6 +630,29 @@ class FakeRuntimeApiClient {
   async listAgentSteps(): Promise<{ agent_steps: AgentStepRecord[] }> {
     return { agent_steps: [] };
   }
+
+  async listEvaluationRuns(): Promise<EvaluationRun[]> {
+    return [];
+  }
+
+  async createEvaluationRun(): Promise<{ evaluation_run: EvaluationRun; workflow_start: Record<string, unknown> }> {
+    return {
+      evaluation_run: evaluationRun(),
+      workflow_start: { workflow_id: 'evaluation-run-tenant_1-run_1', task_run_id: 'run_1', started: true, mode: 'mock' },
+    };
+  }
+
+  async getEvaluationRun(): Promise<EvaluationRun> {
+    return evaluationRun();
+  }
+
+  async listEvaluationRunResults(): Promise<{ evaluation_run_id: string; results: EvaluationCaseResult[] }> {
+    return { evaluation_run_id: 'run_1', results: [] };
+  }
+
+  async cancelEvaluationRun(): Promise<EvaluationRun> {
+    return evaluationRun({ cancellation_requested_at: new Date('2025-01-01T00:00:00.000Z').toISOString() });
+  }
 }
 
 class FakeToolGatewayClient {
@@ -743,6 +768,30 @@ function admission(overrides: Partial<TenantAgentAdmission> = {}): TenantAgentAd
     activated_at: new Date('2025-01-01T00:00:01.000Z').toISOString(),
     updated_at: new Date('2025-01-01T00:00:01.000Z').toISOString(),
     revision: 2,
+    ...overrides,
+  };
+}
+
+function evaluationRun(overrides: Partial<EvaluationRun> = {}): EvaluationRun {
+  return {
+    evaluation_run_id: 'run_1',
+    tenant_id: 'tenant_1',
+    dataset_id: 'runtime-agent-core-v1',
+    dataset_version: 1,
+    dataset_hash: 'a'.repeat(64),
+    subject_snapshot_ref: 'db://evaluation-subject-snapshot/snapshot_1',
+    subject_snapshot_hash: 'b'.repeat(64),
+    evaluation_execution_plan_ref: 'db://evaluation-execution-plan/plan_1',
+    evaluation_execution_plan_hash: 'c'.repeat(64),
+    trigger_type: 'manual',
+    status: 'queued',
+    total_cases: 0,
+    completed_cases: 0,
+    passed_cases: 0,
+    failed_cases: 0,
+    skipped_cases: 0,
+    system_error_cases: 0,
+    evidence_collection_status: 'not_started',
     ...overrides,
   };
 }

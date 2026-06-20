@@ -5,6 +5,8 @@ import type {
   HumanTaskListResponse,
   AgentRunRecord,
   AgentStepRecord,
+  EvaluationCaseResult,
+  EvaluationRun,
   TaskRun,
 } from '@dar/contracts';
 import type { ForwardHeaders } from './http-client.js';
@@ -20,6 +22,11 @@ export interface RuntimeApiOperationsClient {
   listAgentRuns(query: URLSearchParams, headers: ForwardHeaders): Promise<{ agent_runs: AgentRunRecord[] }>;
   getAgentRun(agentRunId: string, query: URLSearchParams, headers: ForwardHeaders): Promise<{ agent_run: AgentRunRecord }>;
   listAgentSteps(agentRunId: string, query: URLSearchParams, headers: ForwardHeaders): Promise<{ agent_steps: AgentStepRecord[] }>;
+  listEvaluationRuns(query: URLSearchParams, headers: ForwardHeaders): Promise<EvaluationRun[]>;
+  createEvaluationRun(body: unknown, headers: ForwardHeaders): Promise<{ evaluation_run: EvaluationRun; workflow_start: Record<string, unknown> }>;
+  getEvaluationRun(runId: string, query: URLSearchParams, headers: ForwardHeaders): Promise<EvaluationRun>;
+  listEvaluationRunResults(runId: string, query: URLSearchParams, headers: ForwardHeaders): Promise<{ evaluation_run_id: string; results: EvaluationCaseResult[] }>;
+  cancelEvaluationRun(runId: string, body: unknown, headers: ForwardHeaders): Promise<EvaluationRun>;
 }
 
 export class RuntimeApiClient implements RuntimeApiOperationsClient {
@@ -67,6 +74,26 @@ export class RuntimeApiClient implements RuntimeApiOperationsClient {
 
   listAgentSteps(agentRunId: string, query: URLSearchParams, headers: ForwardHeaders): Promise<{ agent_steps: AgentStepRecord[] }> {
     return this.client.get<{ agent_steps: AgentStepRecord[] }>(`/v1/agent-runs/${encodeURIComponent(agentRunId)}/steps?${query.toString()}`, headers);
+  }
+
+  listEvaluationRuns(query: URLSearchParams, headers: ForwardHeaders): Promise<EvaluationRun[]> {
+    return this.client.get<EvaluationRun[]>(`/v1/evaluation-runs?${query.toString()}`, headers);
+  }
+
+  createEvaluationRun(body: unknown, headers: ForwardHeaders): Promise<{ evaluation_run: EvaluationRun; workflow_start: Record<string, unknown> }> {
+    return this.client.post<{ evaluation_run: EvaluationRun; workflow_start: Record<string, unknown> }>('/v1/evaluation-runs', body, headers);
+  }
+
+  getEvaluationRun(runId: string, query: URLSearchParams, headers: ForwardHeaders): Promise<EvaluationRun> {
+    return this.client.get<EvaluationRun>(`/v1/evaluation-runs/${encodeURIComponent(runId)}?${query.toString()}`, headers);
+  }
+
+  listEvaluationRunResults(runId: string, query: URLSearchParams, headers: ForwardHeaders): Promise<{ evaluation_run_id: string; results: EvaluationCaseResult[] }> {
+    return this.client.get<{ evaluation_run_id: string; results: EvaluationCaseResult[] }>(`/v1/evaluation-runs/${encodeURIComponent(runId)}/results?${query.toString()}`, headers);
+  }
+
+  cancelEvaluationRun(runId: string, body: unknown, headers: ForwardHeaders): Promise<EvaluationRun> {
+    return this.client.post<EvaluationRun>(`/v1/evaluation-runs/${encodeURIComponent(runId)}/cancel`, body, headers);
   }
 }
 

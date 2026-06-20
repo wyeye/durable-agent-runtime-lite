@@ -2,6 +2,7 @@ import type { AgentBudgetLedger, PiContextSnapshotRef } from '@dar/contracts';
 
 export const TASK_QUEUES = {
   runtimeWorkerMain: 'runtime-worker-main',
+  evaluationWorkerMain: 'evaluation-worker-main',
 } as const;
 
 export const WORKFLOW_SIGNALS = {
@@ -72,6 +73,28 @@ export interface PiDurableAgentWorkflowInput {
   tenant_policy_hash?: string;
   tenant_admission_id?: string;
   task_status_owner?: boolean;
+  request_id: string;
+  trace_id?: string;
+}
+
+export interface EvaluationRunWorkflowInput {
+  tenant_id: string;
+  user_id: string;
+  evaluation_run_id: string;
+  evaluation_execution_plan_ref: string;
+  evaluation_execution_plan_hash: string;
+  workflow_id?: string;
+  request_id: string;
+  trace_id?: string;
+}
+
+export interface EvaluationCaseWorkflowInput {
+  tenant_id: string;
+  user_id: string;
+  evaluation_run_id: string;
+  case_id: string;
+  evaluation_execution_plan_ref: string;
+  evaluation_execution_plan_hash: string;
   request_id: string;
   trace_id?: string;
 }

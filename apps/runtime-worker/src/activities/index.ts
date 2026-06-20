@@ -10,6 +10,7 @@ import {
   toolCommitRequestSchema,
   toolInvokeRequestSchema,
   toolPreviewRequestSchema,
+  taskRunSchema,
   type FlowExecutionPlan,
   type FlowExecutionPlanAgent,
   type FlowExecutionPlanTool,
@@ -29,6 +30,14 @@ import {
   type ToolInvokeResponse,
   type ToolPreviewResponse,
   type EffectiveTenantPolicy,
+  type EvaluationAggregateResult,
+  type EvaluationCase,
+  type EvaluationCaseResult,
+  type EvaluationComparison,
+  type EvaluationExecutionPlan,
+  type EvaluationGateDecision,
+  type EvaluationRun,
+  type EvaluationSubjectSnapshot,
 } from '@dar/contracts';
 import { ToolGatewayClient } from '@dar/tool-client';
 import type { UserMessage } from '@earendil-works/pi-ai';
@@ -47,6 +56,21 @@ import {
   parseDbFlowSnapshotRef,
   TaskRunRepository,
   TenantAgentAdmissionRepository,
+  EvaluationCaseRepository,
+  EvaluationCaseResultRepository,
+  EvaluationComparisonRepository,
+  EvaluationComparisonService,
+  EvaluationEvidenceCollector,
+  EvaluationExecutionPlanRepository,
+  EvaluationGatePolicyRepository,
+  EvaluationGateService,
+  EvaluationRunRepository,
+  EvaluationScoringEngine,
+  EvaluationSubjectSnapshotRepository,
+  assertCandidateFidelity,
+  hashEvaluationSubjectSnapshot,
+  hashJson,
+  stableStringify,
   TenantRuntimePolicyResolver,
   TenantRuntimePolicySnapshotRepository,
   effectivePolicyFromSnapshot,
@@ -138,6 +162,16 @@ function createToolGatewayClient(config = loadConfig()): ToolGatewayClient {
   });
 }
 
+function normalizeActualStatus(status: string): string {
+  if (status === 'completed') {
+    return 'completed';
+  }
+  if (status === 'failed' || status === 'timed_out' || status === 'cancelled' || status === 'budget_exceeded') {
+    return 'system_error';
+  }
+  return status;
+}
+
 export interface ActivityContext {
   tenant_id: string;
   user_id: string;
@@ -146,6 +180,11 @@ export interface ActivityContext {
   request_id: string;
   execution_plan_ref?: string;
   execution_plan_hash?: string;
+  execution_context_type?: 'runtime' | 'evaluation';
+  evaluation_run_id?: string;
+  evaluation_case_id?: string;
+  evaluation_execution_plan_ref?: string;
+  evaluation_execution_plan_hash?: string;
   tenant_policy_snapshot_ref?: string;
   tenant_policy_hash?: string;
   tenant_admission_id?: string;
@@ -771,6 +810,11 @@ export async function invokeToolActivity(
         ...(context.execution_plan_hash
           ? { execution_plan_hash: context.execution_plan_hash }
           : {}),
+        execution_context_type: context.execution_context_type ?? 'runtime',
+        ...(context.evaluation_run_id ? { evaluation_run_id: context.evaluation_run_id } : {}),
+        ...(context.evaluation_case_id ? { evaluation_case_id: context.evaluation_case_id } : {}),
+        ...(context.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: context.evaluation_execution_plan_ref } : {}),
+        ...(context.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: context.evaluation_execution_plan_hash } : {}),
         request_id: context.request_id,
       }),
     );
@@ -820,6 +864,11 @@ export async function previewToolActivity(
         ...(context.execution_plan_hash
           ? { execution_plan_hash: context.execution_plan_hash }
           : {}),
+        execution_context_type: context.execution_context_type ?? 'runtime',
+        ...(context.evaluation_run_id ? { evaluation_run_id: context.evaluation_run_id } : {}),
+        ...(context.evaluation_case_id ? { evaluation_case_id: context.evaluation_case_id } : {}),
+        ...(context.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: context.evaluation_execution_plan_ref } : {}),
+        ...(context.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: context.evaluation_execution_plan_hash } : {}),
         request_id: context.request_id,
       }),
     );
@@ -871,6 +920,11 @@ export async function commitToolActivity(
         ...(context.execution_plan_hash
           ? { execution_plan_hash: context.execution_plan_hash }
           : {}),
+        execution_context_type: context.execution_context_type ?? 'runtime',
+        ...(context.evaluation_run_id ? { evaluation_run_id: context.evaluation_run_id } : {}),
+        ...(context.evaluation_case_id ? { evaluation_case_id: context.evaluation_case_id } : {}),
+        ...(context.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: context.evaluation_execution_plan_ref } : {}),
+        ...(context.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: context.evaluation_execution_plan_hash } : {}),
         request_id: context.request_id,
       }),
     );
@@ -882,6 +936,325 @@ export async function commitToolActivity(
       status: result.status,
     });
     return result;
+  });
+}
+
+export interface LoadEvaluationRunPlanActivityInput {
+  tenant_id: string;
+  evaluation_run_id: string;
+  evaluation_execution_plan_ref: string;
+  evaluation_execution_plan_hash: string;
+}
+
+export interface LoadEvaluationRunPlanActivityResult {
+  run: EvaluationRun;
+  plan: EvaluationExecutionPlan;
+  subject_snapshot: EvaluationSubjectSnapshot;
+  cases: EvaluationCase[];
+}
+
+export interface EvaluationCaseSummary {
+  case_id: string;
+  status: EvaluationCaseResult['status'];
+  score?: number;
+  task_run_id?: string;
+  agent_run_id?: string;
+}
+
+export interface PrepareEvaluationCaseActivityResult {
+  task_run_id: string;
+  agent_execution_plan_ref: string;
+  initial_user_input: string;
+  tenant_policy_snapshot_ref: string;
+  tenant_policy_hash: string;
+}
+
+export async function loadEvaluationRunPlanActivity(
+  input: LoadEvaluationRunPlanActivityInput,
+): Promise<LoadEvaluationRunPlanActivityResult> {
+  return classifyActivityFailure('loadEvaluationRunPlanActivity', async () => {
+    const db = getProcessDb();
+    const run = await new EvaluationRunRepository(db).get(input.evaluation_run_id);
+    if (!run || run.tenant_id !== input.tenant_id) {
+      throw ApplicationFailure.nonRetryable('EvaluationRun not found', 'NOT_FOUND');
+    }
+    const plan = await new EvaluationExecutionPlanRepository(db).getByRef(input.evaluation_execution_plan_ref);
+    if (!plan || plan.tenant_id !== input.tenant_id || plan.plan_hash !== input.evaluation_execution_plan_hash) {
+      throw ApplicationFailure.nonRetryable('EvaluationExecutionPlan hash mismatch', 'EVALUATION_EXECUTION_PLAN_HASH_MISMATCH');
+    }
+    const subjectSnapshot = await new EvaluationSubjectSnapshotRepository(db).getByRef(plan.subject_snapshot_ref);
+    if (!subjectSnapshot || hashEvaluationSubjectSnapshot(subjectSnapshot) !== plan.subject_snapshot_hash) {
+      throw ApplicationFailure.nonRetryable('EvaluationSubjectSnapshot hash mismatch', 'EVALUATION_SUBJECT_HASH_MISMATCH');
+    }
+    const cases = await new EvaluationCaseRepository(db).list(plan.dataset_id, plan.dataset_version, true);
+    return { run, plan, subject_snapshot: subjectSnapshot, cases };
+  });
+}
+
+export async function markEvaluationRunRunningActivity(input: {
+  evaluation_run_id: string;
+  workflow_id: string;
+  workflow_run_id?: string;
+}): Promise<EvaluationRun> {
+  return classifyActivityFailure('markEvaluationRunRunningActivity', async () => {
+    const repository = new EvaluationRunRepository(getProcessDb());
+    await repository.attachWorkflow(input.evaluation_run_id, input.workflow_id, input.workflow_run_id);
+    return repository.markRunning(input.evaluation_run_id);
+  });
+}
+
+export async function failEvaluationRunActivity(input: {
+  evaluation_run_id: string;
+  error_code: string;
+  error_message: string;
+}): Promise<EvaluationRun> {
+  return classifyActivityFailure('failEvaluationRunActivity', async () =>
+    new EvaluationRunRepository(getProcessDb()).fail(input.evaluation_run_id, input.error_code, input.error_message),
+  );
+}
+
+export async function completeEvaluationRunActivity(input: {
+  evaluation_run_id: string;
+  aggregate: EvaluationAggregateResult;
+}): Promise<EvaluationRun> {
+  return classifyActivityFailure('completeEvaluationRunActivity', async () =>
+    new EvaluationRunRepository(getProcessDb()).complete(input.evaluation_run_id, input.aggregate),
+  );
+}
+
+export async function verifyEvaluationCandidateFidelityActivity(input: {
+  tenant_id: string;
+  evaluation_execution_plan_ref: string;
+  evaluation_execution_plan_hash: string;
+}): Promise<{ verified: true; subject_snapshot: EvaluationSubjectSnapshot; plan: EvaluationExecutionPlan }> {
+  return classifyActivityFailure('verifyEvaluationCandidateFidelityActivity', async () => {
+    const db = getProcessDb();
+    const plan = await new EvaluationExecutionPlanRepository(db).getByRef(input.evaluation_execution_plan_ref);
+    if (!plan || plan.tenant_id !== input.tenant_id || plan.plan_hash !== input.evaluation_execution_plan_hash) {
+      throw ApplicationFailure.nonRetryable('Evaluation execution plan mismatch', 'EVALUATION_EXECUTION_PLAN_HASH_MISMATCH');
+    }
+    const subjectSnapshot = await new EvaluationSubjectSnapshotRepository(db).getByRef(plan.subject_snapshot_ref);
+    if (!subjectSnapshot) {
+      throw ApplicationFailure.nonRetryable('Evaluation subject snapshot not found', 'NOT_FOUND');
+    }
+    const agentPlan = await new AgentExecutionPlanRepository(db).getByRef(plan.agent_execution_plan_ref, { tenantId: input.tenant_id });
+    if (!agentPlan) {
+      throw ApplicationFailure.nonRetryable('Agent execution plan not found', 'NOT_FOUND');
+    }
+    assertCandidateFidelity({ subjectSnapshot, agentExecutionPlan: agentPlan });
+    if (
+      plan.resolved_agent_plan.agent_sha256 !== subjectSnapshot.candidate_bundle.agent_hash ||
+      plan.resolved_agent_plan.prompt_sha256 !== subjectSnapshot.candidate_bundle.prompt_hash ||
+      plan.resolved_agent_plan.model_policy_hash !== subjectSnapshot.candidate_bundle.model_policy_hash
+    ) {
+      throw ApplicationFailure.nonRetryable('Evaluation execution plan resolved candidate mismatch', 'EVALUATION_CANDIDATE_FIDELITY_MISMATCH');
+    }
+    return { verified: true, subject_snapshot: subjectSnapshot, plan };
+  });
+}
+
+export async function prepareEvaluationCaseActivity(input: {
+  tenant_id: string;
+  user_id: string;
+  evaluation_run_id: string;
+  case_id: string;
+  workflow_id: string;
+  request_id: string;
+  evaluation_execution_plan_ref: string;
+  evaluation_execution_plan_hash: string;
+}): Promise<PrepareEvaluationCaseActivityResult> {
+  return classifyActivityFailure('prepareEvaluationCaseActivity', async () => {
+    const db = getProcessDb();
+    const run = await new EvaluationRunRepository(db).get(input.evaluation_run_id);
+    if (!run || run.tenant_id !== input.tenant_id) {
+      throw ApplicationFailure.nonRetryable('EvaluationRun not found', 'NOT_FOUND');
+    }
+    const plan = await new EvaluationExecutionPlanRepository(db).getByRef(input.evaluation_execution_plan_ref);
+    if (!plan || plan.plan_hash !== input.evaluation_execution_plan_hash || plan.tenant_id !== input.tenant_id) {
+      throw ApplicationFailure.nonRetryable('Evaluation execution plan mismatch', 'EVALUATION_EXECUTION_PLAN_HASH_MISMATCH');
+    }
+    const evaluationCase = await new EvaluationCaseRepository(db).get(input.case_id);
+    if (!evaluationCase || evaluationCase.dataset_id !== run.dataset_id || evaluationCase.dataset_version !== run.dataset_version) {
+      throw ApplicationFailure.nonRetryable('EvaluationCase not found for run dataset', 'NOT_FOUND');
+    }
+    const taskRunId = `eval_task_${input.evaluation_run_id}_${input.case_id}`;
+    const existing = await new TaskRunRepository(db).get(taskRunId);
+    if (!existing) {
+      await new TaskRunRepository(db).create({
+        taskRun: taskRunSchema.parse({
+          task_run_id: taskRunId,
+          tenant_id: input.tenant_id,
+          user_id: input.user_id,
+          route_type: 'manual',
+          workflow_id: input.workflow_id,
+          execution_plan_ref: plan.agent_execution_plan_ref,
+          tenant_policy_snapshot_ref: plan.tenant_policy_snapshot_ref,
+          tenant_policy_hash: plan.tenant_policy_snapshot_hash,
+          status: 'queued',
+        }),
+        input: evaluationCase.input,
+        routeResult: {
+          route_decision: {
+            decision: 'agent_fallback',
+            agent_id: plan.resolved_agent_plan.agent_id,
+            reason: 'evaluation_case',
+          },
+          candidates: [],
+        },
+        executionPlanRef: plan.agent_execution_plan_ref,
+        tenantPolicySnapshotRef: plan.tenant_policy_snapshot_ref,
+        tenantPolicyHash: plan.tenant_policy_snapshot_hash,
+      });
+    }
+    return {
+      task_run_id: taskRunId,
+      agent_execution_plan_ref: plan.agent_execution_plan_ref,
+      initial_user_input: typeof evaluationCase.input.text === 'string'
+        ? evaluationCase.input.text
+        : stableStringify(evaluationCase.input),
+      tenant_policy_snapshot_ref: plan.tenant_policy_snapshot_ref,
+      tenant_policy_hash: plan.tenant_policy_snapshot_hash,
+    };
+  });
+}
+
+export async function collectAndScoreEvaluationCaseActivity(input: {
+  tenant_id: string;
+  evaluation_run_id: string;
+  case_id: string;
+  task_run_id: string;
+  agent_run_id?: string;
+  workflow_id: string;
+  workflow_run_id?: string;
+  started_at_ms?: number;
+}): Promise<EvaluationCaseResult> {
+  return classifyActivityFailure('collectAndScoreEvaluationCaseActivity', async () => {
+    const db = getProcessDb();
+    const run = await new EvaluationRunRepository(db).get(input.evaluation_run_id);
+    if (!run || run.tenant_id !== input.tenant_id) {
+      throw ApplicationFailure.nonRetryable('EvaluationRun not found', 'NOT_FOUND');
+    }
+    const evaluationCase = await new EvaluationCaseRepository(db).get(input.case_id);
+    if (!evaluationCase || evaluationCase.dataset_id !== run.dataset_id || evaluationCase.dataset_version !== run.dataset_version) {
+      throw ApplicationFailure.nonRetryable('EvaluationCase not found for run dataset', 'NOT_FOUND');
+    }
+    const evidence = await new EvaluationEvidenceCollector(db).collect({
+      tenantId: input.tenant_id,
+      evaluationRunId: input.evaluation_run_id,
+      caseId: input.case_id,
+      taskRunId: input.task_run_id,
+      ...(input.agent_run_id ? { agentRunId: input.agent_run_id } : {}),
+      ...(input.started_at_ms !== undefined ? { startedAtMs: input.started_at_ms } : {}),
+    });
+    const scored = new EvaluationScoringEngine().scoreCase({
+      evaluationCase,
+      actualStatus: normalizeActualStatus(evidence.actual_status),
+      finalOutput: evidence.final_output ?? 'completed',
+      toolCalls: evidence.tool_calls.map((call) => ({
+        tool_name: call.tool_name,
+        status: call.status,
+      })),
+      policyViolations: evidence.policy_violation_count,
+      unauthorizedToolCount: evidence.unauthorized_tool_count,
+      sideEffectWithoutApprovalCount: evidence.side_effect_without_approval_count,
+      crossTenantViolationCount: evidence.cross_tenant_violation_count,
+      secretLeakCount: evidence.secret_leak_count,
+      hiddenReasoningLeakCount: evidence.hidden_reasoning_leak_count,
+      modelCallCount: evidence.model_call_count,
+      fallbackCount: evidence.fallback_count,
+      systemError: Boolean(evidence.system_error),
+      ...(evidence.latency.ms !== undefined ? { latencyMs: evidence.latency.ms } : {}),
+      ...(evidence.tokens.input !== undefined ? { inputTokens: evidence.tokens.input } : {}),
+      ...(evidence.tokens.output !== undefined ? { outputTokens: evidence.tokens.output } : {}),
+      ...(evidence.tokens.total !== undefined ? { totalTokens: evidence.tokens.total } : {}),
+      ...(evidence.cost.estimated !== undefined ? { estimatedCost: evidence.cost.estimated } : {}),
+    });
+    const result = await new EvaluationCaseResultRepository(db).upsert({
+      ...scored,
+      evaluation_run_id: input.evaluation_run_id,
+      workflow_id: input.workflow_id,
+      ...(input.workflow_run_id ? { workflow_run_id: input.workflow_run_id } : {}),
+      evidence_snapshot: evidence as unknown as Record<string, unknown>,
+      evidence_hash: hashJson(evidence),
+      candidate_fidelity_verified: true,
+      assertion_failure_count: scored.metric_results.filter((metric) => !metric.hard_gate && !metric.passed).length,
+      hard_gate_failure_count: scored.metric_results.filter((metric) => metric.hard_gate && !metric.passed).length,
+      ...(evidence.system_error?.code ? { system_error_class: evidence.system_error.code } : {}),
+      task_run_id: input.task_run_id,
+      ...(input.agent_run_id ?? evidence.refs.agent_run_id ? { agent_run_id: input.agent_run_id ?? evidence.refs.agent_run_id } : {}),
+      model_call_ids: evidence.refs.model_call_ids,
+      tool_call_ids: evidence.refs.tool_call_ids,
+    });
+    return result;
+  });
+}
+
+export async function aggregateEvaluationRunActivity(input: {
+  evaluation_run_id: string;
+}): Promise<EvaluationAggregateResult> {
+  return classifyActivityFailure('aggregateEvaluationRunActivity', async () => {
+    const db = getProcessDb();
+    const run = await new EvaluationRunRepository(db).get(input.evaluation_run_id);
+    if (!run) {
+      throw ApplicationFailure.nonRetryable('EvaluationRun not found', 'NOT_FOUND');
+    }
+    const cases = await new EvaluationCaseRepository(db).list(run.dataset_id, run.dataset_version, true);
+    const results = await new EvaluationCaseResultRepository(db).listByRun(run.evaluation_run_id);
+    return new EvaluationScoringEngine().aggregate({ runId: run.evaluation_run_id, cases, results });
+  });
+}
+
+export async function compareEvaluationRunActivity(input: {
+  candidate_run_id: string;
+  baseline_run_id: string;
+  created_by?: string;
+}): Promise<EvaluationComparison> {
+  return classifyActivityFailure('compareEvaluationRunActivity', async () => {
+    const db = getProcessDb();
+    const runRepository = new EvaluationRunRepository(db);
+    const candidateRun = await runRepository.get(input.candidate_run_id);
+    const baselineRun = await runRepository.get(input.baseline_run_id);
+    if (!candidateRun || !baselineRun) {
+      throw ApplicationFailure.nonRetryable('EvaluationRun comparison target not found', 'NOT_FOUND');
+    }
+    const resultRepository = new EvaluationCaseResultRepository(db);
+    const comparison = new EvaluationComparisonService().compare({
+      candidateRun,
+      candidateResults: await resultRepository.listByRun(candidateRun.evaluation_run_id),
+      baselineRun,
+      baselineResults: await resultRepository.listByRun(baselineRun.evaluation_run_id),
+    });
+    return new EvaluationComparisonRepository(db).create(comparison, input.created_by);
+  });
+}
+
+export async function generateEvaluationGateDecisionActivity(input: {
+  evaluation_run_id: string;
+}): Promise<EvaluationGateDecision | undefined> {
+  return classifyActivityFailure('generateEvaluationGateDecisionActivity', async () => {
+    const db = getProcessDb();
+    const run = await new EvaluationRunRepository(db).get(input.evaluation_run_id);
+    if (!run) {
+      throw ApplicationFailure.nonRetryable('EvaluationRun not found', 'NOT_FOUND');
+    }
+    const subjectSnapshot = await new EvaluationSubjectSnapshotRepository(db).getByRef(run.subject_snapshot_ref);
+    if (!subjectSnapshot) {
+      throw ApplicationFailure.nonRetryable('EvaluationSubjectSnapshot not found', 'NOT_FOUND');
+    }
+    const policy = await new EvaluationGatePolicyRepository(db).getLatestPublishedForResource(subjectSnapshot.primary_subject_type);
+    if (!policy) {
+      return undefined;
+    }
+    const cases = await new EvaluationCaseRepository(db).list(run.dataset_id, run.dataset_version, true);
+    const results = await new EvaluationCaseResultRepository(db).listByRun(run.evaluation_run_id);
+    const aggregate = new EvaluationScoringEngine().aggregate({ runId: run.evaluation_run_id, cases, results });
+    return new EvaluationGateService(db).evaluateRun({
+      run,
+      aggregate,
+      subjectSnapshot,
+      policy,
+      mode: loadConfig().EVALUATION_GATE_MODE,
+    });
   });
 }
 

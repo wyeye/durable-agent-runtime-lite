@@ -27,6 +27,13 @@ export const builtInToolManifests: ToolManifest[] = [
       required: ['items'],
     },
     required_permissions: [],
+    evaluation_policy: {
+      allowed_in_evaluation: true,
+      mode: 'sandbox_commit',
+      allowed_tenants: ['default', 'evaluation', 'evaluation-ollama'],
+      result_redaction_policy: 'summary_only',
+      maximum_calls_per_case: 5,
+    },
     status: 'published',
   },
   {
@@ -48,6 +55,13 @@ export const builtInToolManifests: ToolManifest[] = [
       required: ['record_id', 'written'],
     },
     required_permissions: [],
+    evaluation_policy: {
+      allowed_in_evaluation: true,
+      mode: 'sandbox_commit',
+      allowed_tenants: ['default', 'evaluation', 'evaluation-ollama'],
+      result_redaction_policy: 'summary_only',
+      maximum_calls_per_case: 2,
+    },
     status: 'published',
   },
 ];
