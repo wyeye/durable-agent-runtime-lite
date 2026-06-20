@@ -36,3 +36,9 @@ services:
       MODEL_GATEWAY_IDEMPOTENCY_HEADER: Idempotency-Key
       MODEL_GATEWAY_USER_AGENT: durable-agent-runtime-lite/runtime-worker-smoke
       PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW: ${PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW:-2}
+
+  control-plane:
+    environment:
+      NODE_ENV: development
+      APP_ENV: development
+      EVALUATION_GATE_MODE: advisory
