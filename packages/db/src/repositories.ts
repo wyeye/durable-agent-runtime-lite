@@ -102,6 +102,7 @@ import type {
   TenantRuntimePolicySnapshotTable,
   TenantRuntimePolicyTable,
   ToolCallLogTable,
+  EvaluationToolCallReservationTable,
   ToolManifestTable,
 } from './index.js';
 import { withTransaction } from './index.js';
@@ -256,6 +257,25 @@ export interface ListToolCallLogsOptions extends RepositoryTenantOptions {
   status?: ToolCallLog['status'];
   limit?: number;
   offset?: number;
+}
+
+export interface EvaluationToolCallReservationInput {
+  tenantId: string;
+  evaluationRunId: string;
+  evaluationCaseId: string;
+  toolName: string;
+  toolVersion: string;
+  logicalToolCallId: string;
+  operation: 'invoke' | 'preview' | 'commit';
+  limit: number;
+  idempotencyKey?: string;
+}
+
+export interface EvaluationToolCallReservationResult {
+  allowed: boolean;
+  currentCount: number;
+  limit: number;
+  alreadyReserved: boolean;
 }
 
 export interface ModelPolicyListOptions extends RepositoryTenantOptions {
@@ -3283,6 +3303,82 @@ export class ToolCallLogRepository {
       .execute();
     return rows.map(mapToolCallLog);
   }
+
+  async reserveEvaluationLogicalCall(
+    input: EvaluationToolCallReservationInput,
+  ): Promise<EvaluationToolCallReservationResult> {
+    return withTransaction(this.db, async (trx) => {
+      const lockKey = [
+        input.tenantId,
+        input.evaluationRunId,
+        input.evaluationCaseId,
+        input.toolName,
+      ].join(':');
+      await sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`.execute(trx);
+
+      const existing = await trx
+        .selectFrom('evaluation_tool_call_reservation')
+        .selectAll()
+        .where('tenant_id', '=', input.tenantId)
+        .where('evaluation_run_id', '=', input.evaluationRunId)
+        .where('evaluation_case_id', '=', input.evaluationCaseId)
+        .where('tool_name', '=', input.toolName)
+        .where('logical_tool_call_id', '=', input.logicalToolCallId)
+        .executeTakeFirst();
+      if (existing) {
+        const count = await countReservations(trx, input);
+        return {
+          allowed: true,
+          currentCount: count,
+          limit: input.limit,
+          alreadyReserved: true,
+        };
+      }
+
+      const currentCount = await countReservations(trx, input);
+      if (currentCount >= input.limit) {
+        return {
+          allowed: false,
+          currentCount,
+          limit: input.limit,
+          alreadyReserved: false,
+        };
+      }
+
+      const row: Insertable<EvaluationToolCallReservationTable> = {
+        tenant_id: input.tenantId,
+        evaluation_run_id: input.evaluationRunId,
+        evaluation_case_id: input.evaluationCaseId,
+        tool_name: input.toolName,
+        logical_tool_call_id: input.logicalToolCallId,
+        tool_version: input.toolVersion,
+        operation: input.operation,
+        idempotency_key: input.idempotencyKey ?? null,
+      };
+      await trx.insertInto('evaluation_tool_call_reservation').values(row).execute();
+      return {
+        allowed: true,
+        currentCount: currentCount + 1,
+        limit: input.limit,
+        alreadyReserved: false,
+      };
+    });
+  }
+}
+
+async function countReservations(
+  db: Kysely<Database>,
+  input: Pick<EvaluationToolCallReservationInput, 'tenantId' | 'evaluationRunId' | 'evaluationCaseId' | 'toolName'>,
+): Promise<number> {
+  const row = await db
+    .selectFrom('evaluation_tool_call_reservation')
+    .select((eb) => eb.fn.countAll<number>().as('count'))
+    .where('tenant_id', '=', input.tenantId)
+    .where('evaluation_run_id', '=', input.evaluationRunId)
+    .where('evaluation_case_id', '=', input.evaluationCaseId)
+    .where('tool_name', '=', input.toolName)
+    .executeTakeFirst();
+  return Number(row?.count ?? 0);
 }
 
 export class ModelCallLogRepository {

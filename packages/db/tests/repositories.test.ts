@@ -532,7 +532,7 @@ describe('db repositories', () => {
 
   it('hashes evaluation datasets, candidate bundles, and gate policies with exact content', () => {
     const hash = 'a'.repeat(64);
-    const datasetHash = hashEvaluationDataset({
+    const dataset = {
       dataset_id: 'runtime-agent-core-v1',
       version: 1,
       name: 'Runtime Agent Core',
@@ -540,7 +540,10 @@ describe('db repositories', () => {
       tags: ['runtime'],
       default_weight: 1,
       revision: 1,
-    });
+    } as const;
+    const firstCase = evaluationCaseFixture('case_alpha');
+    const secondCase = evaluationCaseFixture('case_beta');
+    const datasetHash = hashEvaluationDataset(dataset, [firstCase]);
     expect(datasetHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(datasetHash).not.toBe(hashEvaluationDataset({
       dataset_id: 'runtime-agent-core-v1',
@@ -550,7 +553,13 @@ describe('db repositories', () => {
       tags: ['runtime'],
       default_weight: 1,
       revision: 1,
-    }));
+    }, [firstCase]));
+    expect(datasetHash).not.toBe(hashEvaluationDataset(dataset, [
+      { ...firstCase, input: { text: 'changed' } },
+    ]));
+    expect(datasetHash).not.toBe(hashEvaluationDataset(dataset, [firstCase, secondCase]));
+    expect(hashEvaluationDataset(dataset, [secondCase, firstCase])).toBe(hashEvaluationDataset(dataset, [firstCase, secondCase]));
+    expect(hashEvaluationDataset(dataset, [firstCase, secondCase])).not.toBe(hashEvaluationDataset(dataset, [firstCase]));
 
     const bundleHash = hashEvaluationCandidateBundle({
       primary_subject_type: 'prompt',
@@ -579,7 +588,11 @@ describe('db repositories', () => {
       version: 1,
       status: 'published',
       resource_types: ['prompt', 'agent', 'model_policy'],
-      required_dataset_refs: ['runtime-agent-core-v1@1#abc'],
+      required_dataset_refs: [{
+        dataset_id: 'runtime-agent-core-v1',
+        version: 1,
+        dataset_hash: hash,
+      }],
       thresholds: { minimum_pass_rate: 1 },
       regression_rules: {},
       required_case_tags: [],
@@ -985,11 +998,36 @@ describe('db repositories', () => {
     const db = new FakeDb({
       task_run: [taskRunRow({ task_run_id: 'task_eval', status: 'failed', error_code: 'TASK_FAILED' })],
       agent_run: [agentRunRow({ status: 'failed', error_code: 'AGENT_FAILED', error_message: 'agent failed after tool evidence' })],
+      agent_step: [
+        {
+          agent_step_id: 'agent_step_1',
+          agent_run_id: 'agent_eval',
+          segment_index: 0,
+          stable_step_key: 'agent_eval:0',
+          segment_status: 'failed',
+          decision_summary: 'failed',
+          proposed_tool_calls_json: [],
+          tool_result_refs_json: [],
+          authoritative_tool_result_refs_json: [],
+          human_task_ids_json: [],
+          context_snapshot_before_ref: null,
+          context_snapshot_after_ref: null,
+          handoff_refs_json: [],
+          context_snapshot_ref: null,
+          output_ref: 'sha256:agent-output',
+          usage_json: {},
+          error_code: 'AGENT_FAILED',
+          error_message: 'agent failed after tool evidence',
+          created_at: now,
+          updated_at: now,
+        },
+      ],
       tool_call_log: [
         toolCallRow({
           tool_call_id: 'tool_read',
           status: 'committed',
           tool_name: 'knowledge.search',
+          idempotency_key: 'task_eval:knowledge.search',
           input_hash: 'input_hash_read',
           output_hash: 'output_hash_read',
           evaluation_run_id: 'eval_run_1',
@@ -1016,6 +1054,41 @@ describe('db repositories', () => {
           total_tokens: 15,
           estimated_cost: 0.001,
         }),
+      ],
+      model_call_attempt: [
+        {
+          attempt_id: 'model_attempt_1',
+          model_call_id: 'model_call_1',
+          global_attempt_index: 0,
+          target_attempt_index: 0,
+          fallback_index: 0,
+          attempt_index: 0,
+          target_id: 'target_1',
+          provider: 'mock',
+          model_id: 'model_1',
+          status: 'failed',
+          http_status: 500,
+          error_class: 'provider',
+          error_code: 'MODEL_FAILED',
+          latency_ms: 10,
+          response_id: null,
+          started_at: now,
+          completed_at: now,
+          created_at: now,
+        },
+      ],
+      idempotency_record: [
+        {
+          idempotency_key: 'task_eval:knowledge.search',
+          tenant_id: 'tenant_1',
+          target_type: 'tool',
+          target_id: 'knowledge.search',
+          request_hash: 'request_hash',
+          response_json: {},
+          status: 'succeeded',
+          created_at: now,
+          updated_at: now,
+        },
       ],
       human_task: [
         {
@@ -1081,15 +1154,20 @@ describe('db repositories', () => {
       refs: {
         task_run_id: 'task_eval',
         agent_run_id: 'agent_eval',
+        agent_step_ids: ['agent_step_1'],
         model_call_ids: ['model_call_1'],
+        model_call_attempt_ids: ['model_attempt_1'],
         tool_call_ids: ['tool_read', 'tool_l3'],
+        human_task_ids: ['human_1'],
+        audit_event_ids: ['audit_policy'],
+        idempotency_record_ids: ['task_eval:knowledge.search'],
       },
     });
     expect(evidence.final_output_safe).toEqual({ error_message: 'agent failed after tool evidence' });
     expect(evidence.final_output_ref).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(evidence.system_error).toEqual({
       code: 'AGENT_FAILED',
-      message: 'agent failed after tool evidence',
+      class: 'evaluation_evidence_error',
     });
     expect(evidence.secret_leak_count).toBe(1);
 
@@ -1152,7 +1230,11 @@ describe('db repositories', () => {
           version: 1,
           status: 'published',
           resource_types_json: ['prompt'],
-          required_dataset_refs_json: ['runtime-agent-core-v1@1#abc'],
+          required_dataset_refs_json: [{
+            dataset_id: 'runtime-agent-core-v1',
+            version: 1,
+            dataset_hash: 'a'.repeat(64),
+          }],
           thresholds_json: { minimum_pass_rate: 1 },
           regression_rules_json: {},
           required_case_tags_json: [],

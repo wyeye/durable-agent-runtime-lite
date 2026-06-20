@@ -726,6 +726,150 @@ describe('tool-gateway invoke', () => {
     await server.close();
   });
 
+  it('counts evaluation preview and commit with the same tool_call_id as one logical call', async () => {
+    const toolCallLogStore = new InMemoryToolCallLogStore();
+    const humanTaskStore = new InMemoryHumanTaskLookupStore();
+    const registry = new MutableRegistry([{
+      ...l4Tool,
+      tool_name: 'record.write.mock',
+      version: '1.0.0',
+      risk_level: 'L3',
+      side_effect: true,
+      adapter: { type: 'mock', endpoint_ref: 'mock/record-write' },
+      input_schema: {
+        type: 'object',
+        required: ['record'],
+        properties: { record: { type: 'object' } },
+      },
+      evaluation_policy: {
+        allowed_in_evaluation: true,
+        mode: 'sandbox_commit',
+        allowed_tenants: ['tenant_1'],
+        result_redaction_policy: 'summary_only',
+        maximum_calls_per_case: 1,
+      },
+    }]);
+    const server = buildServer(new ToolService({ registry, toolCallLogStore, humanTaskStore }));
+    const basePayload = {
+      tool_version: '1.0.0',
+      tenant_id: 'tenant_1',
+      user_context: { user_id: 'user_1' },
+      task_context: { task_run_id: 'task_eval_preview_commit', workflow_id: 'wf_eval' },
+      arguments: { record: { title: 'demo' } },
+      execution_context_type: 'evaluation',
+      evaluation_run_id: 'eval_run_preview_commit',
+      evaluation_case_id: 'case_1',
+      evaluation_execution_plan_ref: 'db://evaluation-execution-plan/plan_1',
+      evaluation_execution_plan_hash: 'a'.repeat(64),
+    };
+
+    const preview = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/record.write.mock/preview',
+      payload: {
+        ...basePayload,
+        idempotency_key: 'task_eval_preview_commit:preview',
+      },
+    });
+    expect(preview.statusCode).toBe(200);
+    const toolCallId = preview.json().data.tool_call_id as string;
+    humanTaskStore.add({
+      human_task_id: 'human_eval_1',
+      tenant_id: 'tenant_1',
+      task_run_id: 'task_eval_preview_commit',
+      workflow_id: 'wf_eval',
+      status: 'approved',
+      candidate_groups: [],
+      payload: { tool_call_id: toolCallId },
+      decision: { status: 'approved' },
+      decided_by: 'approver_1',
+      decided_at: '2025-01-01T00:00:00.000Z',
+      created_at: '2025-01-01T00:00:00.000Z',
+    } satisfies HumanTask);
+
+    const commit = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/record.write.mock/commit',
+      payload: {
+        ...basePayload,
+        tool_call_id: toolCallId,
+        idempotency_key: 'task_eval_preview_commit:commit',
+      },
+    });
+    expect(commit.statusCode).toBe(200);
+
+    const secondPreview = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/record.write.mock/preview',
+      payload: {
+        ...basePayload,
+        idempotency_key: 'task_eval_preview_commit:preview:second',
+      },
+    });
+    expect(secondPreview.statusCode).toBe(400);
+    expect(secondPreview.json().error.code).toBe('TOOL_EVALUATION_CALL_LIMIT_EXCEEDED');
+
+    const calls = await toolCallLogStore.list({
+      tenantId: 'tenant_1',
+      evaluationRunId: 'eval_run_preview_commit',
+      evaluationCaseId: 'case_1',
+      toolName: 'record.write.mock',
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.tool_call_id).toBe(toolCallId);
+    await server.close();
+  });
+
+  it('keeps evaluation maximum calls per case bounded under 20 concurrent requests', async () => {
+    const toolCallLogStore = new InMemoryToolCallLogStore();
+    const registry = new MutableRegistry([{
+      ...dbKnowledgeSearchTool,
+      evaluation_policy: {
+        allowed_in_evaluation: true,
+        mode: 'sandbox_commit',
+        allowed_tenants: ['tenant_1'],
+        result_redaction_policy: 'summary_only',
+        maximum_calls_per_case: 5,
+      },
+    }]);
+    const server = buildServer(new ToolService({ registry, toolCallLogStore }));
+    const basePayload = {
+      tool_version: '1.0.0',
+      tenant_id: 'tenant_1',
+      user_context: { user_id: 'user_1' },
+      task_context: { task_run_id: 'task_eval_concurrent' },
+      arguments: { query: 'hello' },
+      execution_context_type: 'evaluation',
+      evaluation_run_id: 'eval_run_concurrent',
+      evaluation_case_id: 'case_1',
+      evaluation_execution_plan_ref: 'db://evaluation-execution-plan/plan_1',
+      evaluation_execution_plan_hash: 'a'.repeat(64),
+    };
+
+    const responses = await Promise.all(Array.from({ length: 20 }, (_, index) =>
+      server.inject({
+        method: 'POST',
+        url: '/v1/tools/knowledge.search/invoke',
+        payload: {
+          ...basePayload,
+          idempotency_key: `task_eval_concurrent:knowledge.search:${index}`,
+        },
+      }),
+    ));
+    const successCount = responses.filter((response) => response.statusCode === 200).length;
+    const deniedCount = responses.filter((response) => response.statusCode === 400 && response.json().error.code === 'TOOL_EVALUATION_CALL_LIMIT_EXCEEDED').length;
+    expect(successCount).toBe(5);
+    expect(deniedCount).toBe(15);
+    const calls = await toolCallLogStore.list({
+      tenantId: 'tenant_1',
+      evaluationRunId: 'eval_run_concurrent',
+      evaluationCaseId: 'case_1',
+      toolName: 'knowledge.search',
+    });
+    expect(calls).toHaveLength(5);
+    await server.close();
+  });
+
   it('loads the exact tool version locked by the execution plan', async () => {
     const registry = new MutableRegistry([
       {

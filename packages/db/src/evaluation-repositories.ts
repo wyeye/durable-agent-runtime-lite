@@ -62,10 +62,13 @@ import {
   AgentExecutionPlanRepository,
   AgentRunRepository,
   AgentSpecRepository,
+  AgentStepRepository,
   AuditEventRepository,
   hashJson,
   HumanTaskRepository,
   hashModelPolicy,
+  IdempotencyRecordRepository,
+  ModelCallAttemptRepository,
   ModelCallLogRepository,
   ModelPolicyRepository,
   parseAgentOutputSchema,
@@ -89,6 +92,15 @@ export interface EvaluationDatasetListOptions {
   tag?: string;
   limit?: number;
   offset?: number;
+}
+
+export interface EvaluationDatasetUpdateDraftInput {
+  name?: string;
+  description?: string | null;
+  domain?: string | null;
+  tags?: string[];
+  defaultWeight?: number;
+  expectedRevision?: number;
 }
 
 export interface EvaluationRunListOptions {
@@ -159,15 +171,20 @@ export interface EvaluationEvidenceSnapshot {
   latency: { ms?: number };
   tokens: { input?: number; output?: number; total?: number };
   cost: { estimated?: number };
-  system_error?: { code?: string; message?: string };
+  system_error?: { code?: string; class?: string };
   completeness_status: 'complete' | 'incomplete';
   completeness_reasons: string[];
   error_code?: 'EVALUATION_EVIDENCE_INCOMPLETE';
   refs: {
     task_run_id?: string;
     agent_run_id?: string;
+    agent_step_ids: string[];
     model_call_ids: string[];
+    model_call_attempt_ids: string[];
     tool_call_ids: string[];
+    human_task_ids: string[];
+    audit_event_ids: string[];
+    idempotency_record_ids: string[];
   };
 }
 
@@ -231,6 +248,16 @@ export class EvaluationDatasetRepository {
     return row ? mapEvaluationDataset(row) : undefined;
   }
 
+  async listVersions(datasetId: string): Promise<EvaluationDataset[]> {
+    const rows = await this.db
+      .selectFrom('evaluation_dataset')
+      .selectAll()
+      .where('dataset_id', '=', datasetId)
+      .orderBy('version', 'desc')
+      .execute();
+    return rows.map(mapEvaluationDataset);
+  }
+
   async createDraft(dataset: EvaluationDataset, options: EvaluationWriteOptions): Promise<EvaluationDataset> {
     const parsed = evaluationDatasetSchema.parse({
       ...dataset,
@@ -239,7 +266,7 @@ export class EvaluationDatasetRepository {
       created_by: options.operatorId,
       updated_by: options.operatorId,
     });
-    const datasetHash = hashEvaluationDataset(parsed);
+    const datasetHash = hashEvaluationDataset(parsed, []);
     const row: Insertable<EvaluationDatasetTable> = {
       dataset_id: parsed.dataset_id,
       version: parsed.version,
@@ -265,12 +292,238 @@ export class EvaluationDatasetRepository {
     return mapEvaluationDataset(saved);
   }
 
-  async markValidated(datasetId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationDataset> {
+  async updateDraft(
+    datasetId: string,
+    version: number,
+    input: EvaluationDatasetUpdateDraftInput,
+    options: EvaluationWriteOptions,
+  ): Promise<EvaluationDataset> {
+    const existing = await this.getMutableDataset(datasetId, version);
+    if (input.expectedRevision !== undefined && existing.revision !== input.expectedRevision) {
+      throw new EvaluationRepositoryError('EVALUATION_DATASET_REVISION_CONFLICT', 'Evaluation dataset revision conflict', {
+        dataset_id: datasetId,
+        version,
+        expected_revision: input.expectedRevision,
+        actual_revision: existing.revision,
+      });
+    }
+    const update = evaluationDatasetSchema.parse({
+      ...existing,
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.description !== undefined
+        ? input.description === null ? { description: undefined } : { description: input.description }
+        : {}),
+      ...(input.domain !== undefined ? input.domain === null ? { domain: undefined } : { domain: input.domain } : {}),
+      ...(input.tags !== undefined ? { tags: input.tags } : {}),
+      ...(input.defaultWeight !== undefined ? { default_weight: input.defaultWeight } : {}),
+      updated_by: options.operatorId,
+    });
+    const cases = await new EvaluationCaseRepository(this.db).list(datasetId, version, false);
+    const datasetHash = hashEvaluationDataset(update, cases);
+    const row = await this.db
+      .updateTable('evaluation_dataset')
+      .set({
+        ...(input.name !== undefined ? { name: update.name } : {}),
+        ...(input.description !== undefined ? { description: update.description ?? null } : {}),
+        ...(input.domain !== undefined ? { domain: update.domain ?? null } : {}),
+        ...(input.tags !== undefined ? { tags_json: update.tags } : {}),
+        ...(input.defaultWeight !== undefined ? { default_weight: update.default_weight } : {}),
+        dataset_hash: datasetHash,
+        updated_by: options.operatorId,
+        updated_at: new Date(),
+        revision: sql<number>`revision + 1`,
+      })
+      .where('dataset_id', '=', datasetId)
+      .where('version', '=', version)
+      .where('status', '=', 'draft')
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new EvaluationRepositoryError('EVALUATION_DATASET_NOT_MUTABLE', 'Evaluation dataset draft cannot be updated', {
+        dataset_id: datasetId,
+        version,
+      });
+    }
+    return mapEvaluationDataset(row);
+  }
+
+  async clone(
+    datasetId: string,
+    version: number,
+    input: { version?: number; datasetId?: string },
+    options: EvaluationWriteOptions,
+  ): Promise<EvaluationDataset> {
+    return withTransaction(this.db, async (trx) => {
+      const source = await new EvaluationDatasetRepository(trx).get(datasetId, version);
+      if (!source) {
+        throw new EvaluationRepositoryError('EVALUATION_DATASET_NOT_FOUND', 'Evaluation dataset not found', {
+          dataset_id: datasetId,
+          version,
+        });
+      }
+      const targetDatasetId = input.datasetId ?? source.dataset_id;
+      const targetVersion = input.version ?? ((await new EvaluationDatasetRepository(trx).listVersions(targetDatasetId))[0]?.version ?? 0) + 1;
+      const draft = await new EvaluationDatasetRepository(trx).createDraft({
+        ...source,
+        dataset_id: targetDatasetId,
+        version: targetVersion,
+        status: 'draft',
+        dataset_hash: undefined,
+        published_by: undefined,
+        published_at: undefined,
+      }, options);
+      const cases = await new EvaluationCaseRepository(trx).list(datasetId, version, false);
+      for (const evaluationCase of cases) {
+        await new EvaluationCaseRepository(trx).upsert({
+          ...evaluationCase,
+          dataset_id: targetDatasetId,
+          dataset_version: targetVersion,
+          case_id: `${targetDatasetId}_v${targetVersion}_${evaluationCase.case_id}`,
+          created_at: undefined,
+          updated_at: undefined,
+        }, options);
+      }
+      const refreshed = await new EvaluationDatasetRepository(trx).refreshContentHash(targetDatasetId, targetVersion, options);
+      return refreshed ?? draft;
+    });
+  }
+
+  async validate(datasetId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationDataset> {
+    await this.assertPublishableContent(datasetId, version);
+    await this.refreshContentHash(datasetId, version, options);
     return this.updateStatus(datasetId, version, 'validated', options);
   }
 
+  async markValidated(datasetId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationDataset> {
+    return this.validate(datasetId, version, options);
+  }
+
   async publish(datasetId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationDataset> {
+    await this.assertPublishableContent(datasetId, version);
+    await this.refreshContentHash(datasetId, version, options);
     return this.updateStatus(datasetId, version, 'published', options);
+  }
+
+  async deprecate(datasetId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationDataset> {
+    return this.updateTerminalStatus(datasetId, version, 'deprecated', options);
+  }
+
+  async disable(datasetId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationDataset> {
+    return this.updateTerminalStatus(datasetId, version, 'disabled', options);
+  }
+
+  async rollback(datasetId: string, targetVersion: number, options: EvaluationWriteOptions): Promise<EvaluationDataset> {
+    const target = await this.get(datasetId, targetVersion);
+    if (!target || (target.status !== 'published' && target.status !== 'deprecated')) {
+      throw new EvaluationRepositoryError('EVALUATION_DATASET_ROLLBACK_TARGET_INVALID', 'Evaluation dataset rollback target must be a published or deprecated version', {
+        dataset_id: datasetId,
+        version: targetVersion,
+      });
+    }
+    return this.updateTerminalStatus(datasetId, targetVersion, 'published', options);
+  }
+
+  async refreshContentHash(
+    datasetId: string,
+    version: number,
+    options?: EvaluationWriteOptions,
+  ): Promise<EvaluationDataset | undefined> {
+    const dataset = await this.get(datasetId, version);
+    if (!dataset) {
+      return undefined;
+    }
+    const cases = await new EvaluationCaseRepository(this.db).list(datasetId, version, false);
+    const datasetHash = hashEvaluationDataset(dataset, cases);
+    if (dataset.status !== 'draft' && dataset.status !== 'validated') {
+      if (dataset.dataset_hash === datasetHash) {
+        return dataset;
+      }
+      throw new EvaluationRepositoryError('EVALUATION_DATASET_IMMUTABLE', 'Published evaluation dataset content hash cannot be rewritten', {
+        dataset_id: datasetId,
+        version,
+        status: dataset.status,
+      });
+    }
+    const row = await this.db
+      .updateTable('evaluation_dataset')
+      .set({
+        dataset_hash: datasetHash,
+        ...(options ? { updated_by: options.operatorId } : {}),
+        updated_at: new Date(),
+        revision: sql<number>`revision + 1`,
+      })
+      .where('dataset_id', '=', datasetId)
+      .where('version', '=', version)
+      .returningAll()
+      .executeTakeFirst();
+    return row ? mapEvaluationDataset(row) : undefined;
+  }
+
+  async assertContentHash(datasetId: string, version: number, expectedHash: string): Promise<EvaluationDataset> {
+    const dataset = await this.get(datasetId, version);
+    if (!dataset) {
+      throw new EvaluationRepositoryError('EVALUATION_DATASET_NOT_FOUND', 'Evaluation dataset not found', {
+        dataset_id: datasetId,
+        version,
+      });
+    }
+    const cases = await new EvaluationCaseRepository(this.db).list(datasetId, version, false);
+    const actualHash = hashEvaluationDataset(dataset, cases);
+    if (actualHash !== expectedHash || dataset.dataset_hash !== expectedHash) {
+      throw new EvaluationRepositoryError('EVALUATION_DATASET_HASH_MISMATCH', 'Evaluation dataset content hash mismatch', {
+        dataset_id: datasetId,
+        version,
+        expected_hash: expectedHash,
+        stored_hash: dataset.dataset_hash,
+        actual_hash: actualHash,
+      });
+    }
+    return dataset;
+  }
+
+  private async getMutableDataset(datasetId: string, version: number): Promise<EvaluationDataset> {
+    const dataset = await this.get(datasetId, version);
+    if (!dataset) {
+      throw new EvaluationRepositoryError('EVALUATION_DATASET_NOT_FOUND', 'Evaluation dataset not found', {
+        dataset_id: datasetId,
+        version,
+      });
+    }
+    if (dataset.status !== 'draft') {
+      throw new EvaluationRepositoryError('EVALUATION_DATASET_IMMUTABLE', 'Only draft evaluation datasets can be modified', {
+        dataset_id: datasetId,
+        version,
+        status: dataset.status,
+      });
+    }
+    return dataset;
+  }
+
+  private async assertPublishableContent(datasetId: string, version: number): Promise<void> {
+    const dataset = await this.get(datasetId, version);
+    if (!dataset) {
+      throw new EvaluationRepositoryError('EVALUATION_DATASET_NOT_FOUND', 'Evaluation dataset not found', {
+        dataset_id: datasetId,
+        version,
+      });
+    }
+    if (dataset.status !== 'draft' && dataset.status !== 'validated') {
+      throw new EvaluationRepositoryError('EVALUATION_DATASET_NOT_PUBLISHABLE', 'Only draft or validated evaluation datasets can be validated or published', {
+        dataset_id: datasetId,
+        version,
+        status: dataset.status,
+      });
+    }
+    const cases = await new EvaluationCaseRepository(this.db).list(datasetId, version, false);
+    if (!cases.some((evaluationCase) => evaluationCase.enabled)) {
+      throw new EvaluationRepositoryError('EVALUATION_DATASET_EMPTY', 'Evaluation dataset requires at least one enabled case', {
+        dataset_id: datasetId,
+        version,
+      });
+    }
+    for (const evaluationCase of cases) {
+      evaluationCaseSchema.parse(evaluationCase);
+    }
   }
 
   private async updateStatus(
@@ -297,6 +550,36 @@ export class EvaluationDatasetRepository {
       .executeTakeFirst();
     if (!row) {
       throw new EvaluationRepositoryError('EVALUATION_DATASET_NOT_PUBLISHABLE', 'Evaluation dataset cannot transition from current status', {
+        dataset_id: datasetId,
+        version,
+      });
+    }
+    return mapEvaluationDataset(row);
+  }
+
+  private async updateTerminalStatus(
+    datasetId: string,
+    version: number,
+    status: 'deprecated' | 'disabled' | 'published',
+    options: EvaluationWriteOptions,
+  ): Promise<EvaluationDataset> {
+    const row = await this.db
+      .updateTable('evaluation_dataset')
+      .set({
+        status,
+        updated_by: options.operatorId,
+        updated_at: new Date(),
+        revision: sql<number>`revision + 1`,
+        ...(status === 'published'
+          ? { published_by: options.operatorId, published_at: new Date() }
+          : {}),
+      })
+      .where('dataset_id', '=', datasetId)
+      .where('version', '=', version)
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new EvaluationRepositoryError('EVALUATION_DATASET_NOT_FOUND', 'Evaluation dataset not found', {
         dataset_id: datasetId,
         version,
       });
@@ -330,8 +613,9 @@ export class EvaluationCaseRepository {
     return row ? mapEvaluationCase(row) : undefined;
   }
 
-  async upsert(evaluationCase: EvaluationCase): Promise<EvaluationCase> {
+  async upsert(evaluationCase: EvaluationCase, options?: EvaluationWriteOptions): Promise<EvaluationCase> {
     const parsed = evaluationCaseSchema.parse(evaluationCase);
+    await this.assertDatasetMutable(parsed.dataset_id, parsed.dataset_version);
     const row: Insertable<EvaluationCaseTable> = {
       case_id: parsed.case_id,
       dataset_id: parsed.dataset_id,
@@ -382,7 +666,52 @@ export class EvaluationCaseRepository {
       )
       .returningAll()
       .executeTakeFirstOrThrow();
-    return mapEvaluationCase(saved);
+    const savedCase = mapEvaluationCase(saved);
+    await new EvaluationDatasetRepository(this.db).refreshContentHash(
+      parsed.dataset_id,
+      parsed.dataset_version,
+      options,
+    );
+    return savedCase;
+  }
+
+  async delete(caseId: string, options?: EvaluationWriteOptions): Promise<EvaluationCase> {
+    const existing = await this.get(caseId);
+    if (!existing) {
+      throw new EvaluationRepositoryError('EVALUATION_CASE_NOT_FOUND', 'Evaluation case not found', { case_id: caseId });
+    }
+    await this.assertDatasetMutable(existing.dataset_id, existing.dataset_version);
+    const row = await this.db
+      .deleteFrom('evaluation_case')
+      .where('case_id', '=', caseId)
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new EvaluationRepositoryError('EVALUATION_CASE_NOT_FOUND', 'Evaluation case not found', { case_id: caseId });
+    }
+    await new EvaluationDatasetRepository(this.db).refreshContentHash(
+      existing.dataset_id,
+      existing.dataset_version,
+      options,
+    );
+    return mapEvaluationCase(row);
+  }
+
+  private async assertDatasetMutable(datasetId: string, version: number): Promise<void> {
+    const dataset = await new EvaluationDatasetRepository(this.db).get(datasetId, version);
+    if (!dataset) {
+      throw new EvaluationRepositoryError('EVALUATION_DATASET_NOT_FOUND', 'Evaluation dataset not found', {
+        dataset_id: datasetId,
+        version,
+      });
+    }
+    if (dataset.status !== 'draft') {
+      throw new EvaluationRepositoryError('EVALUATION_DATASET_IMMUTABLE', 'Only draft evaluation datasets can be modified', {
+        dataset_id: datasetId,
+        version,
+        status: dataset.status,
+      });
+    }
   }
 }
 
@@ -906,6 +1235,16 @@ export class EvaluationGatePolicyRepository {
     return row ? mapEvaluationGatePolicy(row) : undefined;
   }
 
+  async listVersions(policyId: string): Promise<EvaluationGatePolicy[]> {
+    const rows = await this.db
+      .selectFrom('evaluation_gate_policy')
+      .selectAll()
+      .where('gate_policy_id', '=', policyId)
+      .orderBy('version', 'desc')
+      .execute();
+    return rows.map(mapEvaluationGatePolicy);
+  }
+
   async getLatestPublishedForResource(resourceType: EvaluationSubjectType): Promise<EvaluationGatePolicy | undefined> {
     const rows = await this.list('published');
     return rows.find((policy) => policy.resource_types.includes(resourceType));
@@ -943,10 +1282,20 @@ export class EvaluationGatePolicyRepository {
   }
 
   async publish(policyId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationGatePolicy> {
+    await this.validateRequiredDatasetRefs(policyId, version);
+    const policy = await this.get(policyId, version);
+    if (!policy) {
+      throw new EvaluationRepositoryError('EVALUATION_GATE_POLICY_NOT_FOUND', 'Evaluation gate policy not found', {
+        gate_policy_id: policyId,
+        version,
+      });
+    }
+    const policyHash = hashEvaluationGatePolicy(policy);
     const row = await this.db
       .updateTable('evaluation_gate_policy')
       .set({
         status: 'published',
+        gate_policy_hash: policyHash,
         published_by: options.operatorId,
         published_at: new Date(),
         updated_by: options.operatorId,
@@ -962,6 +1311,74 @@ export class EvaluationGatePolicyRepository {
       throw new EvaluationRepositoryError('EVALUATION_GATE_POLICY_NOT_PUBLISHABLE', 'Evaluation gate policy cannot transition from current status');
     }
     return mapEvaluationGatePolicy(row);
+  }
+
+  async validate(policyId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationGatePolicy> {
+    await this.validateRequiredDatasetRefs(policyId, version);
+    const policy = await this.get(policyId, version);
+    if (!policy) {
+      throw new EvaluationRepositoryError('EVALUATION_GATE_POLICY_NOT_FOUND', 'Evaluation gate policy not found', {
+        gate_policy_id: policyId,
+        version,
+      });
+    }
+    const policyHash = hashEvaluationGatePolicy(policy);
+    const row = await this.db
+      .updateTable('evaluation_gate_policy')
+      .set({
+        status: 'validated',
+        gate_policy_hash: policyHash,
+        updated_by: options.operatorId,
+        updated_at: new Date(),
+        revision: sql<number>`revision + 1`,
+      })
+      .where('gate_policy_id', '=', policyId)
+      .where('version', '=', version)
+      .where('status', '=', 'draft')
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new EvaluationRepositoryError('EVALUATION_GATE_POLICY_NOT_VALIDATABLE', 'Evaluation gate policy cannot be validated from current status', {
+        gate_policy_id: policyId,
+        version,
+      });
+    }
+    return mapEvaluationGatePolicy(row);
+  }
+
+  private async validateRequiredDatasetRefs(policyId: string, version: number): Promise<void> {
+    const policy = await this.get(policyId, version);
+    if (!policy) {
+      throw new EvaluationRepositoryError('EVALUATION_GATE_POLICY_NOT_FOUND', 'Evaluation gate policy not found', {
+        gate_policy_id: policyId,
+        version,
+      });
+    }
+    for (const datasetRef of policy.required_dataset_refs) {
+      const dataset = await new EvaluationDatasetRepository(this.db).get(datasetRef.dataset_id, datasetRef.version);
+      if (!dataset) {
+        throw new EvaluationRepositoryError('EVALUATION_GATE_POLICY_DATASET_NOT_FOUND', 'Required evaluation dataset not found', {
+          gate_policy_id: policyId,
+          version,
+          dataset_id: datasetRef.dataset_id,
+          dataset_version: datasetRef.version,
+        });
+      }
+      if (dataset.status !== 'published') {
+        throw new EvaluationRepositoryError('EVALUATION_GATE_POLICY_DATASET_NOT_PUBLISHED', 'Required evaluation dataset must be published', {
+          gate_policy_id: policyId,
+          version,
+          dataset_id: dataset.dataset_id,
+          dataset_version: dataset.version,
+          status: dataset.status,
+        });
+      }
+      await new EvaluationDatasetRepository(this.db).assertContentHash(
+        datasetRef.dataset_id,
+        datasetRef.version,
+        datasetRef.dataset_hash,
+      );
+    }
   }
 }
 
@@ -1162,11 +1579,13 @@ export class EvaluationExecutionPlanBuilder {
   constructor(private readonly db: Kysely<Database>) {}
 
   async build(input: EvaluationExecutionPlanBuildInput): Promise<EvaluationExecutionPlan> {
-    const dataset = await new EvaluationDatasetRepository(this.db).get(input.datasetId, input.datasetVersion);
+    const datasetRepository = new EvaluationDatasetRepository(this.db);
+    const dataset = await datasetRepository.get(input.datasetId, input.datasetVersion);
     if (!dataset) {
       throw new EvaluationRepositoryError('EVALUATION_DATASET_NOT_FOUND', `EvaluationDataset exact version not found: ${input.datasetId}@${input.datasetVersion}`);
     }
     const datasetHash = requiredHash(dataset.dataset_hash, 'EVALUATION_DATASET_HASH_REQUIRED');
+    await datasetRepository.assertContentHash(dataset.dataset_id, dataset.version, datasetHash);
     const agentPlan = await new AgentExecutionPlanRepository(this.db).getByRef(
       input.subjectSnapshot.candidate_bundle.agent_execution_plan_ref,
       { tenantId: input.tenantId },
@@ -1562,6 +1981,9 @@ export class EvaluationEvidenceCollector {
         ? await new AgentRunRepository(this.db).list({ tenantId: input.tenantId, taskRunId: input.taskRunId, limit: 10 })
         : [];
     const agentRun = agentRuns[0];
+    const agentSteps = agentRun
+      ? await new AgentStepRepository(this.db).listByRun(agentRun.agent_run_id, { limit: 100 })
+      : [];
     const toolCallsByEvaluation = await new ToolCallLogRepository(this.db).list({
       tenantId: input.tenantId,
       evaluationRunId: input.evaluationRunId,
@@ -1579,6 +2001,9 @@ export class EvaluationEvidenceCollector {
           limit: 100,
         })
       : [];
+    const modelCallAttempts = (await Promise.all(
+      modelCalls.map((call) => new ModelCallAttemptRepository(this.db).listByModelCall(call.model_call_id)),
+    )).flat();
     const humanTasks = input.taskRunId
       ? await new HumanTaskRepository(this.db).list({
           tenantId: input.tenantId,
@@ -1593,6 +2018,13 @@ export class EvaluationEvidenceCollector {
           limit: 200,
         })
       : [];
+    const idempotencyRecords = (await Promise.all(
+      toolCalls
+        .map((call) => call.idempotency_key)
+        .filter((key): key is string => Boolean(key))
+        .map((key) => new IdempotencyRecordRepository(this.db).get(key)),
+    )).filter((record): record is NonNullable<typeof record> => Boolean(record));
+    const idempotencyRecordIds = [...new Set(idempotencyRecords.map((record) => record.idempotency_key))];
     const duplicateToolCallCount = countDuplicates(toolCalls.map((call) => `${call.tool_name}:${call.input_hash ?? ''}`));
     const duplicateCommitCount = countDuplicates(
       toolCalls
@@ -1621,6 +2053,7 @@ export class EvaluationEvidenceCollector {
       ...(taskRun && taskRun.tenant_id !== input.tenantId ? ['task_run_tenant_mismatch'] : []),
       ...(input.agentRunId && !agentRun ? ['agent_run_missing'] : []),
     ];
+    const completenessStatus = completenessReasons.length > 0 ? 'incomplete' : 'complete';
     return {
       actual_status: agentRun?.status ?? taskRun?.status ?? 'system_error',
       ...(finalOutput !== undefined ? { final_output_safe: finalOutput } : {}),
@@ -1658,17 +2091,22 @@ export class EvaluationEvidenceCollector {
         ...(agentRun?.total_tokens ? { total: agentRun.total_tokens } : {}),
       },
       cost: agentRun?.estimated_cost !== undefined ? { estimated: agentRun.estimated_cost } : {},
-      ...(agentRun?.status === 'failed' || taskRun?.status === 'failed'
-        ? { system_error: { ...(agentRun?.error_code ? { code: agentRun.error_code } : {}), ...(agentRun?.error_message ? { message: agentRun.error_message } : {}) } }
+      ...(agentRun?.status === 'failed' || taskRun?.status === 'failed' || completenessStatus === 'incomplete'
+        ? { system_error: { code: agentRun?.error_code ?? 'EVALUATION_EVIDENCE_INCOMPLETE', class: 'evaluation_evidence_error' } }
         : {}),
-      completeness_status: completenessReasons.length > 0 ? 'incomplete' : 'complete',
+      completeness_status: completenessStatus,
       completeness_reasons: completenessReasons,
       ...(completenessReasons.length > 0 ? { error_code: 'EVALUATION_EVIDENCE_INCOMPLETE' as const } : {}),
       refs: {
         ...(taskRun ? { task_run_id: taskRun.task_run_id } : {}),
         ...(agentRun ? { agent_run_id: agentRun.agent_run_id } : {}),
+        agent_step_ids: agentSteps.map((step) => step.agent_step_id),
         model_call_ids: modelCalls.map((call) => call.model_call_id),
+        model_call_attempt_ids: modelCallAttempts.map((attempt) => attempt.attempt_id),
         tool_call_ids: toolCalls.map((call) => call.tool_call_id),
+        human_task_ids: humanTasks.map((task) => task.human_task_id),
+        audit_event_ids: auditEvents.map((event) => event.event_id),
+        idempotency_record_ids: idempotencyRecordIds,
       },
     };
   }
@@ -1836,16 +2274,57 @@ export function buildEvaluationExecutionPlanRef(id: string): string {
   return `db://evaluation-execution-plan/${encodeURIComponent(id)}`;
 }
 
-export function hashEvaluationDataset(dataset: EvaluationDataset): string {
-  return hashJson({
+export class EvaluationDatasetContentHasher {
+  static hash(dataset: EvaluationDataset, cases: EvaluationCase[]): string {
+    return hashJson({
+      dataset: canonicalEvaluationDataset(dataset),
+      cases: cases
+        .map(canonicalEvaluationCase)
+        .sort((left, right) => String(left.case_id).localeCompare(String(right.case_id))),
+    });
+  }
+}
+
+export function hashEvaluationDataset(dataset: EvaluationDataset, cases: EvaluationCase[] = []): string {
+  return EvaluationDatasetContentHasher.hash(dataset, cases);
+}
+
+function canonicalEvaluationDataset(dataset: EvaluationDataset): Record<string, unknown> {
+  return {
     dataset_id: dataset.dataset_id,
     version: dataset.version,
     name: dataset.name,
-    description: dataset.description,
-    domain: dataset.domain,
-    tags: dataset.tags,
+    ...(dataset.description !== undefined ? { description: dataset.description } : {}),
+    ...(dataset.domain !== undefined ? { domain: dataset.domain } : {}),
+    tags: [...dataset.tags].sort(),
     default_weight: dataset.default_weight,
-  });
+  };
+}
+
+function canonicalEvaluationCase(evaluationCase: EvaluationCase): Record<string, unknown> {
+  return {
+    case_id: evaluationCase.case_id,
+    dataset_id: evaluationCase.dataset_id,
+    dataset_version: evaluationCase.dataset_version,
+    name: evaluationCase.name,
+    ...(evaluationCase.description !== undefined ? { description: evaluationCase.description } : {}),
+    input: evaluationCase.input,
+    context_refs: [...evaluationCase.context_refs].sort(),
+    ...(evaluationCase.expected_status !== undefined ? { expected_status: evaluationCase.expected_status } : {}),
+    expected_tool_calls: evaluationCase.expected_tool_calls,
+    forbidden_tools: [...evaluationCase.forbidden_tools].sort(),
+    final_assertions: evaluationCase.final_assertions,
+    policy_assertions: evaluationCase.policy_assertions,
+    ...(evaluationCase.latency_budget_ms !== undefined ? { latency_budget_ms: evaluationCase.latency_budget_ms } : {}),
+    ...(evaluationCase.input_token_budget !== undefined ? { input_token_budget: evaluationCase.input_token_budget } : {}),
+    ...(evaluationCase.output_token_budget !== undefined ? { output_token_budget: evaluationCase.output_token_budget } : {}),
+    ...(evaluationCase.total_token_budget !== undefined ? { total_token_budget: evaluationCase.total_token_budget } : {}),
+    ...(evaluationCase.cost_budget !== undefined ? { cost_budget: evaluationCase.cost_budget } : {}),
+    ...(evaluationCase.minimum_case_score !== undefined ? { minimum_case_score: evaluationCase.minimum_case_score } : {}),
+    weight: evaluationCase.weight,
+    tags: [...evaluationCase.tags].sort(),
+    enabled: evaluationCase.enabled,
+  };
 }
 
 export function hashEvaluationCandidateBundle(bundle: EvaluationCandidateBundle): string {

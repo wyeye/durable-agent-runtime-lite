@@ -15,6 +15,22 @@ import {
 
 const hash = 'a'.repeat(64);
 
+const datasetCase: EvaluationCase = {
+  case_id: 'case_dataset_hash',
+  dataset_id: 'runtime-agent-core-v1',
+  dataset_version: 1,
+  name: 'Dataset content hash case',
+  input: { text: 'readonly' },
+  expected_tool_calls: [],
+  forbidden_tools: [],
+  final_assertions: [{ type: 'non_empty' }],
+  policy_assertions: [],
+  context_refs: [],
+  weight: 1,
+  tags: ['runtime'],
+  enabled: true,
+};
+
 const datasetHash = hashEvaluationDataset({
   dataset_id: 'runtime-agent-core-v1',
   version: 1,
@@ -23,7 +39,7 @@ const datasetHash = hashEvaluationDataset({
   tags: ['runtime', 'gate'],
   default_weight: 1,
   revision: 1,
-});
+}, [datasetCase]);
 assert.match(datasetHash, /^[a-f0-9]{64}$/u);
 assert.notEqual(datasetHash, hashEvaluationDataset({
   dataset_id: 'runtime-agent-core-v1',
@@ -33,7 +49,7 @@ assert.notEqual(datasetHash, hashEvaluationDataset({
   tags: ['runtime', 'gate'],
   default_weight: 1,
   revision: 1,
-}));
+}, [datasetCase]));
 
 const candidateBundleHash = hashEvaluationCandidateBundle({
   primary_subject_type: 'prompt',
@@ -62,7 +78,11 @@ const gatePolicy: EvaluationGatePolicy = {
   version: 1,
   status: 'published',
   resource_types: ['prompt', 'agent', 'model_policy'],
-  required_dataset_refs: [`runtime-agent-core-v1@1#${datasetHash}`],
+  required_dataset_refs: [{
+    dataset_id: 'runtime-agent-core-v1',
+    version: 1,
+    dataset_hash: datasetHash,
+  }],
   thresholds: evaluationGateThresholdsSchema.parse({ minimum_pass_rate: 1, minimum_weighted_score: 0.95 }),
   regression_rules: evaluationRegressionRulesSchema.parse({}),
   required_case_tags: [],

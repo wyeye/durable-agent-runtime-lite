@@ -452,7 +452,11 @@ describe('contracts schemas', () => {
         version: 1,
         status: 'published',
         resource_types: ['prompt', 'agent', 'model_policy'],
-        required_dataset_refs: ['runtime-agent-core-v1@1#aaaaaaaa'],
+        required_dataset_refs: [{
+          dataset_id: 'runtime-agent-core-v1',
+          version: 1,
+          dataset_hash: hash,
+        }],
         thresholds: { minimum_pass_rate: 1 },
         allow_override: true,
         gate_policy_hash: hash,

@@ -155,6 +155,18 @@ export interface ToolCallLogTable {
   updated_at: Timestamp;
 }
 
+export interface EvaluationToolCallReservationTable {
+  tenant_id: string;
+  evaluation_run_id: string;
+  evaluation_case_id: string;
+  tool_name: string;
+  logical_tool_call_id: string;
+  tool_version: string;
+  operation: string;
+  idempotency_key: string | null;
+  created_at: Timestamp;
+}
+
 export interface IdempotencyRecordTable {
   idempotency_key: string;
   tenant_id: string;
@@ -653,6 +665,7 @@ export interface Database {
   human_task: HumanTaskTable;
   audit_event: AuditEventTable;
   tool_call_log: ToolCallLogTable;
+  evaluation_tool_call_reservation: EvaluationToolCallReservationTable;
   idempotency_record: IdempotencyRecordTable;
   capability_release: CapabilityReleaseTable;
   tenant_runtime_policy: TenantRuntimePolicyTable;

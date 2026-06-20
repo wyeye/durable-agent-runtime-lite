@@ -60,6 +60,7 @@ import {
   EvaluationCaseResultRepository,
   EvaluationComparisonRepository,
   EvaluationComparisonService,
+  EvaluationDatasetRepository,
   EvaluationEvidenceCollector,
   EvaluationExecutionPlanRepository,
   EvaluationGatePolicyRepository,
@@ -995,6 +996,14 @@ export async function loadEvaluationRunPlanActivity(
     if (!subjectSnapshot || hashEvaluationSubjectSnapshot(subjectSnapshot) !== plan.subject_snapshot_hash) {
       throw ApplicationFailure.nonRetryable('EvaluationSubjectSnapshot hash mismatch', 'EVALUATION_SUBJECT_HASH_MISMATCH');
     }
+    try {
+      await new EvaluationDatasetRepository(db).assertContentHash(plan.dataset_id, plan.dataset_version, plan.dataset_hash);
+    } catch (error) {
+      const code = error instanceof Error && 'code' in error && typeof error.code === 'string'
+        ? error.code
+        : 'EVALUATION_DATASET_HASH_MISMATCH';
+      throw ApplicationFailure.nonRetryable('EvaluationDataset hash mismatch', code);
+    }
     const cases = await new EvaluationCaseRepository(db).list(plan.dataset_id, plan.dataset_version, true);
     return {
       run,
@@ -1171,10 +1180,11 @@ export async function collectAndScoreEvaluationCaseActivity(input: {
       ...(input.agent_run_id ? { agentRunId: input.agent_run_id } : {}),
       ...(input.started_at_ms !== undefined ? { startedAtMs: input.started_at_ms } : {}),
     });
+    const evidenceIncomplete = evidence.completeness_status !== 'complete';
     const scored = new EvaluationScoringEngine().scoreCase({
       evaluationCase,
-      actualStatus: normalizeActualStatus(evidence.actual_status),
-      finalOutput: evidence.final_output_safe ?? 'completed',
+      actualStatus: evidenceIncomplete ? 'system_error' : normalizeActualStatus(evidence.actual_status),
+      finalOutput: evidence.final_output_safe,
       toolCalls: evidence.tool_calls.map((call) => ({
         tool_name: call.tool_name,
         status: call.status,
@@ -1187,7 +1197,7 @@ export async function collectAndScoreEvaluationCaseActivity(input: {
       hiddenReasoningLeakCount: evidence.hidden_reasoning_leak_count,
       modelCallCount: evidence.model_call_count,
       fallbackCount: evidence.fallback_count,
-      systemError: Boolean(evidence.system_error),
+      systemError: Boolean(evidence.system_error) || evidenceIncomplete,
       ...(evidence.latency.ms !== undefined ? { latencyMs: evidence.latency.ms } : {}),
       ...(evidence.tokens.input !== undefined ? { inputTokens: evidence.tokens.input } : {}),
       ...(evidence.tokens.output !== undefined ? { outputTokens: evidence.tokens.output } : {}),
@@ -1204,11 +1214,13 @@ export async function collectAndScoreEvaluationCaseActivity(input: {
       candidate_fidelity_verified: true,
       assertion_failure_count: scored.metric_results.filter((metric) => !metric.hard_gate && !metric.passed).length,
       hard_gate_failure_count: scored.metric_results.filter((metric) => metric.hard_gate && !metric.passed).length,
-      ...(evidence.system_error?.code ? { system_error_class: evidence.system_error.code } : {}),
+      ...(evidence.system_error?.code || evidenceIncomplete ? { system_error_class: evidence.system_error?.code ?? 'EVALUATION_EVIDENCE_INCOMPLETE' } : {}),
       task_run_id: input.task_run_id,
       ...(input.agent_run_id ?? evidence.refs.agent_run_id ? { agent_run_id: input.agent_run_id ?? evidence.refs.agent_run_id } : {}),
       model_call_ids: evidence.refs.model_call_ids,
       tool_call_ids: evidence.refs.tool_call_ids,
+      ...(evidence.final_output_ref ? { final_output_ref: evidence.final_output_ref } : {}),
+      ...(evidence.final_output_safe !== undefined ? { safe_output: evidence.final_output_safe } : {}),
     });
     return result;
   });
@@ -1337,15 +1349,15 @@ async function collectSystemErrorEvidence(input: {
       actual_status: input.cancelled ? 'cancelled' : 'system_error',
       system_error: {
         code: input.errorCode,
-        message: input.errorMessage,
+        class: 'evaluation_case_system_error',
       },
     };
-  } catch (error) {
+  } catch {
     return {
       actual_status: input.cancelled ? 'cancelled' : 'system_error',
       system_error: {
         code: input.errorCode,
-        message: input.errorMessage,
+        class: 'evaluation_case_system_error',
       },
       tool_calls: [],
       tool_call_order: [],
@@ -1353,15 +1365,15 @@ async function collectSystemErrorEvidence(input: {
       tool_arguments: [],
       tool_results_refs: [],
       tool_result_refs: [],
-      unauthorized_tool_count: 0,
-      forbidden_tool_count: 0,
-      side_effect_without_approval_count: 0,
+      unauthorized_tool_count: input.cancelled ? 0 : 1,
+      forbidden_tool_count: input.cancelled ? 0 : 1,
+      side_effect_without_approval_count: input.cancelled ? 0 : 1,
       duplicate_tool_call_count: 0,
       duplicate_commit_count: 0,
-      policy_violation_count: 0,
-      cross_tenant_violation_count: 0,
-      secret_leak_count: 0,
-      hidden_reasoning_leak_count: 0,
+      policy_violation_count: input.cancelled ? 0 : 1,
+      cross_tenant_violation_count: input.cancelled ? 0 : 1,
+      secret_leak_count: input.cancelled ? 0 : 1,
+      hidden_reasoning_leak_count: input.cancelled ? 0 : 1,
       model_call_count: 0,
       fallback_count: 0,
       latency: {},
@@ -1373,10 +1385,15 @@ async function collectSystemErrorEvidence(input: {
       refs: {
         ...(input.taskRunId ? { task_run_id: input.taskRunId } : {}),
         ...(input.agentRunId ? { agent_run_id: input.agentRunId } : {}),
+        agent_step_ids: [],
         model_call_ids: [],
+        model_call_attempt_ids: [],
         tool_call_ids: [],
+        human_task_ids: [],
+        audit_event_ids: [],
+        idempotency_record_ids: [],
       },
-      collector_error: error instanceof Error ? error.message : 'unknown',
+      collector_error_code: 'EVALUATION_EVIDENCE_COLLECTOR_FAILED',
     };
   }
 }

@@ -236,6 +236,14 @@ export const evaluationRegressionRulesSchema = z
   })
   .strict();
 
+export const evaluationDatasetRefSchema = z
+  .object({
+    dataset_id: z.string().min(1),
+    version: z.number().int().positive(),
+    dataset_hash: sha256Schema,
+  })
+  .strict();
+
 export const evaluationCaseSchema = z.object({
   case_id: z.string().min(1),
   dataset_id: z.string().min(1),
@@ -461,7 +469,7 @@ export const evaluationGatePolicySchema = z.object({
   version: z.number().int().positive(),
   status: evaluationDatasetStatusSchema,
   resource_types: z.array(evaluationSubjectTypeSchema).min(1),
-  required_dataset_refs: z.array(z.string().min(1)).min(1),
+  required_dataset_refs: z.array(evaluationDatasetRefSchema).min(1),
   thresholds: evaluationGateThresholdsSchema.default(() =>
     evaluationGateThresholdsSchema.parse({}),
   ),
@@ -576,6 +584,7 @@ export type EvaluationGateDecisionStatus = z.infer<
 >;
 export type EvaluationAssertion = z.infer<typeof evaluationAssertionSchema>;
 export type ExpectedToolCall = z.infer<typeof expectedToolCallSchema>;
+export type EvaluationDatasetRef = z.infer<typeof evaluationDatasetRefSchema>;
 export type EvaluationGateThresholds = z.infer<typeof evaluationGateThresholdsSchema>;
 export type EvaluationRegressionRules = z.infer<typeof evaluationRegressionRulesSchema>;
 export type EvaluationCase = z.infer<typeof evaluationCaseSchema>;

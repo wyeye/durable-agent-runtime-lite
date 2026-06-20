@@ -30,6 +30,8 @@ import {
   TenantRuntimePolicyError,
   type ListAuditEventsOptions,
   type ListToolCallLogsOptions,
+  type EvaluationToolCallReservationInput,
+  type EvaluationToolCallReservationResult,
   type ToolCallLogCreateInput,
   assertSnapshotAllowsTool,
 } from '@dar/db';
@@ -51,6 +53,9 @@ export interface ToolCallLogStore {
   get(toolCallId: string): Promise<ToolCallLog | undefined>;
   update(toolCallId: string, input: ToolCallLogUpdateInput): Promise<ToolCallLog | undefined>;
   list(options?: ListToolCallLogsOptions): Promise<ToolCallLog[]>;
+  reserveEvaluationLogicalCall?(
+    input: EvaluationToolCallReservationInput,
+  ): Promise<EvaluationToolCallReservationResult>;
 }
 
 export interface TenantPolicySnapshotLookupStore {
@@ -87,6 +92,7 @@ export interface ToolServiceOptions {
 
 export class InMemoryToolCallLogStore implements ToolCallLogStore {
   private readonly logs = new Map<string, ToolCallLog>();
+  private readonly evaluationReservations = new Map<string, Set<string>>();
 
   async create(input: ToolCallLogCreateInput): Promise<ToolCallLog> {
     const log = toolCallLogSchema.parse({
@@ -139,6 +145,43 @@ export class InMemoryToolCallLogStore implements ToolCallLogStore {
       }
       return true;
     }).slice(options.offset ?? 0, (options.offset ?? 0) + Math.min(Math.max(options.limit ?? 20, 1), 100));
+  }
+
+  async reserveEvaluationLogicalCall(
+    input: EvaluationToolCallReservationInput,
+  ): Promise<EvaluationToolCallReservationResult> {
+    const scope = [
+      input.tenantId,
+      input.evaluationRunId,
+      input.evaluationCaseId,
+      input.toolName,
+    ].join(':');
+    const reservations = this.evaluationReservations.get(scope) ?? new Set<string>();
+    const alreadyReserved = reservations.has(input.logicalToolCallId);
+    if (alreadyReserved) {
+      return {
+        allowed: true,
+        currentCount: reservations.size,
+        limit: input.limit,
+        alreadyReserved: true,
+      };
+    }
+    if (reservations.size >= input.limit) {
+      return {
+        allowed: false,
+        currentCount: reservations.size,
+        limit: input.limit,
+        alreadyReserved: false,
+      };
+    }
+    reservations.add(input.logicalToolCallId);
+    this.evaluationReservations.set(scope, reservations);
+    return {
+      allowed: true,
+      currentCount: reservations.size,
+      limit: input.limit,
+      alreadyReserved: false,
+    };
   }
 }
 
@@ -309,7 +352,23 @@ export class ToolService {
     const preview = buildPreviewPlan(request, manifest);
     const taskRunId = getTaskRunId(request.task_context);
     const workflowId = getWorkflowId(request.task_context);
+    const toolCallId = `tool_call_${randomUUID()}`;
+    const reservation = await this.reserveEvaluationLogicalCall(request, manifest, 'preview', toolCallId);
+    if (reservation.decision === 'deny') {
+      return toolPreviewResponseSchema.parse({
+        tool_call_id: toolCallId,
+        tool_name: request.tool_name,
+        tool_version: request.tool_version,
+        mode: 'preview',
+        status: 'denied',
+        policy: reservation.policy,
+        error: reservation.policy.error,
+        audit_event_id: (await this.auditDenied(request, 'tool.preview', reservation.reasonCode, reservation.message)).event_id,
+        idempotency_key: request.idempotency_key,
+      });
+    }
     const toolCall = await this.toolCallLogStore.create({
+      tool_call_id: toolCallId,
       ...(taskRunId ? { task_run_id: taskRunId } : {}),
       ...(workflowId ? { workflow_id: workflowId } : {}),
       tenant_id: request.tenant_id,
@@ -440,6 +499,11 @@ export class ToolService {
           'L3 工具提交前需要人工批准',
         );
       }
+    }
+
+    const reservation = await this.reserveEvaluationLogicalCall(request, manifest, 'commit', request.tool_call_id);
+    if (reservation.decision === 'deny') {
+      return this.auditAndReturnCommitDenied(request, reservation.reasonCode, reservation.message);
     }
 
     const startedAt = Date.now();
@@ -582,6 +646,17 @@ export class ToolService {
       });
     }
 
+    const toolCallId = `tool_call_${randomUUID()}`;
+    const reservation = await this.reserveEvaluationLogicalCall(request, manifest, 'invoke', toolCallId);
+    if (reservation.decision === 'deny') {
+      return this.auditAndReturnDenied(
+        request,
+        reservation.reasonCode,
+        reservation.message,
+        reservation.policy,
+      );
+    }
+
     const startedAt = Date.now();
     const result = await invokeMockAdapter({ toolName, args: request.arguments });
     const durationMs = Math.max(0, Date.now() - startedAt);
@@ -590,6 +665,7 @@ export class ToolService {
     const taskRunId = getTaskRunId(request.task_context);
     const workflowId = getWorkflowId(request.task_context);
     const toolCall = await this.toolCallLogStore.create({
+      tool_call_id: toolCallId,
       ...(taskRunId ? { task_run_id: taskRunId } : {}),
       ...(workflowId ? { workflow_id: workflowId } : {}),
       tenant_id: request.tenant_id,
@@ -734,20 +810,46 @@ export class ToolService {
     if (!request.evaluation_run_id || !request.evaluation_case_id || !request.evaluation_execution_plan_ref || !request.evaluation_execution_plan_hash) {
       return tenantPolicyDenied(manifest.risk_level, 'TOOL_EVALUATION_CONTEXT_REQUIRED', 'Evaluation tool calls require run, case and execution plan identity');
     }
-    if (policy.maximum_calls_per_case !== undefined) {
-      const existingCalls = await this.toolCallLogStore.list({
-        tenantId: request.tenant_id,
-        evaluationRunId: request.evaluation_run_id,
-        evaluationCaseId: request.evaluation_case_id,
-        toolName: request.tool_name,
-        limit: policy.maximum_calls_per_case + 1,
-      });
-      const countedCalls = operation === 'commit' && 'tool_call_id' in request
-        ? existingCalls.filter((call) => call.tool_call_id !== request.tool_call_id)
-        : existingCalls;
-      if (countedCalls.length >= policy.maximum_calls_per_case) {
-        return tenantPolicyDenied(manifest.risk_level, 'TOOL_EVALUATION_CALL_LIMIT_EXCEEDED', 'Evaluation tool call limit exceeded for this case');
-      }
+    return { decision: 'allow' };
+  }
+
+  private async reserveEvaluationLogicalCall(
+    request: ToolInvokeRequest | ToolPreviewRequest | ToolCommitRequest,
+    manifest: ToolManifest,
+    operation: 'invoke' | 'preview' | 'commit',
+    logicalToolCallId: string,
+  ): Promise<{ decision: 'allow' } | { decision: 'deny'; reasonCode: string; message: string; policy: PolicyEvaluationResult }> {
+    if (request.execution_context_type !== 'evaluation') {
+      return { decision: 'allow' };
+    }
+    const policy = manifest.evaluation_policy ?? {
+      allowed_in_evaluation: false,
+      mode: 'deny' as const,
+      allowed_tenants: [],
+      result_redaction_policy: 'mask_sensitive' as const,
+    };
+    if (policy.maximum_calls_per_case === undefined) {
+      return { decision: 'allow' };
+    }
+    if (!request.evaluation_run_id || !request.evaluation_case_id) {
+      return tenantPolicyDenied(manifest.risk_level, 'TOOL_EVALUATION_CONTEXT_REQUIRED', 'Evaluation tool calls require run and case identity');
+    }
+    if (!this.toolCallLogStore.reserveEvaluationLogicalCall) {
+      return tenantPolicyDenied(manifest.risk_level, 'TOOL_EVALUATION_RESERVATION_UNAVAILABLE', 'Evaluation tool call reservation store is unavailable');
+    }
+    const reservation = await this.toolCallLogStore.reserveEvaluationLogicalCall({
+      tenantId: request.tenant_id,
+      evaluationRunId: request.evaluation_run_id,
+      evaluationCaseId: request.evaluation_case_id,
+      toolName: request.tool_name,
+      toolVersion: request.tool_version,
+      logicalToolCallId,
+      operation,
+      limit: policy.maximum_calls_per_case,
+      ...(request.idempotency_key ? { idempotencyKey: request.idempotency_key } : {}),
+    });
+    if (!reservation.allowed) {
+      return tenantPolicyDenied(manifest.risk_level, 'TOOL_EVALUATION_CALL_LIMIT_EXCEEDED', 'Evaluation tool call limit exceeded for this case');
     }
     return { decision: 'allow' };
   }

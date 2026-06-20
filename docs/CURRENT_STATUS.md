@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-06-20 for AR-2B-FINAL-2 development pass.
+Last updated: 2026-06-20 for AR-2B-P0-CLOSURE development pass.
 
 ## Platform Version
 
@@ -10,9 +10,9 @@ The root `package.json` version is the authority. `corepack pnpm version:check` 
 
 ## Baseline
 
-- Observed local HEAD and `origin/main` before the AR-2B-FINAL-2 pass: `4cb53ca4fc753b4c60fbda7fa5d1e4981badaca9`.
+- Observed local HEAD and `origin/main` before the AR-2B-P0-CLOSURE pass: `55cac36713a2b658650e432088fdbe62658d3419`.
 - Platform Core Baseline file: `docs/PLATFORM_CORE_BASELINE.md`.
-- Migration head: `015_evaluation_runtime_state_machine.sql`.
+- Migration head: `016_evaluation_registry_and_tool_safety.sql`.
 
 ## AR-1 Platform Core
 
@@ -182,7 +182,7 @@ corepack pnpm smoke:model-gateway-live-l3-e2e
 
 The Ollama containerized smoke used Dockerized `runtime-api`, `runtime-worker`, `tool-gateway`, and `control-plane`; only Ollama ran on the host.
 
-## Verification In Current AR-2B-FINAL-2 Pass
+## Verification In Current AR-2B-P0-CLOSURE Pass
 
 Passed:
 
@@ -201,13 +201,16 @@ corepack pnpm --filter @dar/tool-gateway test -- --runInBand
 corepack pnpm --filter @dar/db build
 corepack pnpm --filter @dar/db typecheck
 corepack pnpm --filter @dar/db test
-corepack pnpm --dir apps/runtime-worker exec vitest run tests/evaluation-workflow.test.ts --reporter=verbose
+corepack pnpm --filter @dar/contracts test -- --runInBand
+corepack pnpm --filter @dar/db test -- --runInBand
+corepack pnpm --filter @dar/tool-gateway test -- --runInBand
+corepack pnpm --filter @dar/runtime-worker test -- --runInBand
 docker compose -f infra/docker-compose.yml config
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml config
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.ollama.yml config
+git diff --check
 ```
 
-The local `gh` CLI is not installed, but the public GitHub Actions API showed CI and Integration succeeded for `4cb53ca4fc753b4c60fbda7fa5d1e4981badaca9`. No Docker image build, container startup smoke, live Ollama evaluation smoke, or new evaluation E2E smoke was completed in this pass.
+The local `gh` CLI is not installed, but the public GitHub Actions API showed CI and Integration succeeded for `55cac36713a2b658650e432088fdbe62658d3419`. No Docker image build, container startup smoke, live Ollama evaluation smoke, or new evaluation E2E smoke was completed in this pass.
 
 ## Next AR-2B Work
 
@@ -219,6 +222,11 @@ Implemented in this development pass:
 - Forward migration `013_evaluation_and_release_gates.sql`.
 - Forward migration `014_evaluation_runtime_closure.sql`.
 - Forward migration `015_evaluation_runtime_state_machine.sql`.
+- Forward migration `016_evaluation_registry_and_tool_safety.sql`.
+- Evaluation dataset content hash now includes dataset metadata plus all enabled and disabled cases in stable order.
+- Draft case create/update/delete paths refresh the draft dataset content hash and published datasets are immutable at the repository layer.
+- Evaluation execution plan build and evaluation run plan loading verify exact dataset content hash before use.
+- Gate Policy required dataset refs are typed as `dataset_id/version/dataset_hash` and publish validation checks exact published dataset hashes.
 - DB repositories, stable hashes, deterministic scoring, same-dataset regression comparison, and publish gate decision checks.
 - `prompt`, `agent`, and `model_policy` Registry publish gate hooks with exact candidate bundle hash checks.
 - `capability_release` now stores evaluation gate decision and override ids.
@@ -227,17 +235,19 @@ Implemented in this development pass:
 - Evaluation run finalization now persists comparison and gate decision before marking the run completed.
 - Evaluation run cancellation now has explicit `cancelling` and `cancelled` states and a repository-backed cancel finalization path.
 - Cancelled case results are treated as skipped and excluded from aggregate score denominators.
-- Evaluation Evidence Collector now emits explicit safe output refs, tool order/result refs, completeness status, and `EVALUATION_EVIDENCE_INCOMPLETE` when required DB evidence is missing.
+- Evaluation Evidence Collector now emits explicit safe output refs, agent step refs, model call attempt refs, idempotency refs, human task refs, audit refs, tool order/result refs, completeness status, and `EVALUATION_EVIDENCE_INCOMPLETE` when required DB evidence is missing.
 - Evaluation case `system_error` recording now attempts authoritative evidence collection before persisting the case result, so existing model/tool refs are not discarded on failure paths.
-- Tool Gateway evaluation policy now enforces `maximum_calls_per_case` against recorded ToolCall evidence scoped by tenant, evaluation run, case, and tool.
+- Incomplete Evidence now fails closed through system-error scoring, and collector fallback stores safe error codes rather than raw internal error messages.
+- Tool Gateway evaluation policy now enforces `maximum_calls_per_case` through logical-call reservations scoped by tenant, evaluation run, case, and tool.
+- Preview and commit with the same `tool_call_id` are counted as one logical evaluation tool call; idempotent retries do not consume additional executed-call capacity.
 
 Still open:
 
 - Production-complete Temporal-backed evaluation smoke coverage.
-- Dataset/Case full CRUD and publish lifecycle.
-- Gate Policy full CRUD and publish lifecycle.
-- Full Evidence Collector coverage for agent steps, idempotency records, model call attempts, final output object storage refs, size caps, tamper/retry tests, and end-to-end DB evidence export.
-- Full Tool Evaluation Safety coverage for preview/commit split, adapter-class policy, cross-tenant DB integration, redaction policy behavior, and production E2E enforcement.
+- Dataset/Case full control-plane API, audit coverage, clone/rollback tests, and production-ready lifecycle service surface.
+- Gate Policy full control-plane API, audit coverage, clone/rollback tests, and production-ready lifecycle service surface.
+- Evidence Collector size caps, tamper/retry tests, final output object storage refs, and end-to-end DB evidence export.
+- Tool Evaluation Safety cross-process PostgreSQL reservation integration tests, redaction production E2E, and full service-level smoke coverage.
 - Gate Decision stale/override closed loop and publish UI selection flow.
 - Real Ollama Evaluation E2E.
 - Control-plane evaluation pages.
