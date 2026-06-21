@@ -22,7 +22,7 @@ export function ReadOnlyNotice() {
       type="info"
       showIcon
       message="当前是 auditor 只读视图"
-      description="你可以查看 Registry、Release 和运营记录，但不能执行发布、回滚、禁用或审批。"
+      description="你可以查看注册、发布和运营记录，但不能执行发布、回滚、禁用或审批。"
     />
   );
 }

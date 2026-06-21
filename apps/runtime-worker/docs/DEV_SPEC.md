@@ -34,6 +34,7 @@ Workflow 代码中禁止：
 - 外部调用必须设置重试策略与最大重试次数。
 - 有副作用 Activity 必须携带 `idempotency_key`。
 - Activity 返回结果不得包含超大对象，长文本和附件存对象存储并返回引用。
+- runtime-worker 只把 `Accept-Language` 传播给 Tool Gateway 用于响应和审计展示，不把 locale 用于 Workflow 分支、幂等键、hash 或策略判断。
 
 ## Pi 输出规范
 

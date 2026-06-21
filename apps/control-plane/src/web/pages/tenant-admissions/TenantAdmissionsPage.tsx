@@ -9,9 +9,10 @@ import { ErrorAlert } from '../../components/ErrorAlert.js';
 import { useApiClient } from '../../api/use-api-client.js';
 import { listTenantAdmissions } from '../../api/operations-api.js';
 import { formatDateTime } from '../../utils/format.js';
+import { displayStatus } from '../../utils/i18n-labels.js';
 import { stringifyPretty } from '../../utils/json.js';
 
-const statusOptions = ['reserved', 'active', 'released', 'rejected', 'orphaned', 'reconciled'].map((value) => ({ value, label: value }));
+const statusOptions = ['reserved', 'active', 'released', 'rejected', 'orphaned', 'reconciled'].map((value) => ({ value, label: displayStatus(value) }));
 
 export function TenantAdmissionsPage() {
   const client = useApiClient();
@@ -25,28 +26,28 @@ export function TenantAdmissionsPage() {
   });
 
   const columns: ColumnsType<TenantAgentAdmission> = [
-    { title: 'admission', dataIndex: 'admission_id', key: 'admission_id', render: (value: string, row) => <Button type="link" onClick={() => setSelected(row)}>{short(value)}</Button> },
-    { title: 'status', dataIndex: 'status', key: 'status', render: (value: string) => <Tag>{value}</Tag> },
+    { title: '准入记录', dataIndex: 'admission_id', key: 'admission_id', render: (value: string, row) => <Button type="link" onClick={() => setSelected(row)}>{short(value)}</Button> },
+    { title: '状态', dataIndex: 'status', key: 'status', render: (value: string) => <Tag>{displayStatus(value)}</Tag> },
     { title: 'task_run', dataIndex: 'task_run_id', key: 'task_run_id', render: (value: string) => <Link to={`/task-runs?task_run_id=${encodeURIComponent(value)}`}>{short(value)}</Link> },
     { title: 'agent_run', dataIndex: 'agent_run_id', key: 'agent_run_id', render: (value?: string) => value ? <Link to={`/agent-runs?agent_run_id=${encodeURIComponent(value)}`}>{short(value)}</Link> : '-' },
-    { title: 'workflow', dataIndex: 'workflow_id', key: 'workflow_id', render: (value?: string) => value ? short(value) : '-' },
-    { title: 'snapshot', dataIndex: 'policy_snapshot_ref', key: 'policy_snapshot_ref', render: (value: string) => <Link to={`/policy-snapshots?root_snapshot_ref=${encodeURIComponent(value)}`}>{short(value)}</Link> },
-    { title: 'acquired_at', dataIndex: 'acquired_at', key: 'acquired_at', render: formatDateTime },
-    { title: 'released_at', dataIndex: 'released_at', key: 'released_at', render: (value?: string) => value ? formatDateTime(value) : '-' },
-    { title: 'reason', dataIndex: 'release_reason', key: 'release_reason', render: (value?: string) => value ?? '-' },
+    { title: 'workflow_id', dataIndex: 'workflow_id', key: 'workflow_id', render: (value?: string) => value ? short(value) : '-' },
+    { title: '策略快照', dataIndex: 'policy_snapshot_ref', key: 'policy_snapshot_ref', render: (value: string) => <Link to={`/policy-snapshots?root_snapshot_ref=${encodeURIComponent(value)}`}>{short(value)}</Link> },
+    { title: '获得时间', dataIndex: 'acquired_at', key: 'acquired_at', render: formatDateTime },
+    { title: '释放时间', dataIndex: 'released_at', key: 'released_at', render: (value?: string) => value ? formatDateTime(value) : '-' },
+    { title: '原因', dataIndex: 'release_reason', key: 'release_reason', render: (value?: string) => value ?? '-' },
   ];
 
   return (
     <div className="cp-page">
       <div className="cp-page-header">
         <div>
-          <h1>Tenant Admissions</h1>
+          <h1>租户准入</h1>
         </div>
         <Button onClick={() => query.refetch()} loading={query.isFetching}>刷新</Button>
       </div>
       <section className="cp-section">
         <Form layout="inline" className="cp-filter-bar" initialValues={filters} onFinish={(values) => setFilters({ page_size: '50', ...clean(values) })}>
-          <Form.Item name="status"><Select allowClear placeholder="status" options={statusOptions} style={{ width: 150 }} /></Form.Item>
+          <Form.Item name="status"><Select allowClear placeholder="状态" options={statusOptions} style={{ width: 150 }} /></Form.Item>
           <Form.Item name="task_run_id"><Input placeholder="task_run_id" /></Form.Item>
           <Form.Item name="agent_run_id"><Input placeholder="agent_run_id" /></Form.Item>
           <Form.Item name="workflow_id"><Input placeholder="workflow_id" /></Form.Item>
@@ -61,13 +62,13 @@ export function TenantAdmissionsPage() {
           columns={columns}
           dataSource={query.data?.items ?? []}
           pagination={{ pageSize: 12 }}
-          locale={{ emptyText: <EmptyState description="暂无 Tenant Admission" /> }}
+          locale={{ emptyText: <EmptyState description="暂无租户准入记录" /> }}
         />
       </section>
-      <Drawer title="Tenant Admission" open={Boolean(selected)} onClose={() => setSelected(undefined)} width={720}>
+      <Drawer title="租户准入详情" open={Boolean(selected)} onClose={() => setSelected(undefined)} width={720}>
         {selected ? (
           <Space direction="vertical" style={{ width: '100%' }}>
-            <Typography.Title level={4}>{selected.status}</Typography.Title>
+            <Typography.Title level={4}>{displayStatus(selected.status)}</Typography.Title>
             <pre className="cp-json-pre">{stringifyPretty(selected)}</pre>
           </Space>
         ) : null}

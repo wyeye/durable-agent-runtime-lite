@@ -101,6 +101,8 @@ export const runtimeConfigSchema = z.object({
   ),
   JWT_ISSUER: urlSchema('http://localhost:3000'),
   JWT_AUDIENCE: stringSchema('durable-agent-runtime-lite'),
+  DEFAULT_LOCALE: z.preprocess(emptyToUndefined, z.enum(['zh-CN']).default('zh-CN')),
+  LOG_LOCALE: z.preprocess(emptyToUndefined, z.enum(['zh-CN']).default('zh-CN')),
   LOG_LEVEL: z.preprocess(
     emptyToUndefined,
     z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent']).default('info'),
@@ -165,7 +167,9 @@ export const runtimeConfigSchema = z.object({
 });
 
 export type AppName = z.infer<typeof appNameSchema>;
-export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>;
+type RuntimeConfigOutput = z.infer<typeof runtimeConfigSchema>;
+export type RuntimeConfig = Omit<RuntimeConfigOutput, 'DEFAULT_LOCALE' | 'LOG_LOCALE'> &
+  Partial<Pick<RuntimeConfigOutput, 'DEFAULT_LOCALE' | 'LOG_LOCALE'>>;
 
 export interface BuildInfo {
   service: AppName;

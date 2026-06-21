@@ -63,7 +63,7 @@ export function EvaluationRunDetailPage() {
   const cancelMutation = useMutation({
     mutationFn: () => cancelRun(client, runId!),
     onSuccess: async () => {
-      message.success('cancel 已提交');
+      message.success('取消已提交');
       await runQuery.refetch();
     },
   });
@@ -74,7 +74,7 @@ export function EvaluationRunDetailPage() {
       return createComparison(client, { candidate_run_id: runId!, baseline_run_id: values.baseline_run_id });
     },
     onSuccess: (result) => {
-      message.success('Comparison 已创建');
+      message.success('对比已创建');
       setComparison(result);
       setComparisonId(result.comparison_id);
     },
@@ -88,18 +88,18 @@ export function EvaluationRunDetailPage() {
   );
 
   const caseColumns: ColumnsType<EvaluationCaseResult> = [
-    { title: 'case', dataIndex: 'case_id', key: 'case_id' },
-    { title: 'status', dataIndex: 'status', key: 'status', render: (status: string) => <EvaluationStatusTag status={status} /> },
-    { title: 'score', dataIndex: 'score', key: 'score', render: (value: number | undefined) => value === undefined ? '-' : `${Math.round(value * 100)}%` },
-    { title: 'actual status', dataIndex: 'actual_status', key: 'actual_status', render: (value: string | undefined) => value ?? '-' },
-    { title: 'tool calls', dataIndex: 'tool_call_ids', key: 'tool_calls', render: (value: string[]) => value.length },
-    { title: 'model calls', dataIndex: 'model_call_ids', key: 'model_calls', render: (value: string[]) => value.length },
-    { title: 'latency', dataIndex: 'latency_ms', key: 'latency_ms', render: (value: number | undefined) => value === undefined ? '-' : `${value}ms` },
-    { title: 'tokens', dataIndex: 'total_tokens', key: 'tokens', render: (value: number | undefined) => value ?? '-' },
-    { title: 'cost', dataIndex: 'estimated_cost', key: 'cost', render: (value: number | undefined) => value === undefined ? '-' : value.toFixed(6) },
-    { title: 'error code', dataIndex: 'error_code', key: 'error_code', render: (value: string | undefined) => value ?? '-' },
+    { title: 'Case', dataIndex: 'case_id', key: 'case_id' },
+    { title: '状态', dataIndex: 'status', key: 'status', render: (status: string) => <EvaluationStatusTag status={status} /> },
+    { title: '分数', dataIndex: 'score', key: 'score', render: (value: number | undefined) => value === undefined ? '-' : `${Math.round(value * 100)}%` },
+    { title: '实际状态', dataIndex: 'actual_status', key: 'actual_status', render: (value: string | undefined) => value ?? '-' },
+    { title: '工具调用', dataIndex: 'tool_call_ids', key: 'tool_calls', render: (value: string[]) => value.length },
+    { title: '模型调用', dataIndex: 'model_call_ids', key: 'model_calls', render: (value: string[]) => value.length },
+    { title: '延迟', dataIndex: 'latency_ms', key: 'latency_ms', render: (value: number | undefined) => value === undefined ? '-' : `${value}ms` },
+    { title: 'Token 数', dataIndex: 'total_tokens', key: 'tokens', render: (value: number | undefined) => value ?? '-' },
+    { title: '成本', dataIndex: 'estimated_cost', key: 'cost', render: (value: number | undefined) => value === undefined ? '-' : value.toFixed(6) },
+    { title: '错误码', dataIndex: 'error_code', key: 'error_code', render: (value: string | undefined) => value ?? '-' },
     {
-      title: 'evidence',
+	      title: '证据',
       key: 'evidence',
       render: (_, row) => (
         <Space>
@@ -114,14 +114,14 @@ export function EvaluationRunDetailPage() {
     <div className="cp-page">
       <div className="cp-page-header">
         <div>
-          <h1>Evaluation Run Detail</h1>
-          <p><Link to="/evaluation/runs">Evaluation Runs</Link> / {runId}</p>
+          <h1>评测任务详情</h1>
+          <p><Link to="/evaluation/runs">评测任务</Link> / {runId}</p>
         </div>
         <Space>
           <Button onClick={() => { void runQuery.refetch(); void resultsQuery.refetch(); }}>刷新</Button>
           {run && ['queued', 'running', 'cancelling'].includes(run.status) ? (
             <Can permission="registry:publish">
-              <Button danger loading={cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>cancel</Button>
+	              <Button danger loading={cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>取消</Button>
             </Can>
           ) : null}
         </Space>
@@ -135,31 +135,31 @@ export function EvaluationRunDetailPage() {
           <section className="cp-section">
             <ExactRefDescriptions
               items={[
-                { label: 'status', value: <EvaluationStatusTag status={run.status} /> },
+	                { label: '状态', value: <EvaluationStatusTag status={run.status} /> },
                 { label: 'workflow_id', value: run.workflow_id ?? '-' },
                 { label: 'workflow_run_id', value: run.workflow_run_id ?? '-' },
-                { label: 'dataset', value: `${run.dataset_id}@${run.dataset_version}` },
-                { label: 'dataset hash', value: <HashText value={run.dataset_hash} /> },
-                { label: 'subject snapshot', value: run.subject_snapshot_ref },
-                { label: 'subject hash', value: <HashText value={run.subject_snapshot_hash} /> },
-                { label: 'execution plan', value: run.evaluation_execution_plan_ref },
-                { label: 'execution plan hash', value: <HashText value={run.evaluation_execution_plan_hash} /> },
-                { label: 'trigger', value: run.trigger_type },
-                { label: 'started_at', value: formatDateTime(run.started_at) },
-                { label: 'completed_at', value: formatDateTime(run.completed_at) },
+	                { label: '数据集', value: `${run.dataset_id}@${run.dataset_version}` },
+	                { label: 'dataset hash', value: <HashText value={run.dataset_hash} /> },
+	                { label: '对象快照', value: run.subject_snapshot_ref },
+	                { label: '对象 hash', value: <HashText value={run.subject_snapshot_hash} /> },
+	                { label: '执行计划', value: run.evaluation_execution_plan_ref },
+	                { label: '执行计划 hash', value: <HashText value={run.evaluation_execution_plan_hash} /> },
+	                { label: '触发方式', value: run.trigger_type },
+	                { label: '开始时间', value: formatDateTime(run.started_at) },
+	                { label: '完成时间', value: formatDateTime(run.completed_at) },
               ]}
             />
             <div className="cp-stat-grid" style={{ marginTop: 12 }}>
-              <div className="cp-metadata-item"><span>progress</span><EvaluationProgress completed={run.completed_cases} total={run.total_cases} status={run.status} /></div>
-              <div className="cp-metadata-item"><span>aggregate</span><EvaluationScoreSummary score={run.aggregate_score} passed={run.passed_cases} failed={run.failed_cases} systemErrors={run.system_error_cases} /></div>
-              <div className="cp-metadata-item"><span>evidence</span>{run.evidence_collection_status}</div>
+	              <div className="cp-metadata-item"><span>进度</span><EvaluationProgress completed={run.completed_cases} total={run.total_cases} status={run.status} /></div>
+	              <div className="cp-metadata-item"><span>汇总</span><EvaluationScoreSummary score={run.aggregate_score} passed={run.passed_cases} failed={run.failed_cases} systemErrors={run.system_error_cases} /></div>
+	              <div className="cp-metadata-item"><span>证据</span>{run.evidence_collection_status}</div>
             </div>
           </section>
           <Tabs
             items={[
               {
                 key: 'results',
-                label: 'Case Results',
+	                label: 'Case 结果',
                 children: (
                   <section className="cp-section">
                     <Table
@@ -168,21 +168,21 @@ export function EvaluationRunDetailPage() {
                       columns={caseColumns}
                       dataSource={results}
                       pagination={{ pageSize: 10 }}
-                      locale={{ emptyText: <EmptyState description="暂无 Case Result" /> }}
+	                      locale={{ emptyText: <EmptyState description="暂无 Case 结果" /> }}
                     />
                   </section>
                 ),
               },
               {
                 key: 'comparison',
-                label: 'Comparison',
+	                label: '对比',
                 children: (
                   <section className="cp-section">
                     <Space direction="vertical" style={{ width: '100%' }}>
                       <Form form={comparisonForm} layout="inline" initialValues={{ baseline_run_id: run.baseline_run_id }}>
                         <Form.Item name="baseline_run_id" rules={[{ required: true }]}><Input placeholder="baseline_run_id" style={{ width: 320 }} /></Form.Item>
                         <Can permission="registry:publish">
-                          <Button loading={comparisonMutation.isPending} onClick={() => comparisonMutation.mutate()}>create comparison</Button>
+	                          <Button loading={comparisonMutation.isPending} onClick={() => comparisonMutation.mutate()}>创建对比</Button>
                         </Can>
                       </Form>
                       {getComparisonQuery.error ? <ErrorAlert error={getComparisonQuery.error} /> : null}
@@ -193,29 +193,29 @@ export function EvaluationRunDetailPage() {
               },
               {
                 key: 'gate',
-                label: 'Gate Decision',
+	                label: '门禁结论',
                 children: (
                   <section className="cp-section">
                     {gateQuery.error ? <ErrorAlert error={gateQuery.error} /> : null}
-                    {decisions.length ? decisions.map((item) => (
-                      <GateDecisionSummary key={item.decision.gate_decision_id} item={item} />
-                    )) : <EmptyState description="当前 Run 暂无 Gate Decision" />}
+	                    {decisions.length ? decisions.map((item) => (
+	                      <GateDecisionSummary key={item.decision.gate_decision_id} item={item} />
+	                    )) : <EmptyState description="当前评测任务暂无门禁结论" />}
                   </section>
                 ),
               },
               {
                 key: 'json',
-                label: 'Safe JSON',
+	                label: '安全 JSON',
                 children: <SafeJsonPreview value={run} />,
               },
             ]}
           />
         </>
       ) : (
-        <section className="cp-section"><EmptyState description="Run 未加载" /></section>
+        <section className="cp-section"><EmptyState description="评测任务未加载" /></section>
       )}
-      <Drawer title="Safe Evidence JSON" open={Boolean(evidence)} onClose={() => setEvidence(undefined)} width={780}>
-        <Typography.Paragraph type="secondary">这里只展示后端返回的安全 evidence snapshot 和引用，不展示完整 Tool Result、raw Provider Response 或 hidden reasoning。</Typography.Paragraph>
+      <Drawer title="安全证据 JSON" open={Boolean(evidence)} onClose={() => setEvidence(undefined)} width={780}>
+        <Typography.Paragraph type="secondary">这里只展示后端返回的安全证据快照和引用，不展示完整 Tool Result、raw Provider Response 或 hidden reasoning。</Typography.Paragraph>
         <SafeJsonPreview value={evidence} maxHeight={640} />
       </Drawer>
     </div>
@@ -227,11 +227,11 @@ function ComparisonSummary({ comparison }: { comparison: EvaluationComparison })
     <Space direction="vertical" style={{ width: '100%' }}>
       <Descriptions bordered size="small" column={{ xs: 1, md: 3 }}>
         <Descriptions.Item label="comparison_id">{comparison.comparison_id}</Descriptions.Item>
-        <Descriptions.Item label="comparable">{String(comparison.comparable)}</Descriptions.Item>
-        <Descriptions.Item label="severity">{comparison.regression_severity}</Descriptions.Item>
-        <Descriptions.Item label="score_delta">{comparison.overall_score_delta ?? '-'}</Descriptions.Item>
-        <Descriptions.Item label="pass_rate_delta">{comparison.pass_rate_delta ?? '-'}</Descriptions.Item>
-        <Descriptions.Item label="newly_failed">{comparison.newly_failed_cases.length}</Descriptions.Item>
+        <Descriptions.Item label="可对比">{String(comparison.comparable)}</Descriptions.Item>
+        <Descriptions.Item label="严重级别">{comparison.regression_severity}</Descriptions.Item>
+        <Descriptions.Item label="分数变化">{comparison.overall_score_delta ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="通过率变化">{comparison.pass_rate_delta ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="新增失败">{comparison.newly_failed_cases.length}</Descriptions.Item>
       </Descriptions>
       <SafeJsonPreview value={comparison} />
     </Space>
@@ -242,12 +242,12 @@ function GateDecisionSummary({ item }: { item: EvaluationGateDecisionWithFreshne
   return (
     <Space direction="vertical" style={{ width: '100%', marginBottom: 16 }}>
       <Descriptions bordered size="small" column={{ xs: 1, md: 3 }}>
-        <Descriptions.Item label="decision"><GateDecisionBadge decision={item.decision.decision} /></Descriptions.Item>
+        <Descriptions.Item label="结论"><GateDecisionBadge decision={item.decision.decision} /></Descriptions.Item>
         <Descriptions.Item label="decision_id"><Link to={`/evaluation/gate-decisions/${encodeURIComponent(item.decision.gate_decision_id)}`}>{item.decision.gate_decision_id}</Link></Descriptions.Item>
-        <Descriptions.Item label="resource">{item.decision.resource_type}/{item.decision.resource_id}@{item.decision.resource_version}</Descriptions.Item>
-        <Descriptions.Item label="resource hash"><HashText value={item.decision.resource_hash} /></Descriptions.Item>
-        <Descriptions.Item label="candidate bundle"><HashText value={item.decision.candidate_bundle_hash} /></Descriptions.Item>
-        <Descriptions.Item label="policy hash"><HashText value={item.decision.gate_policy_hash} /></Descriptions.Item>
+        <Descriptions.Item label="资源">{item.decision.resource_type}/{item.decision.resource_id}@{item.decision.resource_version}</Descriptions.Item>
+        <Descriptions.Item label="资源 hash"><HashText value={item.decision.resource_hash} /></Descriptions.Item>
+        <Descriptions.Item label="候选包"><HashText value={item.decision.candidate_bundle_hash} /></Descriptions.Item>
+        <Descriptions.Item label="策略 hash"><HashText value={item.decision.gate_policy_hash} /></Descriptions.Item>
       </Descriptions>
       <GateFreshnessAlert status={item.freshness.status} reasons={item.freshness.reasons} />
     </Space>

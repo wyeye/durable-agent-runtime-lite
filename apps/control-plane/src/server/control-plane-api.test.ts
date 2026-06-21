@@ -95,7 +95,12 @@ describe('control-plane API', () => {
       version: '9.9.9-test',
       build_sha: 'abc123',
       build_time: '2026-01-01T00:00:00Z',
+      message_key: 'common.health.versionReady',
+      message: '服务版本信息可用。',
+      locale: 'zh-CN',
     });
+    expect(response.headers['content-language']).toBe('zh-CN');
+    expect(response.headers.vary).toContain('Accept-Language');
     expect(response.body).not.toContain('control-plane-token-for-tests');
 
     await close();
@@ -267,7 +272,9 @@ describe('control-plane API', () => {
     expect(response.statusCode).toBe(422);
     expect(response.json().error).toMatchObject({
       code: 'EVALUATION_CANDIDATE_BUNDLE_HASH_REQUIRED',
-      message: 'Evaluation candidate bundle hash is required',
+      message_key: 'errors.evaluationGateRequired',
+      message: '发布前需要通过评测门禁。',
+      locale: 'zh-CN',
     });
     await close();
   });

@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-06-21 for AR-2B-UI-CLOSURE implementation pass.
+Last updated: 2026-06-21 for FULLSTACK-I18N-1 implementation pass.
 
 ## Platform Version
 
@@ -10,7 +10,7 @@ The root `package.json` version is the authority. `corepack pnpm version:check` 
 
 ## Baseline
 
-- Observed local HEAD and `origin/main` before the AR-2B-UI-CLOSURE pass: `e12104fbf2d54b2f4bfc88d1341541be6f7db066`.
+- Observed local HEAD and `origin/main` before the FULLSTACK-I18N-1 pass: `deba6fe1762672b8b7c5da928b8973805f491960`.
 - Platform Core Baseline file: `docs/PLATFORM_CORE_BASELINE.md`.
 - Migration head: `016_evaluation_registry_and_tool_safety.sql`.
 
@@ -75,6 +75,14 @@ Historical AR-2A remote evidence checked for `origin/main` / `27598fee653fadc33a
 - GitHub Integration Run 12 passed.
 
 This repository must still not be labeled `0.9.0-rc.1`; AR-2A completion is a development status, not a version promotion.
+
+## Fullstack I18n
+
+**FULLSTACK-I18N-1 IMPLEMENTATION COMPLETE**
+
+First-version locale support is `zh-CN` only. `packages/i18n` owns locale negotiation, shared translation resources, API error/message helpers, log message helpers, audit display localization, Zod issue localization, and Fastify locale middleware. control-plane, runtime-api, runtime-worker, and tool-gateway set `Content-Language` / `Vary` on HTTP responses.
+
+The control-plane UI has no language switcher in this pass. User-visible navigation, page titles, buttons, table headers, form prompts, state labels, major errors, and operation notices are Chinese. Stable machine fields remain untranslated, including error codes, event codes, enums, IDs, hashes, JSON field names, API paths, tool names, provider IDs, and model IDs.
 
 ## Model Gateway Runtime
 

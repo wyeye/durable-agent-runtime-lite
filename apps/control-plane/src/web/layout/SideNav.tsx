@@ -1,37 +1,38 @@
 import { Menu } from 'antd';
 import { Link, useLocation } from 'react-router';
+import { navLabel } from '../utils/i18n-labels.js';
 
 const items = [
-  { key: '/dashboard', label: <Link to="/dashboard">Dashboard</Link> },
+  { key: '/dashboard', label: <Link to="/dashboard">{navLabel('dashboard')}</Link> },
   {
     key: 'registry',
-    label: 'Registry',
+    label: navLabel('registry'),
     children: [
-      { key: '/registry/flows', label: <Link to="/registry/flows">Flows</Link> },
-      { key: '/registry/routes', label: <Link to="/registry/routes">Routes</Link> },
-      { key: '/registry/tools', label: <Link to="/registry/tools">Tools</Link> },
-      { key: '/registry/agents', label: <Link to="/registry/agents">Agents</Link> },
-      { key: '/registry/model-policies', label: <Link to="/registry/model-policies">Model Policies</Link> },
-      { key: '/registry/prompts', label: <Link to="/registry/prompts">Prompts</Link> },
+      { key: '/registry/flows', label: <Link to="/registry/flows">{navLabel('flows')}</Link> },
+      { key: '/registry/routes', label: <Link to="/registry/routes">{navLabel('routes')}</Link> },
+      { key: '/registry/tools', label: <Link to="/registry/tools">{navLabel('tools')}</Link> },
+      { key: '/registry/agents', label: <Link to="/registry/agents">{navLabel('agents')}</Link> },
+      { key: '/registry/model-policies', label: <Link to="/registry/model-policies">{navLabel('modelPolicies')}</Link> },
+      { key: '/registry/prompts', label: <Link to="/registry/prompts">{navLabel('prompts')}</Link> },
     ],
   },
   {
     key: 'evaluation',
-    label: 'Evaluation',
+    label: navLabel('evaluation'),
     children: [
-      { key: '/evaluation/datasets', label: <Link to="/evaluation/datasets">Datasets</Link> },
-      { key: '/evaluation/runs', label: <Link to="/evaluation/runs">Runs</Link> },
-      { key: '/evaluation/gates', label: <Link to="/evaluation/gates">Gates</Link> },
+      { key: '/evaluation/datasets', label: <Link to="/evaluation/datasets">{navLabel('datasets')}</Link> },
+      { key: '/evaluation/runs', label: <Link to="/evaluation/runs">{navLabel('runs')}</Link> },
+      { key: '/evaluation/gates', label: <Link to="/evaluation/gates">{navLabel('gates')}</Link> },
     ],
   },
-  { key: '/releases', label: <Link to="/releases">Release Center</Link> },
-  { key: '/human-tasks', label: <Link to="/human-tasks">Human Tasks</Link> },
-  { key: '/task-runs', label: <Link to="/task-runs">TaskRuns</Link> },
-  { key: '/agent-runs', label: <Link to="/agent-runs">AgentRuns</Link> },
-  { key: '/audit-events', label: <Link to="/audit-events">Audit</Link> },
-  { key: '/tool-calls', label: <Link to="/tool-calls">ToolCalls</Link> },
-  { key: '/policy-snapshots', label: <Link to="/policy-snapshots">Policy Snapshots</Link> },
-  { key: '/tenant-admissions', label: <Link to="/tenant-admissions">Tenant Admissions</Link> },
+  { key: '/releases', label: <Link to="/releases">{navLabel('releaseCenter')}</Link> },
+  { key: '/human-tasks', label: <Link to="/human-tasks">{navLabel('humanTasks')}</Link> },
+  { key: '/task-runs', label: <Link to="/task-runs">{navLabel('taskRuns')}</Link> },
+  { key: '/agent-runs', label: <Link to="/agent-runs">{navLabel('agentRuns')}</Link> },
+  { key: '/audit-events', label: <Link to="/audit-events">{navLabel('audit')}</Link> },
+  { key: '/tool-calls', label: <Link to="/tool-calls">{navLabel('toolCalls')}</Link> },
+  { key: '/policy-snapshots', label: <Link to="/policy-snapshots">{navLabel('policySnapshots')}</Link> },
+  { key: '/tenant-admissions', label: <Link to="/tenant-admissions">{navLabel('tenantAdmissions')}</Link> },
 ];
 
 export function SideNav() {

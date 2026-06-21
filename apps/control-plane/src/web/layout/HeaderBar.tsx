@@ -2,11 +2,12 @@ import { Button, Form, Input, Popover, Select, Space, Tag, Typography } from 'an
 import { useState } from 'react';
 import type { ControlPlaneIdentity } from '../auth/identity-context.js';
 import { useIdentity } from '../auth/identity-context.js';
+import { displayRole } from '../utils/i18n-labels.js';
 
 const roleOptions = [
-  { value: 'platform_admin', label: 'platform_admin' },
-  { value: 'capability_operator', label: 'capability_operator' },
-  { value: 'auditor', label: 'auditor' },
+  { value: 'platform_admin', label: displayRole('platform_admin') },
+  { value: 'capability_operator', label: displayRole('capability_operator') },
+  { value: 'auditor', label: displayRole('auditor') },
 ];
 
 export function HeaderBar() {
@@ -71,15 +72,15 @@ export function HeaderBar() {
   return (
     <header className="cp-header">
       <div className="cp-brand">
-        <strong>Durable Agent Runtime Lite</strong>
-        <span>Control Plane · Registry / Release / Operations</span>
+        <strong>智能体运行平台</strong>
+        <span>Durable Agent Runtime Lite</span>
       </div>
       <Space wrap>
         {identity ? (
           <>
             <Tag color="blue">{identity.tenant_id}</Tag>
             <Typography.Text>{identity.user_id}</Typography.Text>
-            {identity.roles.map((role) => <Tag key={role}>{role}</Tag>)}
+            {identity.roles.map((role) => <Tag key={role}>{displayRole(role)}</Tag>)}
           </>
         ) : (
           <Tag color="red">未配置身份</Tag>

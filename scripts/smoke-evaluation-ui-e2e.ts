@@ -142,7 +142,8 @@ async function main(): Promise<void> {
     await setIdentity(page, operatorIdentity);
     await page.goto(`${controlPlaneUrl}/dashboard`);
     await page.waitForLoadState('networkidle');
-    await page.getByText('Dashboard').first().waitFor({ timeout: 15_000 });
+    await expectChineseEvaluationShell(page);
+    await page.getByText('运营总览').first().waitFor({ timeout: 15_000 });
 
     const dataset = await createDatasetThroughUi(page);
     const gatePolicy = await createGatePolicyThroughUi(page, dataset);
@@ -153,8 +154,8 @@ async function main(): Promise<void> {
     const completedRun = await pollRun(run.evaluation_run_id);
     assert.equal(completedRun.status, 'completed');
     await page.goto(`${controlPlaneUrl}/evaluation/runs/${encodeURIComponent(run.evaluation_run_id)}`);
-    await page.getByText('Case Results').first().waitFor({ timeout: 15_000 });
-    await page.getByText('Aggregate', { exact: false }).first().waitFor({ timeout: 15_000 });
+    await page.getByText('Case 结果').first().waitFor({ timeout: 15_000 });
+    await page.getByText('汇总', { exact: false }).first().waitFor({ timeout: 15_000 });
 
     const decision = await waitForGateDecision('prompt', passCandidate.prompt.prompt_id, passCandidate.subjectSnapshot.candidate_bundle_hash);
     await page.goto(`${controlPlaneUrl}/evaluation/gate-decisions/${encodeURIComponent(decision.gate_decision_id)}`);
@@ -181,7 +182,7 @@ async function main(): Promise<void> {
     await page.locator('textarea').first().fill('AR-2B UI smoke exact hash override');
     await page.getByTestId('evaluation-override-expires-at').fill(new Date(Date.now() + 60 * 60 * 1000).toISOString());
     await page.getByRole('button', { name: /创建 Override/u }).click();
-    await page.getByRole('button', { name: /OK|确定/u }).click();
+    await page.getByRole('button', { name: /OK|确\s*定/u }).click();
     await page.getByText(/Override 已创建/u).first().waitFor({ timeout: 15_000 });
     const override = await activeOverride(failedDecision.gate_decision_id);
     await publishPromptThroughUi(page, failedCandidate.prompt, failedDecision, override.override_id);
@@ -217,23 +218,23 @@ async function createDatasetThroughUi(page: PageLike) {
     revision: 1,
   };
   await page.goto(`${controlPlaneUrl}/evaluation/datasets`);
-  await page.getByText('Evaluation Datasets').first().waitFor({ timeout: 15_000 });
+  await page.getByText('评测数据集').first().waitFor({ timeout: 15_000 });
   await page.getByTestId('evaluation-dataset-create').click();
   await page.getByTestId('json-editor-textarea').last().fill(JSON.stringify(dataset, null, 2));
   await page.getByTestId('evaluation-dataset-submit').click();
   await page.getByText(datasetId).first().waitFor({ timeout: 15_000 });
 
   for (const evaluationCase of [caseSpec(datasetId, 'pass', 'Mock final answer'), caseSpec(datasetId, 'second', 'Mock final answer')]) {
-    await page.getByRole('tab', { name: 'Cases', exact: true }).click();
+    await page.getByRole('tab', { name: 'Case 列表', exact: true }).click();
     await page.getByTestId('evaluation-case-create').click();
     await page.getByTestId('json-editor-textarea').last().fill(JSON.stringify(evaluationCase, null, 2));
     await page.getByTestId('evaluation-case-submit').click();
     await page.getByText(evaluationCase.case_id).first().waitFor({ timeout: 15_000 });
   }
-  await page.getByRole('button', { name: 'validate' }).click();
-  await page.getByText('validate 已完成').first().waitFor({ timeout: 15_000 });
-  await page.getByRole('button', { name: 'publish' }).click();
-  await page.getByRole('button', { name: /OK|确定/u }).click();
+  await page.getByRole('button', { name: /校\s*验/u }).click();
+  await page.getByText('校验已完成').first().waitFor({ timeout: 15_000 });
+  await page.getByRole('button', { name: /发\s*布/u }).click();
+  await page.getByRole('button', { name: /OK|确\s*定/u }).click();
   await page.getByText('Dataset 已发布').first().waitFor({ timeout: 15_000 });
   const published = await getJson<EvaluationDatasetHash>(`${controlPlaneUrl}/api/v1/evaluation-datasets/${encodeURIComponent(datasetId)}/versions/1`, auditorHeaders);
   assert.ok(published.dataset_hash);
@@ -280,15 +281,15 @@ async function createGatePolicyThroughUi(page: PageLike, dataset: EvaluationData
   };
   await setIdentity(page, adminIdentity);
   await page.goto(`${controlPlaneUrl}/evaluation/gates`);
-  await page.getByText('Evaluation Gates').first().waitFor({ timeout: 15_000 });
+  await page.getByText('发布门禁').first().waitFor({ timeout: 15_000 });
   await page.getByTestId('evaluation-gate-create').click();
   await page.getByTestId('json-editor-textarea').last().fill(JSON.stringify({ policy: gatePolicy }, null, 2));
-  await page.getByRole('button', { name: '提交 draft' }).click();
+  await page.getByRole('button', { name: /提交\s*draft/u }).click();
   await page.getByText(gatePolicy.gate_policy_id).first().waitFor({ timeout: 15_000 });
-  await page.getByRole('button', { name: 'validate' }).click();
-  await page.getByText('Gate Policy validate 已完成').first().waitFor({ timeout: 15_000 });
-  await page.getByRole('button', { name: 'publish' }).click();
-  await page.getByRole('button', { name: /OK|确定/u }).click();
+  await page.getByRole('button', { name: /校\s*验/u }).click();
+  await page.getByText('Gate Policy 校验已完成').first().waitFor({ timeout: 15_000 });
+  await page.getByRole('button', { name: /发\s*布/u }).click();
+  await page.getByRole('button', { name: /OK|确\s*定/u }).click();
   await page.getByText('Gate Policy 已发布').first().waitFor({ timeout: 15_000 });
   await setIdentity(page, operatorIdentity);
   const published = await getJson<EvaluationGatePolicy>(`${controlPlaneUrl}/api/v1/evaluation-gate-policies/${encodeURIComponent(gatePolicy.gate_policy_id)}/versions/1`, auditorHeaders);
@@ -298,7 +299,7 @@ async function createGatePolicyThroughUi(page: PageLike, dataset: EvaluationData
 
 async function createRunThroughUi(page: PageLike, dataset: EvaluationDatasetHash, candidate: Candidate, triggerType: 'manual' | 'publish_gate') {
   await page.goto(`${controlPlaneUrl}/evaluation/runs`);
-  await page.getByText('Evaluation Runs').first().waitFor({ timeout: 15_000 });
+  await page.getByText('评测任务').first().waitFor({ timeout: 15_000 });
   await page.getByTestId('evaluation-run-create').click();
   await page.getByTestId('evaluation-run-dataset-id').fill(dataset.dataset_id);
   await page.getByTestId('evaluation-run-dataset-version').fill(String(dataset.version));
@@ -337,7 +338,7 @@ async function publishPromptThroughUi(page: PageLike, prompt: Candidate['prompt'
   await page.getByText(prompt.prompt_id).first().click();
   await page.getByTestId('evaluation-gate-card').waitFor({ timeout: 15_000 });
   if (overrideId) {
-    await page.locator('input[placeholder="platform_admin override id, optional"]').fill(overrideId);
+    await page.locator('input[placeholder="platform_admin override id，可选"]').fill(overrideId);
   }
   await page.getByTestId('registry-publish').click();
   await page.getByTestId('release-note').fill('evaluation UI smoke publish with exact gate decision');
@@ -573,6 +574,12 @@ async function activeOverride(decisionId: string): Promise<{ override_id: string
   }
 }
 
+async function expectChineseEvaluationShell(page: PageLike): Promise<void> {
+  await page.getByText('智能体运行平台').first().waitFor({ timeout: 15_000 });
+  await page.getByText('运营总览').first().waitFor({ timeout: 15_000 });
+  await page.getByText('评测').first().waitFor({ timeout: 15_000 });
+}
+
 function caseSpec(datasetId: string, suffix: string, expected: string): EvaluationCase {
   return {
     case_id: `${datasetId}_${suffix}`,
@@ -605,6 +612,7 @@ function authHeaders(identity: { user_id: string; tenant_id: string; roles: stri
     'x-tenant-id': identity.tenant_id,
     'x-roles': identity.roles.join(','),
     'x-request-id': `evaluation-ui-${randomUUID()}`,
+    'accept-language': 'zh-CN',
   };
 }
 

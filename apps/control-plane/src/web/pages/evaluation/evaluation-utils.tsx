@@ -7,23 +7,24 @@ import type {
 } from '@dar/contracts';
 import { Alert, Button, Descriptions, Progress, Space, Tag, Typography } from 'antd';
 import { Link } from 'react-router';
+import { displayStatus } from '../../utils/i18n-labels.js';
 import { stringifyPretty } from '../../utils/json.js';
 
 export function EvaluationStatusTag({ status }: { status: EvaluationRunStatus | EvaluationCaseStatus | EvaluationDatasetStatus | string }) {
   const color = statusColor(status);
-  return <Tag color={color}>{status}</Tag>;
+  return <Tag color={color}>{displayStatus(status)}</Tag>;
 }
 
 export function GateDecisionBadge({ decision }: { decision: EvaluationGateDecisionStatus | string | undefined }) {
   if (!decision) {
-    return <Tag>no_decision</Tag>;
+    return <Tag>{displayStatus('no_decision')}</Tag>;
   }
   const color = decision === 'passed' ? 'success'
     : decision === 'overridden' ? 'processing'
       : decision === 'stale' ? 'warning'
         : decision === 'advisory_failed' ? 'orange'
           : 'error';
-  return <Tag color={color}>{decision}</Tag>;
+  return <Tag color={color}>{displayStatus(decision)}</Tag>;
 }
 
 export function GateFreshnessAlert({
@@ -34,17 +35,17 @@ export function GateFreshnessAlert({
   reasons?: EvaluationGateFreshnessReason[] | string[];
 }) {
   if (!status) {
-    return <Alert type="info" showIcon message="No freshness check returned" />;
+    return <Alert type="info" showIcon message="未返回新鲜度检查结果" />;
   }
   if (status === 'fresh') {
-    return <Alert type="success" showIcon message="Gate decision is fresh for the supplied exact hashes" />;
+    return <Alert type="success" showIcon message="门禁结论与当前 exact hash 匹配" />;
   }
   return (
     <Alert
       type="warning"
       showIcon
-      message="Gate decision is stale"
-      description={reasons && reasons.length > 0 ? reasons.join(', ') : 'No stale reason was returned.'}
+      message="门禁结论已失效"
+      description={reasons && reasons.length > 0 ? reasons.join(', ') : '未返回失效原因。'}
     />
   );
 }
@@ -57,7 +58,7 @@ export function EvaluationProgress({ completed, total, status }: { completed?: n
   return (
     <Space direction="vertical" size={2} style={{ width: 180 }}>
       <Progress percent={percent} size="small" {...progressProps} />
-      <Typography.Text type="secondary">{safeCompleted}/{safeTotal} cases</Typography.Text>
+      <Typography.Text type="secondary">{safeCompleted}/{safeTotal} 个 Case</Typography.Text>
     </Space>
   );
 }
@@ -76,11 +77,11 @@ export function EvaluationScoreSummary({
   return (
     <Space wrap>
       <Tag color={score === undefined ? 'default' : score >= 0.8 ? 'success' : score >= 0.5 ? 'warning' : 'error'}>
-        score {score === undefined ? '-' : `${Math.round(score * 100)}%`}
+        分数 {score === undefined ? '-' : `${Math.round(score * 100)}%`}
       </Tag>
-      <Tag color="success">passed {passed ?? 0}</Tag>
-      <Tag color={(failed ?? 0) > 0 ? 'error' : 'default'}>failed {failed ?? 0}</Tag>
-      <Tag color={(systemErrors ?? 0) > 0 ? 'volcano' : 'default'}>system_error {systemErrors ?? 0}</Tag>
+      <Tag color="success">通过 {passed ?? 0}</Tag>
+      <Tag color={(failed ?? 0) > 0 ? 'error' : 'default'}>失败 {failed ?? 0}</Tag>
+      <Tag color={(systemErrors ?? 0) > 0 ? 'volcano' : 'default'}>系统错误 {systemErrors ?? 0}</Tag>
     </Space>
   );
 }
@@ -111,9 +112,9 @@ export function EvidenceLinks({ taskRunId, agentRunId, toolCallIds }: {
 }) {
   return (
     <Space wrap>
-      {taskRunId ? <Link to={`/task-runs?task_run_id=${encodeURIComponent(taskRunId)}`}>TaskRun</Link> : null}
-      {agentRunId ? <Link to={`/agent-runs?agent_run_id=${encodeURIComponent(agentRunId)}`}>AgentRun</Link> : null}
-      {toolCallIds?.length ? <Link to={`/tool-calls?task_run_id=${encodeURIComponent(taskRunId ?? '')}`}>ToolCalls {toolCallIds.length}</Link> : null}
+      {taskRunId ? <Link to={`/task-runs?task_run_id=${encodeURIComponent(taskRunId)}`}>任务运行</Link> : null}
+      {agentRunId ? <Link to={`/agent-runs?agent_run_id=${encodeURIComponent(agentRunId)}`}>智能体运行</Link> : null}
+      {toolCallIds?.length ? <Link to={`/tool-calls?task_run_id=${encodeURIComponent(taskRunId ?? '')}`}>工具调用 {toolCallIds.length}</Link> : null}
     </Space>
   );
 }
@@ -130,7 +131,7 @@ export function ExactRefDescriptions({ items }: { items: Array<{ label: string; 
   );
 }
 
-export function CopyHashButton({ value, label = 'copy hash' }: { value?: string | undefined; label?: string }) {
+export function CopyHashButton({ value, label = '复制 hash' }: { value?: string | undefined; label?: string }) {
   return (
     <Button
       size="small"

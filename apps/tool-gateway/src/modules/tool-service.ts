@@ -22,8 +22,14 @@ import {
   type ToolPreviewRequest,
   type ToolPreviewResponse,
   type TenantRuntimePolicySnapshot,
+  type AuditEvent,
 } from '@dar/contracts';
 import { maskSensitiveFields } from '@dar/security';
+import {
+  localizeAuditEvent,
+  messageKeyForAuditEvent,
+  type SafeTranslationParams,
+} from '@dar/i18n';
 import {
   HumanTaskRepository,
   IdempotencyRecordRepository,
@@ -259,7 +265,7 @@ export class ToolService {
     return this.registry.get(toolName, tenantId);
   }
 
-  async listAuditEvents(input: unknown = {}) {
+  async listAuditEvents(input: unknown = {}, locale?: unknown) {
     const query = operationAuditQuerySchema.parse(input);
     const options: ListAuditEventsOptions = {
       ...(query.tenant_id ? { tenantId: query.tenant_id } : {}),
@@ -272,10 +278,7 @@ export class ToolService {
       offset: (query.page - 1) * query.page_size,
     };
     const events = await this.auditStore.list(options);
-    return events.map((event) => ({
-      ...event,
-      payload: maskSensitiveFields(event.payload) as Record<string, unknown>,
-    }));
+    return events.map((event) => localizedAuditEvent(event, locale));
   }
 
   async getToolCall(toolCallId: string): Promise<ToolCallLog | undefined> {
@@ -393,7 +396,7 @@ export class ToolService {
       ...(policy.error?.code ? { error_code: policy.error.code } : {}),
     });
 
-    const auditEvent = await this.auditStore.append({
+    const auditEvent = await this.appendAuditEvent({
       tenant_id: request.tenant_id,
       actor_id: getUserId(request.user_context),
       action: 'tool.preview',
@@ -528,7 +531,7 @@ export class ToolService {
       return this.auditAndReturnCommitDenied(request, 'TOOL_CALL_NOT_FOUND', 'tool_call_id 不存在');
     }
 
-    const auditEvent = await this.auditStore.append({
+    const auditEvent = await this.appendAuditEvent({
       tenant_id: request.tenant_id,
       actor_id: getUserId(request.user_context),
       action: 'tool.commit',
@@ -616,7 +619,7 @@ export class ToolService {
       );
     }
     if (policy.decision === 'require_human_confirm') {
-      const auditEvent = await this.auditStore.append({
+      const auditEvent = await this.appendAuditEvent({
         tenant_id: request.tenant_id,
         actor_id: getUserId(request.user_context),
         action: 'tool.invoke',
@@ -690,7 +693,7 @@ export class ToolService {
       ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
       policy_decision_code: policy.reason,
     });
-    const auditEvent = await this.auditStore.append({
+    const auditEvent = await this.appendAuditEvent({
       tenant_id: request.tenant_id,
       actor_id: getUserId(request.user_context),
       action: 'tool.invoke',
@@ -906,7 +909,7 @@ export class ToolService {
     code: string,
     message: string,
   ) {
-    return this.auditStore.append({
+    return this.appendAuditEvent({
       tenant_id: request.tenant_id,
       actor_id: getUserId(request.user_context),
       action,
@@ -941,7 +944,7 @@ export class ToolService {
     message: string,
     policy = deniedPolicy(requestRiskLevel(request), code, message),
   ): Promise<ToolInvokeResponse> {
-    const auditEvent = await this.auditStore.append({
+    const auditEvent = await this.appendAuditEvent({
       tenant_id: request.tenant_id,
       actor_id: getUserId(request.user_context),
       action: 'tool.invoke',
@@ -984,7 +987,7 @@ export class ToolService {
     code: string,
     message: string,
   ): Promise<ToolCommitResponse> {
-    const auditEvent = await this.auditStore.append({
+    const auditEvent = await this.appendAuditEvent({
       tenant_id: request.tenant_id,
       actor_id: getUserId(request.user_context),
       action: 'tool.commit',
@@ -1036,7 +1039,7 @@ export class ToolService {
   }
 
   private async auditIdempotencyReplay(request: ToolInvokeRequest | ToolCommitRequest): Promise<void> {
-    await this.auditStore.append({
+    await this.appendAuditEvent({
       tenant_id: request.tenant_id,
       actor_id: getUserId(request.user_context),
       action: 'tool.idempotency_replay',
@@ -1056,6 +1059,21 @@ export class ToolService {
         ...(request.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: request.evaluation_execution_plan_ref } : {}),
         ...(request.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: request.evaluation_execution_plan_hash } : {}),
         idempotency_key: request.idempotency_key,
+      },
+    });
+  }
+
+  private appendAuditEvent(event: Omit<AuditEvent, 'event_id' | 'occurred_at'>): AuditEvent | Promise<AuditEvent> {
+    const messageParams = auditMessageParams(event);
+    const messageKey = event.message_key ?? messageKeyForAuditEvent(event.action);
+    return this.auditStore.append({
+      ...event,
+      message_key: messageKey,
+      message_params: event.message_params ?? messageParams,
+      payload: {
+        ...event.payload,
+        message_key: messageKey,
+        message_params: messageParams,
       },
     });
   }
@@ -1194,6 +1212,48 @@ function maskToolCall(toolCall: ToolCallLog): ToolCallLog {
     preview_json: toolCall.preview_json === undefined ? undefined : maskSensitiveFields(toolCall.preview_json),
     result_json: toolCall.result_json === undefined ? undefined : maskSensitiveFields(toolCall.result_json),
   });
+}
+
+function localizedAuditEvent(event: AuditEvent, locale?: unknown): AuditEvent {
+  const payload = maskSensitiveFields(event.payload) as Record<string, unknown>;
+  const messageParams = isRecord(event.message_params)
+    ? safeParams(event.message_params)
+    : isRecord(payload.message_params)
+      ? safeParams(payload.message_params)
+      : auditMessageParams(event);
+  const messageKey = event.message_key ?? stringValue(payload.message_key) ?? messageKeyForAuditEvent(event.action);
+  const display = localizeAuditEvent(event.action, messageParams, locale);
+  return {
+    ...event,
+    message_key: messageKey,
+    message_params: messageParams,
+    display_message: display.display_message,
+    locale: display.locale,
+    payload,
+  };
+}
+
+function auditMessageParams(event: Pick<AuditEvent, 'target_id' | 'reason' | 'payload'>): SafeTranslationParams {
+  return safeParams({
+    targetId: event.target_id,
+    ...(event.reason ? { reason: event.reason } : {}),
+    ...(typeof event.payload.tool_name === 'string' ? { toolName: event.payload.tool_name } : {}),
+    ...(typeof event.payload.tool_version === 'string' ? { toolVersion: event.payload.tool_version } : {}),
+    ...(typeof event.payload.task_run_id === 'string' ? { taskRunId: event.payload.task_run_id } : {}),
+  });
+}
+
+function safeParams(value: Record<string, unknown>): SafeTranslationParams {
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !/password|secret|token|authorization|cookie|api[_-]?key/iu.test(key))
+      .filter(([, nested]) => ['string', 'number', 'boolean'].includes(typeof nested))
+      .map(([key, nested]) => [key, nested as string | number | boolean]),
+  );
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
 }
 
 function hashJson(value: unknown): string {

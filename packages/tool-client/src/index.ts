@@ -75,7 +75,10 @@ export class ToolGatewayClient {
     const url = new URL(`/v1/tool-calls/${encodeURIComponent(toolCallId)}`, this.baseUrl);
     const response = await request(url, {
       method: 'GET',
-      headers: this.defaultHeaders,
+      headers: {
+        ...this.defaultHeaders,
+        'accept-language': this.defaultHeaders['accept-language'] ?? 'zh-CN',
+      },
     });
     const text = await response.body.text();
     const json: unknown = text ? JSON.parse(text) : {};
@@ -92,6 +95,7 @@ export class ToolGatewayClient {
       headers: {
         ...this.defaultHeaders,
         'content-type': 'application/json',
+        'accept-language': this.defaultHeaders['accept-language'] ?? 'zh-CN',
       },
       body: JSON.stringify(payload),
     });

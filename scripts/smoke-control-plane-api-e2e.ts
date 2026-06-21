@@ -9,11 +9,14 @@ import type {
   RouterPreviewResponse,
   StandardResponse,
   ToolManifest,
+  ToolInvokeResponse,
 } from '@dar/contracts';
 import { hashModelPolicy } from '@dar/db';
 
 const controlPlaneUrl = trimTrailingSlash(process.env.CONTROL_PLANE_URL ?? 'http://localhost:3100');
 const runtimeApiUrl = trimTrailingSlash(process.env.RUNTIME_API_URL ?? 'http://localhost:3000');
+const toolGatewayUrl = trimTrailingSlash(process.env.TOOL_GATEWAY_URL ?? 'http://localhost:3200');
+const runtimeWorkerToolGatewayToken = process.env.RUNTIME_WORKER_TOOL_GATEWAY_TOKEN ?? 'dev-only-runtime-worker-token';
 const tenantId = process.env.SMOKE_TENANT_ID ?? 'default';
 const userId = process.env.SMOKE_USER_ID ?? 'cp_smoke_operator';
 const requestPrefix = `cp_smoke_${Date.now()}`;
@@ -51,6 +54,7 @@ async function main(): Promise<void> {
 
   await checkHealth(`${controlPlaneUrl}/healthz`, 'control-plane');
   await checkHealth(`${controlPlaneUrl}/readyz`, 'control-plane readyz');
+  await checkI18nContract();
 
   await expectStatus(
     'POST',
@@ -58,6 +62,12 @@ async function main(): Promise<void> {
     undefined,
     { spec: promptSpec(ids, 1) },
     401,
+    {
+      errorCode: 'UNAUTHORIZED',
+      messageKey: 'errors.unauthorized',
+      locale: 'zh-CN',
+      contentLanguage: 'zh-CN',
+    },
   );
   await expectStatus(
     'POST',
@@ -65,6 +75,12 @@ async function main(): Promise<void> {
     auditorHeaders,
     { spec: promptSpec(ids, 1) },
     403,
+    {
+      errorCode: 'FORBIDDEN',
+      messageKey: 'errors.forbidden',
+      locale: 'zh-CN',
+      contentLanguage: 'zh-CN',
+    },
   );
 
   const prompt = await createDraft<PromptDefinition>('prompts', promptSpec(ids, 1));
@@ -205,10 +221,18 @@ async function main(): Promise<void> {
     `${controlPlaneUrl}/api/v1/operations/human-tasks?page=1&page_size=5`,
     auditorHeaders,
   );
-  await getJson(
-    `${controlPlaneUrl}/api/v1/operations/audit-events?page=1&page_size=5`,
+  const missingToolName = `${requestPrefix}.missing_tool`;
+  await seedToolGatewayAuditEvent(missingToolName);
+  const auditEvents = await getJson<Array<{ action: string; target_id?: string; message_key?: string; display_message?: string; locale?: string }>>(
+    `${controlPlaneUrl}/api/v1/operations/audit-events?event_type=tool.invoke&page=1&page_size=20`,
     auditorHeaders,
   );
+  const localizedAudit = auditEvents.find((event) => event.action === 'tool.invoke' && event.target_id === missingToolName);
+  assert.ok(localizedAudit, `control-plane BFF should return the Tool Gateway audit event, got ${JSON.stringify(auditEvents)}`);
+  assert.equal(localizedAudit.locale, 'zh-CN');
+  assert.equal(localizedAudit.message_key, 'audit.toolInvoke');
+  assert.equal(localizedAudit.display_message, '工具调用已执行。');
+  assert.notEqual(localizedAudit.display_message, localizedAudit.action, 'audit display_message should be localized display text, not event action');
   await getJson(
     `${controlPlaneUrl}/api/v1/operations/tool-calls?page=1&page_size=5`,
     auditorHeaders,
@@ -460,13 +484,20 @@ async function previewRoute(keyword: string): Promise<RouterPreviewResponse> {
 }
 
 async function checkHealth(url: string, label: string): Promise<void> {
-  const response = await fetch(url);
-  assert.equal(response.ok, true, `${label} failed: ${response.status} ${await response.text()}`);
+  const response = await fetch(url, { headers: { 'accept-language': 'en-US,en;q=0.9' } });
+  assertI18nHeaders(response);
+  const text = await response.text();
+  assert.equal(response.ok, true, `${label} failed: ${response.status} ${text}`);
+  const body = JSON.parse(text) as { message_key?: string; message?: string; locale?: string };
+  assert.equal(body.locale, 'zh-CN');
+  assert.equal(typeof body.message_key, 'string');
+  assert.equal(typeof body.message, 'string');
 }
 
 async function getJson<T = unknown>(url: string, headers: Record<string, string>): Promise<T> {
   const response = await fetch(url, { headers });
   const body = (await response.json()) as StandardResponse<T>;
+  assertI18nHeaders(response);
   if (!response.ok || body.success !== true) {
     throw new Error(`GET ${url} failed: ${response.status} ${JSON.stringify(body)}`);
   }
@@ -485,10 +516,57 @@ async function postJson<T>(
     body: JSON.stringify(payload),
   });
   const body = (await response.json()) as StandardResponse<T>;
+  assertI18nHeaders(response);
   if (!response.ok || body.success !== true) {
     throw new Error(`${method} ${url} failed: ${response.status} ${JSON.stringify(body)}`);
   }
   return body.data;
+}
+
+async function seedToolGatewayAuditEvent(toolName: string): Promise<void> {
+  const response = await fetch(`${toolGatewayUrl}/v1/tools/${encodeURIComponent(toolName)}/invoke`, {
+    method: 'POST',
+    headers: {
+      ...serviceHeaders(`${requestPrefix}_tool_audit`),
+      'accept-language': 'en-US,en;q=0.9',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      tool_version: '1.0.0',
+      tenant_id: tenantId,
+      user_context: { user_id: userId },
+      task_context: { task_run_id: `${requestPrefix}_audit_task` },
+      arguments: { query: 'i18n audit smoke' },
+      idempotency_key: `${requestPrefix}:missing-tool`,
+      request_id: `${requestPrefix}_tool_audit`,
+    }),
+  });
+  assertI18nHeaders(response);
+  const body = await response.json() as StandardResponse<ToolInvokeResponse>;
+  assert.equal(response.status, 404, `Tool Gateway should produce a denied audit for missing tool: ${JSON.stringify(body)}`);
+  assert.equal(body.success, false);
+  assert.equal(body.error?.code, 'TOOL_NOT_FOUND');
+  assert.equal(body.error?.message_key, 'errors.toolNotFound');
+  assert.equal(body.error?.locale, 'zh-CN');
+}
+
+async function checkI18nContract(): Promise<void> {
+  const fallback = await fetch(`${controlPlaneUrl}/version`, {
+    headers: { 'accept-language': 'en-US,en;q=0.9' },
+  });
+  assert.equal(fallback.status, 200);
+  assertI18nHeaders(fallback);
+  const version = await fallback.json() as { message_key?: string; message?: string; locale?: string };
+  assert.equal(version.locale, 'zh-CN');
+  assert.equal(version.message_key, 'common.health.versionReady');
+  assert.equal(version.message, '服务版本信息可用。');
+
+  const explicitZh = await fetch(`${controlPlaneUrl}/version`, {
+    headers: { 'accept-language': 'zh-CN' },
+  });
+  assert.equal(explicitZh.status, 200);
+  assertI18nHeaders(explicitZh);
+  assert.equal((await explicitZh.json() as { locale?: string }).locale, 'zh-CN');
 }
 
 async function expectStatus(
@@ -497,16 +575,40 @@ async function expectStatus(
   headers: Record<string, string> | undefined,
   payload: unknown,
   statusCode: number,
+  expected?: {
+    errorCode?: string;
+    messageKey?: string;
+    locale?: string;
+    contentLanguage?: string;
+  },
 ): Promise<void> {
   const response = await fetch(url, {
     method,
     headers: { ...(headers ?? {}), 'content-type': 'application/json' },
     body: JSON.stringify(payload),
   });
+  const text = await response.text();
   assert.equal(
     response.status,
     statusCode,
-    `${method} ${url} should return ${statusCode}: ${await response.text()}`,
+    `${method} ${url} should return ${statusCode}: ${text}`,
+  );
+  assertI18nHeaders(response, expected?.contentLanguage);
+  if (expected) {
+    const body = JSON.parse(text) as StandardResponse<unknown>;
+    assert.equal(body.success, false);
+    assert.equal(body.error?.code, expected.errorCode);
+    assert.equal(body.error?.message_key, expected.messageKey);
+    assert.equal(body.error?.locale, expected.locale);
+    assert.equal(typeof body.error?.message, 'string');
+  }
+}
+
+function assertI18nHeaders(response: Response, expected = 'zh-CN'): void {
+  assert.equal(response.headers.get('content-language'), expected);
+  assert.ok(
+    response.headers.get('vary')?.toLowerCase().split(',').map((item) => item.trim()).includes('accept-language'),
+    `response should include Vary: Accept-Language, got ${response.headers.get('vary')}`,
   );
 }
 
@@ -516,6 +618,17 @@ function authHeaders(role: string, requestId: string): Record<string, string> {
     'x-tenant-id': tenantId,
     'x-roles': role,
     'x-request-id': requestId,
+    'accept-language': 'zh-CN',
+  };
+}
+
+function serviceHeaders(requestId: string): Record<string, string> {
+  return {
+    'x-service-id': 'runtime-worker',
+    authorization: `Bearer ${runtimeWorkerToolGatewayToken}`,
+    'x-request-id': requestId,
+    'x-tenant-id': tenantId,
+    'x-user-id': userId,
   };
 }
 

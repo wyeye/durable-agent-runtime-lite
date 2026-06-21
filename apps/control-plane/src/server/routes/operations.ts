@@ -27,7 +27,7 @@ export interface OperationsRoutesOptions {
 export async function operationsRoutes(server: FastifyInstance, options: OperationsRoutesOptions): Promise<void> {
   server.get('/api/v1/operations/dashboard', async (request) => {
     const auth = requirePermission(request, 'operations:read');
-    const headers = forward(auth, requestIdOf(request));
+    const headers = forward(auth, requestIdOf(request), request.locale);
     const [counts, humanTasks, runningTasks, waitingTasks, failedTasks, recentReleases] = await Promise.all([
       options.registryService.registryCounts(auth.tenant_id),
       options.runtimeApiClient.listHumanTasks(withTenant({ tenant_id: auth.tenant_id, status: 'pending', page_size: '100' }), headers),
@@ -52,13 +52,13 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
   }, async (request) => {
     const auth = requirePermission(request, 'operations:read');
     const query = humanTaskQuerySchema.parse(request.query);
-    return ok(await options.runtimeApiClient.listHumanTasks(withTenant({ ...query, tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request))), auth.request_id);
+    return ok(await options.runtimeApiClient.listHumanTasks(withTenant({ ...query, tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request), request.locale)), auth.request_id);
   });
 
   server.get('/api/v1/operations/human-tasks/:humanTaskId', async (request) => {
     const auth = requirePermission(request, 'operations:read');
     const { humanTaskId } = request.params as { humanTaskId: string };
-    return ok(await options.runtimeApiClient.getHumanTask(humanTaskId, withTenant({ tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request))), auth.request_id);
+    return ok(await options.runtimeApiClient.getHumanTask(humanTaskId, withTenant({ tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request), request.locale)), auth.request_id);
   });
 
   server.post('/api/v1/operations/human-tasks/:humanTaskId/approve', {
@@ -72,7 +72,7 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
       user_id: auth.user_id,
       request_id: requestIdOf(request) ?? auth.request_id,
     };
-    return ok(await options.runtimeApiClient.approveHumanTask(humanTaskId, body, forward(auth, requestIdOf(request))), auth.request_id);
+    return ok(await options.runtimeApiClient.approveHumanTask(humanTaskId, body, forward(auth, requestIdOf(request), request.locale)), auth.request_id);
   });
 
   server.post('/api/v1/operations/human-tasks/:humanTaskId/reject', {
@@ -86,7 +86,7 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
       user_id: auth.user_id,
       request_id: requestIdOf(request) ?? auth.request_id,
     };
-    return ok(await options.runtimeApiClient.rejectHumanTask(humanTaskId, body, forward(auth, requestIdOf(request))), auth.request_id);
+    return ok(await options.runtimeApiClient.rejectHumanTask(humanTaskId, body, forward(auth, requestIdOf(request), request.locale)), auth.request_id);
   });
 
   server.get('/api/v1/operations/task-runs', {
@@ -94,13 +94,13 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
   }, async (request) => {
     const auth = requirePermission(request, 'operations:read');
     const query = taskRunQuerySchema.parse(request.query);
-    return ok(await options.runtimeApiClient.listTaskRuns(withTenant({ ...query, tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request))), auth.request_id);
+    return ok(await options.runtimeApiClient.listTaskRuns(withTenant({ ...query, tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request), request.locale)), auth.request_id);
   });
 
   server.get('/api/v1/operations/task-runs/:taskRunId', async (request) => {
     const auth = requirePermission(request, 'operations:read');
     const { taskRunId } = request.params as { taskRunId: string };
-    return ok(await options.runtimeApiClient.getTaskRun(taskRunId, forward(auth, requestIdOf(request)), auth.tenant_id), auth.request_id);
+    return ok(await options.runtimeApiClient.getTaskRun(taskRunId, forward(auth, requestIdOf(request), request.locale), auth.tenant_id), auth.request_id);
   });
 
   server.get('/api/v1/operations/agent-runs', {
@@ -108,13 +108,13 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
   }, async (request) => {
     const auth = requirePermission(request, 'operations:read');
     const query = agentRunQuerySchema.parse(request.query);
-    return ok(await options.runtimeApiClient.listAgentRuns(withTenant({ ...query, tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request))), auth.request_id);
+    return ok(await options.runtimeApiClient.listAgentRuns(withTenant({ ...query, tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request), request.locale)), auth.request_id);
   });
 
   server.get('/api/v1/operations/agent-runs/:agentRunId', async (request) => {
     const auth = requirePermission(request, 'operations:read');
     const { agentRunId } = request.params as { agentRunId: string };
-    return ok(await options.runtimeApiClient.getAgentRun(agentRunId, withTenant({ tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request))), auth.request_id);
+    return ok(await options.runtimeApiClient.getAgentRun(agentRunId, withTenant({ tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request), request.locale)), auth.request_id);
   });
 
   server.get('/api/v1/operations/agent-runs/:agentRunId/steps', {
@@ -123,7 +123,7 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
     const auth = requirePermission(request, 'operations:read');
     const { agentRunId } = request.params as { agentRunId: string };
     const query = agentStepQuerySchema.omit({ agent_run_id: true }).parse(request.query);
-    return ok(await options.runtimeApiClient.listAgentSteps(agentRunId, withTenant({ ...query, tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request))), auth.request_id);
+    return ok(await options.runtimeApiClient.listAgentSteps(agentRunId, withTenant({ ...query, tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request), request.locale)), auth.request_id);
   });
 
   server.get('/api/v1/evaluation-runs', {
@@ -133,7 +133,7 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
     const query = evaluationRunQuerySchema.parse(request.query);
     return ok(await options.runtimeApiClient.listEvaluationRuns(
       withTenant({ ...query, tenant_id: auth.tenant_id }),
-      forward(auth, requestIdOf(request)),
+      forward(auth, requestIdOf(request), request.locale),
     ), auth.request_id);
   });
 
@@ -147,7 +147,7 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
       user_id: auth.user_id,
       request_id: requestIdOf(request) ?? auth.request_id,
     };
-    return ok(await options.runtimeApiClient.createEvaluationRun(body, forward(auth, requestIdOf(request))), auth.request_id);
+    return ok(await options.runtimeApiClient.createEvaluationRun(body, forward(auth, requestIdOf(request), request.locale)), auth.request_id);
   });
 
   server.get('/api/v1/evaluation-runs/:runId', async (request) => {
@@ -156,7 +156,7 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
     return ok(await options.runtimeApiClient.getEvaluationRun(
       runId,
       withTenant({ tenant_id: auth.tenant_id }),
-      forward(auth, requestIdOf(request)),
+      forward(auth, requestIdOf(request), request.locale),
     ), auth.request_id);
   });
 
@@ -166,7 +166,7 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
     return ok(await options.runtimeApiClient.listEvaluationRunResults(
       runId,
       withTenant({ tenant_id: auth.tenant_id }),
-      forward(auth, requestIdOf(request)),
+      forward(auth, requestIdOf(request), request.locale),
     ), auth.request_id);
   });
 
@@ -179,7 +179,7 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
       user_id: auth.user_id,
       request_id: requestIdOf(request) ?? auth.request_id,
     };
-    return ok(await options.runtimeApiClient.cancelEvaluationRun(runId, body, forward(auth, requestIdOf(request))), auth.request_id);
+    return ok(await options.runtimeApiClient.cancelEvaluationRun(runId, body, forward(auth, requestIdOf(request), request.locale)), auth.request_id);
   });
 
   server.get('/api/v1/operations/audit-events', {
@@ -187,7 +187,7 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
   }, async (request) => {
     const auth = requirePermission(request, 'operations:read');
     const query = operationAuditQuerySchema.parse(request.query);
-    return ok(await options.toolGatewayClient.listAuditEvents(withTenant({ ...query, tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request))), auth.request_id);
+    return ok(await options.toolGatewayClient.listAuditEvents(withTenant({ ...query, tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request), request.locale)), auth.request_id);
   });
 
   server.get('/api/v1/operations/tool-calls', {
@@ -195,13 +195,13 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
   }, async (request) => {
     const auth = requirePermission(request, 'operations:read');
     const query = toolCallQuerySchema.parse(request.query);
-    return ok(await options.toolGatewayClient.listToolCalls(withTenant({ ...query, tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request))), auth.request_id);
+    return ok(await options.toolGatewayClient.listToolCalls(withTenant({ ...query, tenant_id: auth.tenant_id }), forward(auth, requestIdOf(request), request.locale)), auth.request_id);
   });
 
   server.get('/api/v1/operations/tool-calls/:toolCallId', async (request) => {
     const auth = requirePermission(request, 'operations:read');
     const { toolCallId } = request.params as { toolCallId: string };
-    return ok(await options.toolGatewayClient.getToolCall(toolCallId, forward(auth, requestIdOf(request))), auth.request_id);
+    return ok(await options.toolGatewayClient.getToolCall(toolCallId, forward(auth, requestIdOf(request), request.locale)), auth.request_id);
   });
 
   server.get('/api/v1/tenant-runtime-policy-snapshots', {
@@ -233,12 +233,13 @@ export async function operationsRoutes(server: FastifyInstance, options: Operati
   });
 }
 
-function forward(auth: { user_id: string; tenant_id: string; roles: string[] }, requestId?: string) {
+function forward(auth: { user_id: string; tenant_id: string; roles: string[] }, requestId?: string, locale = 'zh-CN') {
   return {
     userId: auth.user_id,
     tenantId: auth.tenant_id,
     roles: auth.roles,
     ...(requestId ? { requestId } : {}),
+    locale,
   };
 }
 

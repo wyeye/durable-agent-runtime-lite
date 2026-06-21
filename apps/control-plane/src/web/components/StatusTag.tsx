@@ -1,5 +1,6 @@
 import type { SpecStatus } from '@dar/contracts';
 import { Tag } from 'antd';
+import { displayStatus } from '../utils/i18n-labels.js';
 
 const colors: Record<SpecStatus, string> = {
   draft: 'default',
@@ -12,7 +13,7 @@ const colors: Record<SpecStatus, string> = {
 
 export function StatusTag({ status }: { status: SpecStatus | string }) {
   const known = isSpecStatus(status);
-  return <Tag color={known ? colors[status] : 'default'}>{status}</Tag>;
+  return <Tag color={known ? colors[status] : 'default'}>{displayStatus(status)}</Tag>;
 }
 
 function isSpecStatus(value: string): value is SpecStatus {

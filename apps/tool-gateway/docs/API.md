@@ -52,6 +52,12 @@ Allowed service IDs:
 
 `runtime-api` is intentionally not an allowed Tool Gateway caller. Missing or invalid tokens return `401`; a valid service token without permission for the operation returns `403`. Tokens are read only from environment variables and must not be logged or baked into container images.
 
+## Locale and Audit Display
+
+Tool Gateway API 响应使用请求 `Accept-Language`，第一版只支持并回退到 `zh-CN`，并设置 `Content-Language` / `Vary`。Locale 只影响响应消息和 Audit 展示文案，不参与授权、幂等键、tool hash 或 risk 判断。
+
+Audit 记录以 `event_type`、`message_key` 和 `message_params` 为事实源；`display_message` 是按当前 locale 渲染的展示字段，历史 Audit 不依赖某一种自然语言。
+
 ## Endpoints
 
 ### `GET /v1/tools`

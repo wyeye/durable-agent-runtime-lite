@@ -164,7 +164,10 @@ export const registryValidationResultSchema = z.object({
 
 export const runtimeErrorSchema = z.object({
   code: z.string().min(1),
+  message_key: z.string().min(1).optional(),
   message: z.string().min(1),
+  locale: z.enum(['zh-CN']).optional(),
+  params: jsonObjectSchema.optional(),
   details: jsonObjectSchema.optional(),
 });
 
@@ -800,6 +803,9 @@ export const standardSuccessResponseSchema = z.object({
   success: z.literal(true),
   data: z.unknown(),
   error: z.null(),
+  message_key: z.string().min(1).optional(),
+  message: z.string().min(1).optional(),
+  locale: z.enum(['zh-CN']).optional(),
   trace_id: z.string().optional(),
 });
 
@@ -1270,6 +1276,10 @@ export const auditEventSchema = z.object({
   target_id: z.string().min(1),
   result: z.enum(['allowed', 'denied', 'failed', 'succeeded', 'pending']),
   reason: z.string().optional(),
+  message_key: z.string().min(1).optional(),
+  message_params: jsonObjectSchema.optional(),
+  display_message: z.string().min(1).optional(),
+  locale: z.enum(['zh-CN']).optional(),
   occurred_at: z.string().datetime(),
   trace_id: z.string().optional(),
   payload: jsonObjectSchema.default({}),
@@ -1350,6 +1360,7 @@ export const runTaskRequestSchema = z.object({
   tenant_id: z.string().min(1).optional(),
   user_id: z.string().min(1).optional(),
   session_id: z.string().min(1).optional(),
+  request_locale: z.enum(['zh-CN']).optional(),
   trace_id: z.string().min(1).optional(),
   channel: z.string().min(1).optional(),
   roles: z.array(z.string()).default([]),
@@ -1378,6 +1389,7 @@ export const workflowStartRequestSchema = z.object({
   tenant_policy_hash: sha256Schema.optional(),
   tenant_admission_id: z.string().min(1).optional(),
   input: taskInputSchema.default({ payload: {} }),
+  request_locale: z.enum(['zh-CN']).optional(),
   request_id: z.string().min(1),
   trace_id: z.string().optional(),
 });

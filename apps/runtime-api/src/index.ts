@@ -3,7 +3,14 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import type { StandardErrorResponse, StandardSuccessResponse } from '@dar/contracts';
 import { getAppPort, getBuildInfo, loadConfig } from '@dar/config';
-import { createLogger } from '@dar/logger';
+import { createLogger, logErrorEvent, logEvent } from '@dar/logger';
+import {
+  errorResponse,
+  installFastifyLocale,
+  requestLocale,
+  successResponse,
+  zodErrorResponse,
+} from '@dar/i18n';
 import { AuthError } from '@dar/security';
 import { EvaluationRepositoryError, TenantRuntimePolicyError } from '@dar/db';
 import { HumanTaskService } from './modules/human-task/human-task-service.js';
@@ -24,89 +31,44 @@ const appName = 'runtime-api' as const;
 const logger = createLogger(appName);
 
 function toSuccessResponse<T>(data: T, traceId?: string): StandardSuccessResponse<T> {
-  return traceId
-    ? { success: true, data, error: null, trace_id: traceId }
-    : { success: true, data, error: null };
+  return successResponse(data, responseOptions(traceId)) as StandardSuccessResponse<T>;
 }
 
-function toErrorResponse(error: unknown, traceId?: string): StandardErrorResponse {
+function toErrorResponse(error: unknown, traceId?: string, locale?: unknown): StandardErrorResponse {
   if (error instanceof ZodError) {
-    const response: StandardErrorResponse = {
-      success: false,
-      data: null,
-      error: {
-        code: 'VALIDATION_FAILED',
-        message: '请求参数不合法',
-        details: { issues: error.issues },
-      },
-    };
-
-    if (traceId) {
-      response.trace_id = traceId;
-    }
-
-    return response;
+    return zodErrorResponse(error, responseOptions(traceId, locale)) as StandardErrorResponse;
   }
   if (error instanceof AuthError) {
-    const response: StandardErrorResponse = {
-      success: false,
-      data: null,
-      error: {
-        code: error.code,
-        message: error.message,
-        ...(Object.keys(error.details).length > 0 ? { details: error.details } : {}),
-      },
-    };
-    if (traceId) {
-      response.trace_id = traceId;
-    }
-    return response;
+    return errorResponse({
+      code: error.code,
+      ...detailsOf(error.details),
+    }, responseOptions(traceId, locale)) as StandardErrorResponse;
   }
   if (error instanceof TenantRuntimePolicyError) {
-    const response: StandardErrorResponse = {
-      success: false,
-      data: null,
-      error: {
-        code: error.code,
-        message: error.message,
-        ...(Object.keys(error.details).length > 0 ? { details: error.details } : {}),
-      },
-    };
-    if (traceId) {
-      response.trace_id = traceId;
-    }
-    return response;
+    return errorResponse({
+      code: error.code,
+      ...detailsOf(error.details),
+    }, responseOptions(traceId, locale)) as StandardErrorResponse;
   }
   if (error instanceof EvaluationRepositoryError) {
-    const response: StandardErrorResponse = {
-      success: false,
-      data: null,
-      error: {
-        code: error.code,
-        message: error.message,
-        ...(Object.keys(error.details).length > 0 ? { details: error.details } : {}),
-      },
-    };
-    if (traceId) {
-      response.trace_id = traceId;
-    }
-    return response;
+    return errorResponse({
+      code: error.code,
+      ...detailsOf(error.details),
+    }, responseOptions(traceId, locale)) as StandardErrorResponse;
   }
 
-  const response: StandardErrorResponse = {
-    success: false,
-    data: null,
-    error: {
-      code: 'INTERNAL_ERROR',
-      message: '服务处理失败',
-    },
+  return errorResponse({ code: 'INTERNAL_ERROR' }, responseOptions(traceId, locale)) as StandardErrorResponse;
+}
+
+function responseOptions(traceId?: string, locale?: unknown): { traceId?: string; locale?: unknown } {
+  return {
+    ...(traceId ? { traceId } : {}),
+    ...(locale ? { locale } : {}),
   };
+}
 
-  if (traceId) {
-    response.trace_id = traceId;
-  }
-
-  return response;
+function detailsOf(details: Record<string, unknown>): { details?: Record<string, unknown> } {
+  return Object.keys(details).length > 0 ? { details } : {};
 }
 
 function errorStatus(error: unknown): number {
@@ -158,28 +120,43 @@ export function buildServer(
   config = loadConfig(),
 ): FastifyInstance {
   const server = Fastify({ logger: false });
+  installFastifyLocale(server);
   runtimeAuthPlugin(server, { config });
 
-  server.get('/healthz', async () => ({
+  server.get('/healthz', async (request) => ({
     status: 'ok',
     app: appName,
+    message_key: 'common.health.processAlive',
+    message: request.t('common.health.processAlive'),
+    locale: request.locale,
   }));
 
-  server.get('/version', async () => getBuildInfo(appName, config));
+  server.get('/version', async (request) => ({
+    ...getBuildInfo(appName, config),
+    message_key: 'common.health.versionReady',
+    message: request.t('common.health.versionReady'),
+    locale: request.locale,
+  }));
 
-  server.get('/readyz', async (_request, reply) => {
+  server.get('/readyz', async (request, reply) => {
     if ('check' in readiness) {
       const result = await readiness.check();
       reply.code(result.ready ? 200 : 503);
       return {
         status: result.ready ? 'ready' : 'not_ready',
         app: appName,
+        message_key: result.ready ? 'common.readiness.serviceReady' : 'common.readiness.serviceNotReady',
+        message: request.t(result.ready ? 'common.readiness.serviceReady' : 'common.readiness.serviceNotReady'),
+        locale: request.locale,
         ...result,
       };
     }
     return {
       status: 'ready',
       app: appName,
+      message_key: 'common.readiness.serviceReady',
+      message: request.t('common.readiness.serviceReady'),
+      locale: request.locale,
       checks: {
         config: 'ok',
         router: 'ok',
@@ -194,10 +171,10 @@ export function buildServer(
 
     try {
       const auth = request.authContext ? readAuth(request) : undefined;
-      return toSuccessResponse(await taskService.preview(withAuthBody(request, request.body, auth)), traceId);
+      return toSuccessResponse(await taskService.preview(withRequestLocale(withAuthBody(request, request.body, auth), request)), traceId);
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error, traceId);
+      return toErrorResponse(error, traceId, requestLocale(request));
     }
   });
 
@@ -206,10 +183,10 @@ export function buildServer(
 
     try {
       const auth = requireWriteAuth(request);
-      return toSuccessResponse(await taskService.create(withAuthBody(request, request.body, auth)), traceId);
+      return toSuccessResponse(await taskService.create(withRequestLocale(withAuthBody(request, request.body, auth), request)), traceId);
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error, traceId);
+      return toErrorResponse(error, traceId, requestLocale(request));
     }
   });
 
@@ -219,7 +196,7 @@ export function buildServer(
       return toSuccessResponse(await taskService.list(withAuthQuery(request.query, auth)));
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error);
+      return toErrorResponse(error, undefined, requestLocale(request));
     }
   });
 
@@ -232,16 +209,12 @@ export function buildServer(
       const { tenant_id: tenantId } = query as { tenant_id?: string };
       if (!taskRun || (tenantId && taskRun.tenant_id !== tenantId)) {
         reply.code(404);
-        return {
-          success: false,
-          data: null,
-          error: { code: 'TASK_RUN_NOT_FOUND', message: '任务不存在' },
-        };
+        return errorResponse({ code: 'TASK_RUN_NOT_FOUND' }, { locale: requestLocale(request) });
       }
       return toSuccessResponse(taskRun);
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error);
+      return toErrorResponse(error, undefined, requestLocale(request));
     }
   });
 
@@ -249,10 +222,10 @@ export function buildServer(
     const traceId = getTraceId(request.body);
     try {
       const auth = requireWriteAuth(request);
-      return toSuccessResponse(await taskService.createAgentTask(withAuthBody(request, request.body, auth)), traceId);
+      return toSuccessResponse(await taskService.createAgentTask(withRequestLocale(withAuthBody(request, request.body, auth), request)), traceId);
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error, traceId);
+      return toErrorResponse(error, traceId, requestLocale(request));
     }
   });
 
@@ -264,13 +237,13 @@ export function buildServer(
         return toErrorResponse(new EvaluationRepositoryError(
           'EVALUATION_RUNTIME_UNAVAILABLE',
           'Evaluation runtime requires database-backed runtime-api',
-        ), traceId);
+        ), traceId, requestLocale(request));
       }
       const auth = requireWriteAuth(request);
-      return toSuccessResponse(await evaluationRunService.create(withAuthBody(request, request.body, auth)), traceId);
+      return toSuccessResponse(await evaluationRunService.create(withRequestLocale(withAuthBody(request, request.body, auth), request)), traceId);
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error, traceId);
+      return toErrorResponse(error, traceId, requestLocale(request));
     }
   });
 
@@ -281,13 +254,13 @@ export function buildServer(
         return toErrorResponse(new EvaluationRepositoryError(
           'EVALUATION_RUNTIME_UNAVAILABLE',
           'Evaluation runtime requires database-backed runtime-api',
-        ));
+        ), undefined, requestLocale(request));
       }
       const auth = request.authContext ? readAuth(request) : undefined;
       return toSuccessResponse(await evaluationRunService.list(withAuthQuery(request.query, auth)));
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error);
+      return toErrorResponse(error, undefined, requestLocale(request));
     }
   });
 
@@ -299,22 +272,18 @@ export function buildServer(
         return toErrorResponse(new EvaluationRepositoryError(
           'EVALUATION_RUNTIME_UNAVAILABLE',
           'Evaluation runtime requires database-backed runtime-api',
-        ));
+        ), undefined, requestLocale(request));
       }
       const auth = request.authContext ? readAuth(request) : undefined;
       const run = await evaluationRunService.get(runId, withAuthQuery(request.query, auth));
       if (!run) {
         reply.code(404);
-        return {
-          success: false,
-          data: null,
-          error: { code: 'EVALUATION_RUN_NOT_FOUND', message: 'EvaluationRun not found' },
-        };
+        return errorResponse({ code: 'EVALUATION_RUN_NOT_FOUND' }, { locale: requestLocale(request) });
       }
       return toSuccessResponse(run);
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error);
+      return toErrorResponse(error, undefined, requestLocale(request));
     }
   });
 
@@ -326,7 +295,7 @@ export function buildServer(
         return toErrorResponse(new EvaluationRepositoryError(
           'EVALUATION_RUNTIME_UNAVAILABLE',
           'Evaluation runtime requires database-backed runtime-api',
-        ));
+        ), undefined, requestLocale(request));
       }
       const auth = request.authContext ? readAuth(request) : undefined;
       return toSuccessResponse({
@@ -335,7 +304,7 @@ export function buildServer(
       });
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error);
+      return toErrorResponse(error, undefined, requestLocale(request));
     }
   });
 
@@ -348,13 +317,13 @@ export function buildServer(
         return toErrorResponse(new EvaluationRepositoryError(
           'EVALUATION_RUNTIME_UNAVAILABLE',
           'Evaluation runtime requires database-backed runtime-api',
-        ), traceId);
+        ), traceId, requestLocale(request));
       }
       const auth = requireWriteAuth(request);
-      return toSuccessResponse(await evaluationRunService.cancel(runId, withAuthBody(request, request.body, auth)), traceId);
+      return toSuccessResponse(await evaluationRunService.cancel(runId, withRequestLocale(withAuthBody(request, request.body, auth), request)), traceId);
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error, traceId);
+      return toErrorResponse(error, traceId, requestLocale(request));
     }
   });
 
@@ -364,7 +333,7 @@ export function buildServer(
       return toSuccessResponse(await agentRunService.list(withAuthQuery(request.query, auth)));
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error);
+      return toErrorResponse(error, undefined, requestLocale(request));
     }
   });
 
@@ -375,16 +344,12 @@ export function buildServer(
       const result = await agentRunService.get(agentRunId, withAuthQuery(request.query, auth));
       if (!result) {
         reply.code(404);
-        return {
-          success: false,
-          data: null,
-          error: { code: 'AGENT_RUN_NOT_FOUND', message: 'Agent run 不存在' },
-        };
+        return errorResponse({ code: 'AGENT_RUN_NOT_FOUND' }, { locale: requestLocale(request) });
       }
       return toSuccessResponse(result);
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error);
+      return toErrorResponse(error, undefined, requestLocale(request));
     }
   });
 
@@ -395,7 +360,7 @@ export function buildServer(
       return toSuccessResponse(await agentRunService.listSteps(agentRunId, withAuthQuery(request.query, auth)));
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error);
+      return toErrorResponse(error, undefined, requestLocale(request));
     }
   });
 
@@ -405,7 +370,7 @@ export function buildServer(
       return toSuccessResponse(await humanTaskService.list(withAuthQuery(request.query, auth)));
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error);
+      return toErrorResponse(error, undefined, requestLocale(request));
     }
   });
 
@@ -416,16 +381,12 @@ export function buildServer(
       const result = await humanTaskService.get(humanTaskId, withAuthQuery(request.query, auth));
       if (!result) {
         reply.code(404);
-        return {
-          success: false,
-          data: null,
-          error: { code: 'HUMAN_TASK_NOT_FOUND', message: '人工任务不存在' },
-        };
+        return errorResponse({ code: 'HUMAN_TASK_NOT_FOUND' }, { locale: requestLocale(request) });
       }
       return toSuccessResponse(result);
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error);
+      return toErrorResponse(error, undefined, requestLocale(request));
     }
   });
 
@@ -434,19 +395,15 @@ export function buildServer(
     const traceId = getTraceId(request.body);
     try {
       const auth = requireDecisionAuth(request);
-      const result = await humanTaskService.approve(humanTaskId, withAuthBody(request, request.body, auth));
+      const result = await humanTaskService.approve(humanTaskId, withRequestLocale(withAuthBody(request, request.body, auth), request));
       if (!result) {
         reply.code(404);
-        return {
-          success: false,
-          data: null,
-          error: { code: 'HUMAN_TASK_NOT_FOUND', message: '人工任务不存在' },
-        };
+        return errorResponse({ code: 'HUMAN_TASK_NOT_FOUND' }, { locale: requestLocale(request) });
       }
       return toSuccessResponse(result, traceId);
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error, traceId);
+      return toErrorResponse(error, traceId, requestLocale(request));
     }
   });
 
@@ -455,19 +412,15 @@ export function buildServer(
     const traceId = getTraceId(request.body);
     try {
       const auth = requireDecisionAuth(request);
-      const result = await humanTaskService.reject(humanTaskId, withAuthBody(request, request.body, auth));
+      const result = await humanTaskService.reject(humanTaskId, withRequestLocale(withAuthBody(request, request.body, auth), request));
       if (!result) {
         reply.code(404);
-        return {
-          success: false,
-          data: null,
-          error: { code: 'HUMAN_TASK_NOT_FOUND', message: '人工任务不存在' },
-        };
+        return errorResponse({ code: 'HUMAN_TASK_NOT_FOUND' }, { locale: requestLocale(request) });
       }
       return toSuccessResponse(result, traceId);
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error, traceId);
+      return toErrorResponse(error, traceId, requestLocale(request));
     }
   });
 
@@ -476,23 +429,26 @@ export function buildServer(
     const traceId = getTraceId(request.body);
     try {
       const auth = requireWriteAuth(request);
-      const result = await humanTaskService.respond(humanTaskId, withAuthBody(request, request.body, auth));
+      const result = await humanTaskService.respond(humanTaskId, withRequestLocale(withAuthBody(request, request.body, auth), request));
       if (!result) {
         reply.code(404);
-        return {
-          success: false,
-          data: null,
-          error: { code: 'HUMAN_TASK_NOT_FOUND', message: '人工任务不存在' },
-        };
+        return errorResponse({ code: 'HUMAN_TASK_NOT_FOUND' }, { locale: requestLocale(request) });
       }
       return toSuccessResponse(result, traceId);
     } catch (error) {
       reply.code(errorStatus(error));
-      return toErrorResponse(error, traceId);
+      return toErrorResponse(error, traceId, requestLocale(request));
     }
   });
 
   return server;
+}
+
+function withRequestLocale<T>(body: T, request: { locale?: 'zh-CN' }): T & { request_locale: 'zh-CN' } {
+  return {
+    ...(body && typeof body === 'object' ? body : {}),
+    request_locale: request.locale ?? 'zh-CN',
+  } as T & { request_locale: 'zh-CN' };
 }
 
 export async function start(): Promise<void> {
@@ -511,14 +467,14 @@ export async function start(): Promise<void> {
   });
 
   await server.listen({ host: config.HOST, port });
-  logger.info({ app: appName, port, host: config.HOST }, `${appName} listening`);
+  logEvent(logger, 'info', 'app.started', { service: appName }, { app: appName, port, host: config.HOST });
 }
 
 const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
 
 if (isMain) {
   start().catch((error: unknown) => {
-    logger.error({ err: error }, `${appName} startup failed`);
+    logErrorEvent(logger, 'app.startup_failed', error, { service: appName }, { app: appName });
     process.exit(1);
   });
 }

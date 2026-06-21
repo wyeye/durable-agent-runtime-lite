@@ -9,6 +9,7 @@ import { ErrorAlert } from '../../components/ErrorAlert.js';
 import { useApiClient } from '../../api/use-api-client.js';
 import { getTaskRun, listTaskRuns } from '../../api/operations-api.js';
 import { formatDateTime } from '../../utils/format.js';
+import { displayStatus } from '../../utils/i18n-labels.js';
 import { stringifyPretty } from '../../utils/json.js';
 
 const statuses = ['created', 'routing', 'queued', 'running', 'waiting_human', 'completed', 'failed', 'failed_to_start', 'cancelled'];
@@ -32,12 +33,12 @@ export function TaskRunsPage() {
   });
 
   const columns: ColumnsType<TaskRun> = [
-    { title: 'task_run_id', dataIndex: 'task_run_id', key: 'task_run_id', render: (value: string) => <Button type="link" onClick={() => setSelectedId(value)}>{value}</Button> },
+    { title: '任务运行 ID', dataIndex: 'task_run_id', key: 'task_run_id', render: (value: string) => <Button type="link" onClick={() => setSelectedId(value)}>{value}</Button> },
     { title: 'workflow_id', dataIndex: 'workflow_id', key: 'workflow_id', render: (value: string | undefined) => value ?? '-' },
-    { title: 'status', dataIndex: 'status', key: 'status', render: (value: string) => <Tag>{value}</Tag> },
-    { title: 'flow', key: 'flow', render: (_, row) => row.flow_id ? `${row.flow_id}@${row.flow_version ?? '-'}` : '-' },
+    { title: '状态', dataIndex: 'status', key: 'status', render: (value: string) => <Tag>{displayStatus(value)}</Tag> },
+    { title: '流程', key: 'flow', render: (_, row) => row.flow_id ? `${row.flow_id}@${row.flow_version ?? '-'}` : '-' },
     { title: 'route_id', dataIndex: 'route_id', key: 'route_id', render: (value: string | undefined) => value ?? '-' },
-    { title: 'updated_at', dataIndex: 'updated_at', key: 'updated_at', render: formatDateTime },
+    { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', render: formatDateTime },
     { title: 'error_code', dataIndex: 'error_code', key: 'error_code', render: (value: string | undefined) => value ?? '-' },
   ];
 
@@ -45,17 +46,17 @@ export function TaskRunsPage() {
     <div className="cp-page">
       <div className="cp-page-header">
         <div>
-          <h1>TaskRuns</h1>
+          <h1>任务运行</h1>
           <p>通过 control-plane BFF 查询 runtime-api 的任务运行状态。</p>
         </div>
         <Button onClick={() => listQuery.refetch()} loading={listQuery.isFetching}>刷新</Button>
       </div>
       <section className="cp-section">
         <Form layout="inline" className="cp-filter-bar" initialValues={filters} onFinish={(values) => setFilters({ page_size: '50', ...clean(values) })}>
-          <Form.Item name="status"><Select allowClear placeholder="status" style={{ width: 170 }} options={statuses.map((status) => ({ value: status, label: status }))} /></Form.Item>
+          <Form.Item name="status"><Select allowClear placeholder="状态" style={{ width: 170 }} options={statuses.map((status) => ({ value: status, label: displayStatus(status) }))} /></Form.Item>
           <Form.Item name="flow_id"><Input placeholder="flow_id" /></Form.Item>
           <Form.Item name="workflow_id"><Input placeholder="workflow_id" /></Form.Item>
-          <Form.Item name="task_run_id"><Input placeholder="task_run_id exact" /></Form.Item>
+          <Form.Item name="task_run_id"><Input placeholder="task_run_id 精确匹配" /></Form.Item>
           <Button htmlType="submit">查询</Button>
         </Form>
       </section>
@@ -67,19 +68,19 @@ export function TaskRunsPage() {
           columns={columns}
           dataSource={filterTaskRuns(listQuery.data ?? [], filters.task_run_id)}
           pagination={{ pageSize: 12 }}
-          locale={{ emptyText: <EmptyState description="暂无 TaskRun" /> }}
+          locale={{ emptyText: <EmptyState description="暂无任务运行" /> }}
         />
       </section>
-      <Drawer title="TaskRun Detail" open={Boolean(selectedId)} onClose={() => setSelectedId(undefined)} width={760}>
+      <Drawer title="任务运行详情" open={Boolean(selectedId)} onClose={() => setSelectedId(undefined)} width={760}>
         {detailQuery.error ? <ErrorAlert error={detailQuery.error} /> : null}
         {detailQuery.data ? (
           <Space direction="vertical" style={{ width: '100%' }}>
             <Typography.Title level={4}>{detailQuery.data.task_run_id}</Typography.Title>
             <Space wrap>
-              <Link to={`/human-tasks?task_run_id=${encodeURIComponent(detailQuery.data.task_run_id)}`}>Human Tasks</Link>
-              <Link to={`/agent-runs?task_run_id=${encodeURIComponent(detailQuery.data.task_run_id)}`}>AgentRuns</Link>
-              <Link to={`/audit-events?task_run_id=${encodeURIComponent(detailQuery.data.task_run_id)}`}>Audit</Link>
-              <Link to={`/tool-calls?task_run_id=${encodeURIComponent(detailQuery.data.task_run_id)}`}>ToolCalls</Link>
+              <Link to={`/human-tasks?task_run_id=${encodeURIComponent(detailQuery.data.task_run_id)}`}>人工任务</Link>
+              <Link to={`/agent-runs?task_run_id=${encodeURIComponent(detailQuery.data.task_run_id)}`}>智能体运行</Link>
+              <Link to={`/audit-events?task_run_id=${encodeURIComponent(detailQuery.data.task_run_id)}`}>审计日志</Link>
+              <Link to={`/tool-calls?task_run_id=${encodeURIComponent(detailQuery.data.task_run_id)}`}>工具调用</Link>
             </Space>
             <pre className="cp-json-pre">{stringifyPretty(detailQuery.data)}</pre>
           </Space>

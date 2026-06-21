@@ -31,6 +31,7 @@ import {
   type RegistryRecord,
 } from '../../api/registry-api.js';
 import { formatDateTime } from '../../utils/format.js';
+import { displayAction, displayStatus } from '../../utils/i18n-labels.js';
 import { parseJson, stringifyPretty } from '../../utils/json.js';
 import { EvaluationGateCard, type GatePublishMetadata } from '../evaluation/EvaluationGateCard.js';
 import { resourceConfigs } from './resource-config.js';
@@ -231,12 +232,12 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
         </Button>
       ),
     },
-    { title: 'version', dataIndex: 'version', key: 'version', width: 90 },
-    { title: 'status', dataIndex: 'status', key: 'status', render: (status: SpecStatus) => <StatusTag status={status} /> },
-    { title: 'revision', dataIndex: 'revision', key: 'revision', width: 90 },
-    { title: 'extra', key: 'extra', render: (_, record) => config.renderListExtra?.(record) ?? null },
-    { title: 'updated_by', dataIndex: 'updated_by', key: 'updated_by', render: (value: string | undefined) => value ?? '-' },
-    { title: 'updated_at', dataIndex: 'updated_at', key: 'updated_at', render: formatDateTime },
+    { title: '版本', dataIndex: 'version', key: 'version', width: 90 },
+    { title: '状态', dataIndex: 'status', key: 'status', render: (status: SpecStatus) => <StatusTag status={status} /> },
+    { title: 'Revision', dataIndex: 'revision', key: 'revision', width: 90 },
+    { title: '摘要', key: 'extra', render: (_, record) => config.renderListExtra?.(record) ?? null },
+    { title: '更新人', dataIndex: 'updated_by', key: 'updated_by', render: (value: string | undefined) => value ?? '-' },
+    { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', render: formatDateTime },
   ], [config]);
 
   return (
@@ -264,13 +265,13 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
           onFinish={(values: Filters) => setFilters(cleanFilters(values))}
         >
           <Form.Item name="status">
-            <Select allowClear placeholder="status" style={{ width: 160 }} options={statuses.map((status) => ({ value: status, label: status }))} />
+            <Select allowClear placeholder="状态" style={{ width: 160 }} options={statuses.map((status) => ({ value: status, label: displayStatus(status) }))} />
           </Form.Item>
           <Form.Item name="resource_id">
             <Input placeholder={config.idLabel} style={{ width: 220 }} />
           </Form.Item>
           <Form.Item name="keyword">
-            <Input data-testid="registry-keyword" placeholder="keyword" style={{ width: 220 }} />
+            <Input data-testid="registry-keyword" placeholder="关键字" style={{ width: 220 }} />
           </Form.Item>
           <Button htmlType="submit" data-testid="registry-search">查询</Button>
           <Button onClick={() => listQuery.refetch()}>刷新</Button>
@@ -286,7 +287,7 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
             columns={columns}
             dataSource={records}
             pagination={{ pageSize: 10 }}
-            locale={{ emptyText: <EmptyState description="没有匹配的 Registry 资源" /> }}
+            locale={{ emptyText: <EmptyState description="没有匹配的注册资源" /> }}
           />
         </section>
         <section className="cp-section">
@@ -349,7 +350,7 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
                     },
                     {
                       key: 'validation',
-                      label: 'Validate',
+                      label: '校验结果',
                       children: <ValidationResult result={validation} />,
                     },
                     {
@@ -370,14 +371,14 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
                     },
                     {
                       key: 'releases',
-                      label: 'Release History',
+                      label: '发布历史',
                       children: <ReleaseHistoryTable releases={releaseQuery.data ?? []} />,
                     },
                   ]}
                 />
                 <Divider />
                 <Space wrap>
-                  <InputNumber min={1} placeholder="clone target version" value={cloneTarget ?? null} onChange={(value) => setCloneTarget(typeof value === 'number' ? value : undefined)} />
+                  <InputNumber min={1} placeholder="克隆目标版本" value={cloneTarget ?? null} onChange={(value) => setCloneTarget(typeof value === 'number' ? value : undefined)} />
                   <Typography.Text type="secondary">不填写时后端自动生成下一可用版本。</Typography.Text>
                 </Space>
               </Space>
@@ -420,13 +421,13 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
 
 function ReleaseHistoryTable({ releases }: { releases: CapabilityRelease[] }) {
   const columns: ColumnsType<CapabilityRelease> = [
-    { title: 'action', dataIndex: 'action', key: 'action' },
-    { title: 'version', dataIndex: 'resource_version', key: 'resource_version' },
-    { title: 'target_status', dataIndex: 'target_status', key: 'target_status', render: (status: SpecStatus) => <StatusTag status={status} /> },
-    { title: 'operator', dataIndex: 'operator_id', key: 'operator_id' },
-    { title: 'note', dataIndex: 'release_note', key: 'release_note', render: (value: string | undefined) => value ?? '-' },
-    { title: 'created_at', dataIndex: 'created_at', key: 'created_at', render: formatDateTime },
-    { title: 'release', dataIndex: 'release_id', key: 'release_id', render: (value: string) => <Link to={`/releases?release_id=${encodeURIComponent(value)}`}>{value.slice(0, 12)}</Link> },
+    { title: '动作', dataIndex: 'action', key: 'action', render: (value: string) => displayAction(value) },
+    { title: '版本', dataIndex: 'resource_version', key: 'resource_version' },
+    { title: '目标状态', dataIndex: 'target_status', key: 'target_status', render: (status: SpecStatus) => <StatusTag status={status} /> },
+    { title: '操作者', dataIndex: 'operator_id', key: 'operator_id' },
+    { title: '说明', dataIndex: 'release_note', key: 'release_note', render: (value: string | undefined) => value ?? '-' },
+    { title: '创建时间', dataIndex: 'created_at', key: 'created_at', render: formatDateTime },
+    { title: '发布记录', dataIndex: 'release_id', key: 'release_id', render: (value: string) => <Link to={`/releases?release_id=${encodeURIComponent(value)}`}>{value.slice(0, 12)}</Link> },
   ];
   return <Table size="small" rowKey="release_id" columns={columns} dataSource={releases} pagination={{ pageSize: 6 }} />;
 }

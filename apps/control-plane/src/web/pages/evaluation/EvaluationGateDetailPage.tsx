@@ -83,7 +83,7 @@ export function EvaluationGateDetailPage() {
   const validateMutation = useMutation({
     mutationFn: () => validateGatePolicy(client, gatePolicyId!, policyVersion),
     onSuccess: async (policy) => {
-      message.success('Gate Policy validate 已完成');
+      message.success('Gate Policy 校验已完成');
       await refresh(policy);
     },
   });
@@ -99,7 +99,7 @@ export function EvaluationGateDetailPage() {
   const cloneMutation = useMutation({
     mutationFn: () => cloneGatePolicy(client, gatePolicyId!, policyVersion, cloneTarget ? { version: cloneTarget } : {}),
     onSuccess: async (policy) => {
-      message.success('已 clone Gate Policy draft');
+      message.success('已克隆 Gate Policy 草稿');
       setCloneTarget(undefined);
       await refresh(policy);
     },
@@ -112,26 +112,26 @@ export function EvaluationGateDetailPage() {
     <div className="cp-page">
       <div className="cp-page-header">
         <div>
-          <h1>Gate Policy Detail</h1>
-          <p><Link to="/evaluation/gates">Evaluation Gates</Link> / {gatePolicyId}@{version}</p>
+          <h1>Gate Policy 详情</h1>
+          <p><Link to="/evaluation/gates">发布门禁</Link> / {gatePolicyId}@{version}</p>
         </div>
         <Space wrap>
           <Button onClick={() => policyQuery.refetch()} loading={policyQuery.isFetching}>刷新</Button>
-          <InputNumber min={1} value={cloneTarget ?? null} onChange={(value) => setCloneTarget(typeof value === 'number' ? value : undefined)} placeholder="clone version" />
-          <Can permission="registry:write"><Button onClick={() => cloneMutation.mutate()} loading={cloneMutation.isPending}>clone</Button></Can>
-          <Can permission="registry:validate"><Button disabled={!editable} onClick={() => validateMutation.mutate()} loading={validateMutation.isPending}>validate</Button></Can>
+          <InputNumber min={1} value={cloneTarget ?? null} onChange={(value) => setCloneTarget(typeof value === 'number' ? value : undefined)} placeholder="克隆版本" />
+          <Can permission="registry:write"><Button onClick={() => cloneMutation.mutate()} loading={cloneMutation.isPending}>克隆</Button></Can>
+          <Can permission="registry:validate"><Button disabled={!editable} onClick={() => validateMutation.mutate()} loading={validateMutation.isPending}>校验</Button></Can>
           <Can permission="registry:publish">
             <Button
               type="primary"
               disabled={!editable}
               loading={publishMutation.isPending}
               onClick={() => Modal.confirm({
-                title: 'Publish Gate Policy exact version',
+                title: '发布 Gate Policy exact 版本',
                 content: 'required_dataset_refs 必须是后端已发布的 exact version/hash。',
                 onOk: () => publishMutation.mutate(),
               })}
             >
-              publish
+              发布
             </Button>
           </Can>
         </Space>
@@ -155,13 +155,13 @@ export function EvaluationGateDetailPage() {
               <Descriptions.Item label="updated_at">{formatDateTime(policy.updated_at)}</Descriptions.Item>
               <Descriptions.Item label="published_at">{formatDateTime(policy.published_at)}</Descriptions.Item>
             </Descriptions>
-            <div style={{ marginTop: 12 }}><CopyHashButton value={policy.gate_policy_hash} label="copy gate policy hash" /></div>
+            <div style={{ marginTop: 12 }}><CopyHashButton value={policy.gate_policy_hash} label="复制 gate policy hash" /></div>
           </section>
           <Tabs
             items={[
               {
                 key: 'editor',
-                label: 'Policy Editor',
+	                label: '策略编辑',
                 children: (
                   <section className="cp-section">
                     <Space direction="vertical" style={{ width: '100%' }}>
@@ -169,14 +169,14 @@ export function EvaluationGateDetailPage() {
                       <Can permission="registry:write">
                         <Button type="primary" disabled={!editable} loading={updateMutation.isPending} onClick={() => updateMutation.mutate()}>保存 draft</Button>
                       </Can>
-                      {!editable ? <Typography.Text type="secondary">published Gate Policy 只读；需要修改请 clone 新版本。</Typography.Text> : null}
+	                      {!editable ? <Typography.Text type="secondary">已发布 Gate Policy 只读；需要修改请克隆新版本。</Typography.Text> : null}
                     </Space>
                   </section>
                 ),
               },
               {
                 key: 'datasets',
-                label: 'Required Datasets',
+	                label: '必需数据集',
                 children: (
                   <section className="cp-section">
                     <Table
@@ -185,7 +185,7 @@ export function EvaluationGateDetailPage() {
                       pagination={false}
                       columns={[
                         { title: 'dataset_id', dataIndex: 'dataset_id', key: 'dataset_id' },
-                        { title: 'version', dataIndex: 'version', key: 'version' },
+	                        { title: '版本', dataIndex: 'version', key: 'version' },
                         { title: 'dataset_hash', dataIndex: 'dataset_hash', key: 'dataset_hash', render: (value: string) => <HashText value={value} /> },
                       ]}
                     />
@@ -194,7 +194,7 @@ export function EvaluationGateDetailPage() {
               },
               {
                 key: 'versions',
-                label: 'Versions',
+	                label: '版本',
                 children: (
                   <section className="cp-section">
                     <Table
@@ -203,10 +203,10 @@ export function EvaluationGateDetailPage() {
                       loading={versionsQuery.isLoading}
                       pagination={false}
                       columns={[
-                        { title: 'version', dataIndex: 'version', key: 'version' },
-                        { title: 'status', dataIndex: 'status', key: 'status', render: (status: string) => <EvaluationStatusTag status={status} /> },
+	                        { title: '版本', dataIndex: 'version', key: 'version' },
+	                        { title: '状态', dataIndex: 'status', key: 'status', render: (status: string) => <EvaluationStatusTag status={status} /> },
                         { title: 'hash', dataIndex: 'gate_policy_hash', key: 'hash', render: (value: string | undefined) => <HashText value={value} /> },
-                        { title: 'open', key: 'open', render: (_, row) => <Link to={`/evaluation/gates/${encodeURIComponent(row.gate_policy_id)}/versions/${row.version}`}>打开</Link> },
+	                        { title: '打开', key: 'open', render: (_, row) => <Link to={`/evaluation/gates/${encodeURIComponent(row.gate_policy_id)}/versions/${row.version}`}>打开</Link> },
                       ]}
                     />
                   </section>

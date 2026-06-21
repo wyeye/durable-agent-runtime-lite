@@ -23,13 +23,13 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
     type: 'flow',
     plural: 'flows',
     idLabel: 'flow_id',
-    title: 'Flow Registry',
+    title: '流程注册',
     description: '管理 FlowSpec 生命周期、依赖校验和发布版本。',
     getIdFromSpec: (spec) => readStringField(spec, 'flow_id'),
     makeDraftTemplate: () => ({
       flow_id: 'flow_id_here',
       version: 1,
-      name: 'Flow name',
+      name: '流程名称',
       runtime: {
         workflow_type: 'ConfigDrivenWorkflow',
         task_queue: 'config-driven',
@@ -50,14 +50,14 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
     renderListExtra: (record) => {
       const spec = asRecord(record.spec);
       const steps = Array.isArray(spec.steps) ? spec.steps : [];
-      return <Tag>{steps.length} steps</Tag>;
+      return <Tag>{steps.length} 个步骤</Tag>;
     },
   },
   route: {
     type: 'route',
     plural: 'routes',
     idLabel: 'route_id',
-    title: 'Route Registry',
+    title: '路由注册',
     description: '管理 RouteSpec 匹配信号、阈值、灰度策略和发布版本。',
     getIdFromSpec: (spec) => readStringField(spec, 'route_id') ?? routeIdFromSpec(spec),
     makeDraftTemplate: () => ({
@@ -81,13 +81,13 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
     type: 'tool',
     plural: 'tools',
     idLabel: 'tool_name',
-    title: 'Tool Registry',
-    description: '管理 ToolManifest、风险等级、副作用和 adapter 元数据。',
+    title: '工具注册',
+    description: '管理 ToolManifest、风险等级、副作用和适配器元数据。',
     getIdFromSpec: (spec) => readStringField(spec, 'tool_name'),
     makeDraftTemplate: () => ({
       tool_name: 'tool.name',
       version: '1.0.0',
-      description: 'Tool description',
+      description: '工具说明',
       risk_level: 'L1',
       side_effect: false,
       adapter: {
@@ -108,7 +108,7 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
     type: 'agent',
     plural: 'agents',
     idLabel: 'agent_id',
-    title: 'Agent Registry',
+    title: '智能体注册',
     description: '管理 AgentSpec、Prompt 引用、allowed_tools 和执行边界。',
     getIdFromSpec: (spec) => readStringField(spec, 'agent_id'),
     makeDraftTemplate: () => ({
@@ -130,7 +130,7 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
     type: 'model_policy',
     plural: 'model-policies',
     idLabel: 'model_policy_id',
-    title: 'Model Policy Registry',
+    title: '模型策略注册',
     description: '管理模型网关协议、目标模型、重试、fallback 和请求参数策略。',
     getIdFromSpec: (spec) => readStringField(spec, 'model_policy_id'),
     makeDraftTemplate: () => ({
@@ -184,14 +184,14 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
     type: 'prompt',
     plural: 'prompts',
     idLabel: 'prompt_id',
-    title: 'Prompt Registry',
+    title: '提示词注册',
     description: '管理 PromptDefinition 内容、变量和发布版本。',
     getIdFromSpec: (spec) => readStringField(spec, 'prompt_id'),
     makeDraftTemplate: () => ({
       prompt_id: 'prompt_id_here',
       version: 1,
-      name: 'Prompt name',
-      content: 'Write prompt content here. Use {{variable_name}} for template variables.',
+      name: '提示词名称',
+      content: '在这里编写提示词内容。使用 {{variable_name}} 引用模板变量。',
       variables: ['variable_name'],
     }),
     renderSummary: renderPromptSummary,
@@ -200,7 +200,7 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
     type: 'tenant_runtime_policy',
     plural: 'tenant-runtime-policies',
     idLabel: 'tenant_id',
-    title: 'Tenant Runtime Policy',
+    title: '租户运行策略',
     description: '管理租户运行时 Tool、Model、Handoff、Budget 和并发上限策略。',
     getIdFromSpec: (spec) => readStringField(spec, 'tenant_id'),
     makeDraftTemplate: () => ({
@@ -229,7 +229,7 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
     renderSummary: renderTenantRuntimePolicySummary,
     renderListExtra: (record) => {
       const spec = asRecord(record.spec);
-      return <Tag>{readNumber(spec.max_concurrent_agent_runs) ?? 0} concurrent</Tag>;
+      return <Tag>{readNumber(spec.max_concurrent_agent_runs) ?? 0} 并发</Tag>;
     },
   },
 };
@@ -238,16 +238,16 @@ function renderFlowSummary(record: RegistryRecord) {
   const spec = asRecord(record.spec);
   const steps = Array.isArray(spec.steps) ? (spec.steps.filter(isRecord) as FlowStep[]) : [];
   const columns: ColumnsType<FlowStep> = [
-    { title: 'step id', dataIndex: 'id', key: 'id' },
-    { title: 'type', dataIndex: 'type', key: 'type' },
+    { title: '步骤 ID', dataIndex: 'id', key: 'id' },
+    { title: '类型', dataIndex: 'type', key: 'type' },
     {
-      title: 'tool',
+      title: '工具',
       dataIndex: 'tool',
       key: 'tool',
       render: (value: string | undefined) => value ?? '-',
     },
     {
-      title: 'agent',
+      title: '智能体',
       dataIndex: 'agent_id',
       key: 'agent_id',
       render: (value: string | undefined) => value ?? '-',
@@ -259,13 +259,13 @@ function renderFlowSummary(record: RegistryRecord) {
       render: (value: string | undefined) => value ?? '-',
     },
     {
-      title: 'mode',
+      title: '模式',
       dataIndex: 'mode',
       key: 'mode',
       render: (value: string | undefined) => value ?? '-',
     },
     {
-      title: 'risk',
+      title: '风险',
       dataIndex: 'risk_level',
       key: 'risk_level',
       render: (value: ToolRiskLevel | undefined) => (value ? <RiskTag risk={value} /> : '-'),
@@ -293,7 +293,7 @@ function renderFlowSummary(record: RegistryRecord) {
         style={{ marginTop: 12 }}
         type={hasL3PreviewCommit ? 'success' : 'info'}
         showIcon
-        message="L3 human confirmation path"
+        message="L3 人工确认路径"
         description={
           hasL3PreviewCommit
             ? 'Flow 中存在 preview_commit 路径。'
@@ -382,9 +382,9 @@ function renderToolSummary(record: RegistryRecord) {
       <div style={{ marginTop: 12 }}>
         <RiskNotice risk={risk} sideEffect={Boolean(spec.side_effect)} />
       </div>
-      <Typography.Title level={5}>input_schema</Typography.Title>
+      <Typography.Title level={5}>输入 Schema</Typography.Title>
       <pre className="cp-json-pre">{JSON.stringify(spec.input_schema ?? {}, null, 2)}</pre>
-      <Typography.Title level={5}>output_schema</Typography.Title>
+      <Typography.Title level={5}>输出 Schema</Typography.Title>
       <pre className="cp-json-pre">{JSON.stringify(spec.output_schema ?? {}, null, 2)}</pre>
     </>
   );
@@ -509,7 +509,7 @@ function renderPromptSummary(record: RegistryRecord) {
         message="模板变量格式"
         description="变量应使用合法标识符，Prompt 内容中的疑似密钥会由 validate 检查并展示 warning/error。"
       />
-      <Typography.Title level={5}>content</Typography.Title>
+      <Typography.Title level={5}>提示词内容</Typography.Title>
       <pre className="cp-json-pre">{content}</pre>
     </>
   );
@@ -553,7 +553,7 @@ function renderTenantRuntimePolicySummary(record: RegistryRecord) {
         style={{ marginTop: 12 }}
         type="info"
         showIcon
-        message="Policy snapshot"
+        message="策略快照"
         description="Runtime 启动时会将发布策略与执行计划解析为不可变 snapshot，Tool Gateway 最终按 snapshot 校验工具调用。"
       />
     </>

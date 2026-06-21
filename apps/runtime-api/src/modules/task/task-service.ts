@@ -47,6 +47,7 @@ export interface NormalizedRunTaskRequest extends RunTaskRequest {
   request_id: string;
   tenant_id: string;
   user_id: string;
+  request_locale: 'zh-CN';
 }
 
 export interface TaskServiceOptions {
@@ -206,6 +207,7 @@ export class TaskService {
           tenant_policy_hash: policySnapshot?.snapshot_hash,
           tenant_admission_id: admission?.admission_id,
           input: normalized.input,
+          request_locale: normalized.request_locale,
           request_id: normalized.request_id,
           trace_id: normalized.trace_id,
         }
@@ -217,6 +219,7 @@ export class TaskService {
           workflow_id: workflowId,
           agent_id: decision.decision === 'agent_fallback' ? decision.agent_id : DEFAULT_AGENT_ID,
           input: normalized.input,
+          request_locale: normalized.request_locale,
           request_id: normalized.request_id,
           trace_id: normalized.trace_id,
         };
@@ -294,6 +297,7 @@ export class TaskService {
       agent_execution_plan_ref: true,
       input: true,
       request_id: true,
+      request_locale: true,
       trace_id: true,
       execution_mode: true,
     }).parse({
@@ -334,6 +338,7 @@ export class TaskService {
       } : {}),
       ...(admission ? { tenant_admission_id: admission.admission_id } : {}),
       input: parsed.input,
+      ...(parsed.request_locale ? { request_locale: parsed.request_locale } : {}),
       request_id: parsed.request_id,
       ...(parsed.trace_id ? { trace_id: parsed.trace_id } : {}),
       ...(parsed.execution_mode ? { execution_mode: parsed.execution_mode } : {}),
@@ -529,6 +534,7 @@ export function normalizeRunTaskRequest(input: unknown): NormalizedRunTaskReques
     request_id: parsed.request_id ?? createRequestId(),
     tenant_id: parsed.tenant_id ?? 'default',
     user_id: parsed.user_id ?? 'anonymous',
+    request_locale: parsed.request_locale ?? 'zh-CN',
   };
 }
 

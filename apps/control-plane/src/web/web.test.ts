@@ -17,7 +17,7 @@ import { toFriendlyError } from './utils/errors.js';
 import { resourceConfigs } from './pages/registry/resource-config.js';
 
 describe('control-plane web api client', () => {
-  it('injects identity headers and request id', async () => {
+  it('injects identity headers, locale, and request id', async () => {
     let capturedInit: RequestInit | undefined;
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       capturedInit = init;
@@ -39,6 +39,7 @@ describe('control-plane web api client', () => {
     expect(headers.get('x-tenant-id')).toBe('tenant-a');
     expect(headers.get('x-roles')).toBe('capability_operator');
     expect(headers.get('x-request-id')).toBe('request-id-1');
+    expect(headers.get('accept-language')).toBe('zh-CN');
   });
 
   it('maps standard 401/403/409/422/503 errors to ApiError', async () => {

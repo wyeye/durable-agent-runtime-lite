@@ -81,6 +81,7 @@ export class ApiClient {
   private headers(requestId: string, hasBody: boolean): Headers {
     const headers = new Headers();
     headers.set('accept', 'application/json');
+    headers.set('accept-language', 'zh-CN');
     headers.set('x-request-id', requestId);
     if (hasBody) {
       headers.set('content-type', 'application/json');

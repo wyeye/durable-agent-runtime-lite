@@ -32,6 +32,15 @@ src/web/
 
 前端使用 React、Vite、Ant Design、React Router、React Query。所有请求必须走同源 `/api/v1/...`，不能硬编码 runtime-api 或 tool-gateway 地址。
 
+## 国际化
+
+- 第一版只开放 `zh-CN`，不显示语言切换器，也不创建空英文资源文件。
+- 前端通过共享 `@dar/i18n` 资源和 Ant Design `zh_CN` locale 渲染中文 UI。
+- API Client 固定发送 `Accept-Language: zh-CN`；control-plane BFF 会把请求 locale 继续透传到 runtime-api 和 tool-gateway。
+- 页面可以保留稳定机器字段和技术名词，例如 `task_run_id`、`workflow_id`、`Dataset Hash`、`Gate Policy`、`Override`。
+- 业务判断必须依赖 code、enum、id、hash 和 API data，不能依赖中文 display message。
+- Audit 页面优先展示后端按当前 locale 渲染的 `display_message`，但原始 `event_type/action` 仍作为技术字段保留。
+
 ## 身份与权限
 
 Header 认证来源：

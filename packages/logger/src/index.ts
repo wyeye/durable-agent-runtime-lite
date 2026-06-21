@@ -1,4 +1,11 @@
 import pino, { type Logger, type LoggerOptions } from 'pino';
+import {
+  createLocalizedLogBindings as createI18nLogBindings,
+  logErrorEvent as writeLocalizedErrorEvent,
+  logEvent as writeLocalizedLogEvent,
+  type LogLevel,
+  type SafeTranslationParams,
+} from '@dar/i18n';
 
 export interface LoggerBindings {
   request_id?: string;
@@ -43,4 +50,32 @@ export function createLogger(app: string, bindings: LoggerBindings = {}): Logger
 
 export function childLogger(logger: Logger, bindings: LoggerBindings): Logger {
   return logger.child(bindings);
+}
+
+export function createLocalizedLogBindings(
+  eventCode: string,
+  params: SafeTranslationParams = {},
+  context: LoggerBindings = {},
+) {
+  return createI18nLogBindings(eventCode, params, context);
+}
+
+export function logEvent(
+  logger: Logger,
+  level: LogLevel,
+  eventCode: string,
+  params: SafeTranslationParams = {},
+  context: LoggerBindings = {},
+): void {
+  writeLocalizedLogEvent(logger, level, eventCode, params, context);
+}
+
+export function logErrorEvent(
+  logger: Logger,
+  eventCode: string,
+  error: unknown,
+  params: SafeTranslationParams = {},
+  context: LoggerBindings = {},
+): void {
+  writeLocalizedErrorEvent(logger, eventCode, error, params, context);
 }

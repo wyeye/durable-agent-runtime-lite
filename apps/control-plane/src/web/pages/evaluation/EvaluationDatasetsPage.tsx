@@ -12,6 +12,7 @@ import { useApiClient } from '../../api/use-api-client.js';
 import { createDataset, listDatasets } from '../../api/evaluation-api.js';
 import { formatDateTime } from '../../utils/format.js';
 import { parseJson, stringifyPretty } from '../../utils/json.js';
+import { displayStatus } from '../../utils/i18n-labels.js';
 import { EvaluationStatusTag, HashText } from './evaluation-utils.js';
 
 const statuses: EvaluationDatasetStatus[] = ['draft', 'validated', 'published', 'deprecated', 'disabled'];
@@ -45,7 +46,7 @@ export function EvaluationDatasetsPage() {
       return createDataset(client, parsed.value as EvaluationDataset);
     },
     onSuccess: async (dataset) => {
-      message.success('Dataset draft 已创建');
+      message.success('评测数据集草稿已创建');
       setCreateOpen(false);
       setCreateText(stringifyPretty(datasetTemplate()));
       await queryClient.invalidateQueries({ queryKey: ['evaluation-datasets'] });
@@ -77,15 +78,15 @@ export function EvaluationDatasetsPage() {
         <Link to={`/evaluation/datasets/${encodeURIComponent(value)}/versions/${row.version}`}>{value}</Link>
       ),
     },
-    { title: 'name', dataIndex: 'name', key: 'name' },
-    { title: 'version', dataIndex: 'version', key: 'version', width: 90 },
-    { title: 'status', dataIndex: 'status', key: 'status', render: (status: string) => <EvaluationStatusTag status={status} /> },
-    { title: 'domain', dataIndex: 'domain', key: 'domain', render: (value: string | undefined) => value ?? '-' },
-    { title: 'enabled cases', key: 'enabled', render: () => <Typography.Text type="secondary">详情页统计</Typography.Text> },
-    { title: 'dataset hash', dataIndex: 'dataset_hash', key: 'dataset_hash', render: (value: string | undefined) => <HashText value={value} /> },
-    { title: 'updated_at', dataIndex: 'updated_at', key: 'updated_at', render: formatDateTime },
+    { title: '名称', dataIndex: 'name', key: 'name' },
+    { title: '版本', dataIndex: 'version', key: 'version', width: 90 },
+    { title: '状态', dataIndex: 'status', key: 'status', render: (status: string) => <EvaluationStatusTag status={status} /> },
+    { title: '领域', dataIndex: 'domain', key: 'domain', render: (value: string | undefined) => value ?? '-' },
+    { title: '启用 Case', key: 'enabled', render: () => <Typography.Text type="secondary">详情页统计</Typography.Text> },
+    { title: 'Dataset Hash', dataIndex: 'dataset_hash', key: 'dataset_hash', render: (value: string | undefined) => <HashText value={value} /> },
+    { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', render: formatDateTime },
     {
-      title: 'versions',
+      title: '版本',
       key: 'versions',
       width: 100,
       render: (_, row) => (
@@ -98,7 +99,7 @@ export function EvaluationDatasetsPage() {
     <div className="cp-page">
       <div className="cp-page-header">
         <div>
-          <h1>Evaluation Datasets</h1>
+          <h1>评测数据集</h1>
           <p>管理评测 Dataset exact version、Case 和发布 hash。</p>
         </div>
         <Can permission="registry:write">
@@ -108,9 +109,9 @@ export function EvaluationDatasetsPage() {
       <ReadOnlyNotice />
       <section className="cp-section">
         <Form layout="inline" className="cp-filter-bar" onFinish={(values) => setFilters(clean(values))}>
-          <Form.Item name="status"><Select allowClear placeholder="status" style={{ width: 150 }} options={statuses.map((status) => ({ value: status, label: status }))} /></Form.Item>
+          <Form.Item name="status"><Select allowClear placeholder="状态" style={{ width: 150 }} options={statuses.map((status) => ({ value: status, label: displayStatus(status) }))} /></Form.Item>
           <Form.Item name="dataset_id"><Input placeholder="dataset_id" style={{ width: 220 }} /></Form.Item>
-          <Form.Item name="keyword"><Input data-testid="evaluation-dataset-keyword" placeholder="keyword" style={{ width: 220 }} /></Form.Item>
+          <Form.Item name="keyword"><Input data-testid="evaluation-dataset-keyword" placeholder="关键字" style={{ width: 220 }} /></Form.Item>
           <Button htmlType="submit" data-testid="evaluation-dataset-search">查询</Button>
           <Button onClick={() => query.refetch()} loading={query.isFetching}>刷新</Button>
         </Form>
@@ -124,10 +125,10 @@ export function EvaluationDatasetsPage() {
           columns={columns}
           dataSource={rows}
           pagination={{ pageSize: 12 }}
-          locale={{ emptyText: <EmptyState description="暂无 Evaluation Dataset" /> }}
+          locale={{ emptyText: <EmptyState description="暂无评测数据集" /> }}
         />
       </section>
-      <Drawer title="创建 Dataset draft" open={createOpen} onClose={() => setCreateOpen(false)} width={760}>
+      <Drawer title="创建评测数据集草稿" open={createOpen} onClose={() => setCreateOpen(false)} width={760}>
         {createMutation.error ? <ErrorAlert error={createMutation.error} /> : null}
         <Space direction="vertical" style={{ width: '100%' }}>
           <Form layout="inline" className="cp-filter-bar">
@@ -154,7 +155,7 @@ function datasetTemplate(): EvaluationDataset {
   return {
     dataset_id: `dataset_${Date.now()}`,
     version: 1,
-    name: 'Evaluation dataset',
+    name: '评测数据集',
     status: 'draft',
     domain: 'runtime',
     tags: [],

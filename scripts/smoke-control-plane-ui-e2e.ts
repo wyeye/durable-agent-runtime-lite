@@ -112,7 +112,8 @@ async function main(): Promise<void> {
     );
     await page.goto(`${controlPlaneUrl}/dashboard`);
     await page.waitForLoadState('networkidle');
-    await page.getByText('Dashboard').first().waitFor({ timeout: 15_000 });
+    await expectChineseShell(page);
+    await page.getByText('运营总览').first().waitFor({ timeout: 15_000 });
 
     const prompt = await createDraft<PromptDefinition>(page, 'prompts', promptSpec(ids, 1));
     const tool = await createDraft<ToolManifest>(page, 'tools', toolSpec(ids, '1.0.0'));
@@ -216,6 +217,7 @@ async function main(): Promise<void> {
     assert.equal(previewAfterRollback.route_decision.flow_version, 1);
 
     await page.goto(`${controlPlaneUrl}/releases`);
+    await page.getByText('发布中心').first().waitFor({ timeout: 15_000 });
     await page.getByText(ids.route).first().waitFor({ timeout: 15_000 });
 
     const l3Task = await startSeededL3Task(page);
@@ -230,11 +232,11 @@ async function main(): Promise<void> {
     await waitForTaskCompleted(page, l3Task.task_run_id);
 
     await page.goto(`${controlPlaneUrl}/task-runs`);
-    await page.getByText('TaskRuns').first().waitFor({ timeout: 15_000 });
+    await page.getByText('任务运行').first().waitFor({ timeout: 15_000 });
     await page.goto(`${controlPlaneUrl}/audit-events`);
-    await page.getByText('Audit Events').first().waitFor({ timeout: 15_000 });
+    await page.getByText('审计日志').first().waitFor({ timeout: 15_000 });
     await page.goto(`${controlPlaneUrl}/tool-calls`);
-    await page.getByText('Tool Calls').first().waitFor({ timeout: 15_000 });
+    await page.getByText('工具调用').first().waitFor({ timeout: 15_000 });
 
     console.log(
       JSON.stringify(
@@ -605,12 +607,20 @@ async function parseStandardResponse<T>(
   return body.data;
 }
 
+async function expectChineseShell(page: PageLike): Promise<void> {
+  await page.getByText('智能体运行平台').first().waitFor({ timeout: 15_000 });
+  await page.getByText('运营总览').first().waitFor({ timeout: 15_000 });
+  await page.getByText('能力注册').first().waitFor({ timeout: 15_000 });
+  await page.getByText('评测').first().waitFor({ timeout: 15_000 });
+}
+
 function authHeaders(role: string, requestId: string): Record<string, string> {
   return {
     'x-user-id': userId,
     'x-tenant-id': tenantId,
     'x-roles': role,
     'x-request-id': requestId,
+    'accept-language': 'zh-CN',
   };
 }
 

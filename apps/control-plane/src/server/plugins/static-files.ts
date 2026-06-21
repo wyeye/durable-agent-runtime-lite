@@ -1,6 +1,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { join, normalize } from 'node:path';
 import type { FastifyInstance } from 'fastify';
+import { errorResponse, requestLocale } from '@dar/i18n';
 
 const excludedPrefixes = ['/api/', '/healthz', '/readyz', '/version', '/openapi.json', '/docs'];
 
@@ -8,20 +9,12 @@ export async function staticFilesPlugin(server: FastifyInstance, options: { root
   server.setNotFoundHandler(async (request, reply) => {
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       reply.code(404);
-      return {
-        success: false,
-        data: null,
-        error: { code: 'NOT_FOUND', message: 'Route not found' },
-      };
+      return errorResponse({ code: 'NOT_FOUND' }, { locale: requestLocale(request) });
     }
 
     if (excludedPrefixes.some((prefix) => request.url === prefix || request.url.startsWith(prefix))) {
       reply.code(404);
-      return {
-        success: false,
-        data: null,
-        error: { code: 'NOT_FOUND', message: 'Route not found' },
-      };
+      return errorResponse({ code: 'NOT_FOUND' }, { locale: requestLocale(request) });
     }
 
     const pathname = decodeURIComponent(request.url.split('?')[0] ?? '/');

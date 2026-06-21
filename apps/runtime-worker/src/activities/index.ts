@@ -41,7 +41,7 @@ import {
 } from '@dar/contracts';
 import { ToolGatewayClient } from '@dar/tool-client';
 import type { UserMessage } from '@earendil-works/pi-ai';
-import { getToolGatewayUrl, loadConfig } from '@dar/config';
+import { getToolGatewayUrl, loadConfig, type RuntimeConfig } from '@dar/config';
 import {
   AgentContextSnapshotRepository,
   AgentExecutionPlanRepository,
@@ -152,7 +152,7 @@ function getProcessDb(): ReturnType<typeof createDb> {
   return processDb;
 }
 
-function createToolGatewayClient(config = loadConfig()): ToolGatewayClient {
+function createToolGatewayClient(config: RuntimeConfig = loadConfig()): ToolGatewayClient {
   return new ToolGatewayClient({
     baseUrl: getToolGatewayUrl(config),
     serviceIdentity: {
@@ -160,6 +160,9 @@ function createToolGatewayClient(config = loadConfig()): ToolGatewayClient {
       ...(config.RUNTIME_WORKER_TOOL_GATEWAY_TOKEN
         ? { token: config.RUNTIME_WORKER_TOOL_GATEWAY_TOKEN }
         : {}),
+    },
+    defaultHeaders: {
+      'accept-language': config.DEFAULT_LOCALE ?? 'zh-CN',
     },
   });
 }

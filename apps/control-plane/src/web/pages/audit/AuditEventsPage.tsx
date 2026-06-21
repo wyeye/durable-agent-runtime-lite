@@ -10,6 +10,7 @@ import { useApiClient } from '../../api/use-api-client.js';
 import { listAuditEvents } from '../../api/operations-api.js';
 import { formatDateTime } from '../../utils/format.js';
 import { stringifyPretty } from '../../utils/json.js';
+import { displayStatus } from '../../utils/i18n-labels.js';
 
 export function AuditEventsPage() {
   const client = useApiClient();
@@ -25,19 +26,20 @@ export function AuditEventsPage() {
 
   const columns: ColumnsType<AuditEvent> = [
     { title: 'event_id', dataIndex: 'event_id', key: 'event_id', render: (value: string, row) => <Button type="link" onClick={() => setSelected(row)}>{value.slice(0, 12)}</Button> },
-    { title: 'action', dataIndex: 'action', key: 'action' },
-    { title: 'target', key: 'target', render: (_, row) => `${row.target_type}/${row.target_id}` },
-    { title: 'result', dataIndex: 'result', key: 'result', render: (value: string) => <Tag>{value}</Tag> },
-    { title: 'actor', dataIndex: 'actor_id', key: 'actor_id', render: (value: string | undefined) => value ?? '-' },
-    { title: 'occurred_at', dataIndex: 'occurred_at', key: 'occurred_at', render: formatDateTime },
+    { title: '展示消息', dataIndex: 'display_message', key: 'display_message', render: (value: string | undefined, row) => value ?? row.action },
+    { title: '事件类型', dataIndex: 'action', key: 'action' },
+    { title: '目标', key: 'target', render: (_, row) => `${row.target_type}/${row.target_id}` },
+    { title: '结果', dataIndex: 'result', key: 'result', render: (value: string) => <Tag>{displayStatus(value)}</Tag> },
+    { title: '操作者', dataIndex: 'actor_id', key: 'actor_id', render: (value: string | undefined) => value ?? '-' },
+    { title: '发生时间', dataIndex: 'occurred_at', key: 'occurred_at', render: formatDateTime },
   ];
 
   return (
     <div className="cp-page">
       <div className="cp-page-header">
         <div>
-          <h1>Audit Events</h1>
-          <p>通过 control-plane BFF 查询 tool-gateway 审计事件，敏感字段由后端脱敏。</p>
+          <h1>审计日志</h1>
+          <p>通过控制台 BFF 查询 Tool Gateway 审计事件，敏感字段由后端脱敏。</p>
         </div>
         <Button onClick={() => query.refetch()} loading={query.isFetching}>刷新</Button>
       </div>
@@ -45,9 +47,9 @@ export function AuditEventsPage() {
         <Form layout="inline" className="cp-filter-bar" initialValues={filters} onFinish={(values) => setFilters({ page_size: '50', ...clean(values) })}>
           <Form.Item name="task_run_id"><Input placeholder="task_run_id" /></Form.Item>
           <Form.Item name="tool_name"><Input placeholder="tool_name" /></Form.Item>
-          <Form.Item name="event_type"><Input placeholder="event_type/action" /></Form.Item>
-          <Form.Item name="start_time"><Input placeholder="start_time ISO" /></Form.Item>
-          <Form.Item name="end_time"><Input placeholder="end_time ISO" /></Form.Item>
+          <Form.Item name="event_type"><Input placeholder="event_type / action" /></Form.Item>
+          <Form.Item name="start_time"><Input placeholder="开始时间 ISO" /></Form.Item>
+          <Form.Item name="end_time"><Input placeholder="结束时间 ISO" /></Form.Item>
           <Button htmlType="submit">查询</Button>
         </Form>
       </section>
@@ -59,10 +61,10 @@ export function AuditEventsPage() {
           columns={columns}
           dataSource={query.data ?? []}
           pagination={{ pageSize: 12 }}
-          locale={{ emptyText: <EmptyState description="暂无 AuditEvent" /> }}
+          locale={{ emptyText: <EmptyState description="暂无审计事件" /> }}
         />
       </section>
-      <Drawer title="Audit Detail" open={Boolean(selected)} onClose={() => setSelected(undefined)} width={720}>
+      <Drawer title="审计详情" open={Boolean(selected)} onClose={() => setSelected(undefined)} width={720}>
         {selected ? (
           <Space direction="vertical" style={{ width: '100%' }}>
             <Typography.Title level={4}>{selected.action}</Typography.Title>

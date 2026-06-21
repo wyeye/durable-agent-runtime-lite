@@ -148,13 +148,48 @@ describe('runtime-api router and task endpoints', () => {
 
     const response = await server.inject({ method: 'GET', url: '/version' });
     expect(response.statusCode).toBe(200);
+    expect(response.headers['content-language']).toBe('zh-CN');
+    expect(response.headers.vary).toContain('Accept-Language');
     expect(response.json()).toEqual({
       service: 'runtime-api',
       version: '9.9.9-test',
       build_sha: 'abc123',
       build_time: '2026-01-01T00:00:00Z',
+      message_key: 'common.health.versionReady',
+      message: '服务版本信息可用。',
+      locale: 'zh-CN',
     });
     expect(response.body).not.toContain('dev-only-placeholder');
+
+    await server.close();
+  });
+
+  it('localizes public errors and falls unsupported Accept-Language back to zh-CN', async () => {
+    const server = buildServer(undefined, undefined, undefined, undefined, undefined, headerAuthConfig);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/tasks',
+      headers: {
+        'accept-language': 'en-US',
+        'x-request-id': 'req_locale_1',
+      },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.headers['content-language']).toBe('zh-CN');
+    expect(response.headers.vary).toContain('Accept-Language');
+    expect(response.json()).toMatchObject({
+      success: false,
+      error: {
+        code: 'UNAUTHORIZED',
+        message_key: 'errors.unauthorized',
+        message: '请先完成身份认证。',
+        locale: 'zh-CN',
+      },
+      trace_id: 'req_locale_1',
+    });
 
     await server.close();
   });

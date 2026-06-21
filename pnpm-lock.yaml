@@ -17,6 +17,9 @@ importers:
       '@dar/db':
         specifier: workspace:*
         version: link:packages/db
+      '@dar/i18n':
+        specifier: workspace:*
+        version: link:packages/i18n
       '@dar/model-client':
         specifier: workspace:*
         version: link:packages/model-client
@@ -74,6 +77,9 @@ importers:
       '@dar/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@dar/i18n':
+        specifier: workspace:*
+        version: link:../../packages/i18n
       '@dar/logger':
         specifier: workspace:*
         version: link:../../packages/logger
@@ -107,6 +113,9 @@ importers:
       fastify:
         specifier: ^5.0.0
         version: 5.8.5
+      i18next:
+        specifier: 26.3.1
+        version: 26.3.1(typescript@5.8.3)
       jose:
         specifier: ^6.0.0
         version: 6.2.3
@@ -125,6 +134,9 @@ importers:
       react-dom:
         specifier: ^19.0.0
         version: 19.2.7(react@19.2.7)
+      react-i18next:
+        specifier: 17.0.8
+        version: 17.0.8(i18next@26.3.1(typescript@5.8.3))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(typescript@5.8.3)
       react-router:
         specifier: ^7.0.0
         version: 7.17.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -174,6 +186,9 @@ importers:
       '@dar/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@dar/i18n':
+        specifier: workspace:*
+        version: link:../../packages/i18n
       '@dar/logger':
         specifier: workspace:*
         version: link:../../packages/logger
@@ -247,6 +262,9 @@ importers:
       '@dar/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@dar/i18n':
+        specifier: workspace:*
+        version: link:../../packages/i18n
       '@dar/logger':
         specifier: workspace:*
         version: link:../../packages/logger
@@ -332,6 +350,9 @@ importers:
       '@dar/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@dar/i18n':
+        specifier: workspace:*
+        version: link:../../packages/i18n
       '@dar/logger':
         specifier: workspace:*
         version: link:../../packages/logger
@@ -452,8 +473,30 @@ importers:
         specifier: ^3.0.0
         version: 3.2.6(@types/node@24.13.2)(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0)
 
+  packages/i18n:
+    dependencies:
+      i18next:
+        specifier: 26.3.1
+        version: 26.3.1(typescript@5.8.3)
+      zod:
+        specifier: ^4.0.0
+        version: 4.4.3
+    devDependencies:
+      fastify:
+        specifier: ^5.0.0
+        version: 5.8.5
+      typescript:
+        specifier: ~5.8.3
+        version: 5.8.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.6(@types/node@24.13.2)(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0)
+
   packages/logger:
     dependencies:
+      '@dar/i18n':
+        specifier: workspace:*
+        version: link:../i18n
       pino:
         specifier: ^9.0.0
         version: 9.14.0
@@ -3091,6 +3134,9 @@ packages:
     resolution: {integrity: sha512-EQfezRg0NCZGNlhlDR3Evrw1FVL2G3LhU7EgPoxufQKruNBSYA8MiRPHeWbU+36o+Fhel0wMwM+sLEiBAlNLJA==}
     engines: {node: '>=10.0.0'}
 
+  html-parse-stringify@3.0.1:
+    resolution: {integrity: sha512-KknJ50kTInJ7qIScF3jeaFRpMpE8/lfiTdzf/twXyPBLAGrLRTmkz3AdTnKeh40X8k9L2fdYwEp/42WGXIRGcg==}
+
   http-errors@2.0.1:
     resolution: {integrity: sha512-4FbRdAX+bSdmo4AUFuS0WNiPz8NgFt+r8ThgNWmlrjQjt1Q7ZR9+zTlce2859x4KSXrwIsaeTqDoKQmtP8pLmQ==}
     engines: {node: '>= 0.8'}
@@ -3106,6 +3152,14 @@ packages:
   hyperdyperid@1.2.0:
     resolution: {integrity: sha512-Y93lCzHYgGWdrJ66yIktxiaGULYc6oGiABxhcO5AufBeOyoIdZF7bIfLaOrbM0iGIOXQQgxxRrFEnb+Y6w1n4A==}
     engines: {node: '>=10.18'}
+
+  i18next@26.3.1:
+    resolution: {integrity: sha512-txQqd5EULsqEh9OJqRH15aCaOuy/nLJyhw5EHCSKLKJE1aBbb3Zve2+uQIxgWhPm1QqUQoWyQBm2kfmmIrzkcQ==}
+    peerDependencies:
+      typescript: ^5 || ^6
+    peerDependenciesMeta:
+      typescript:
+        optional: true
 
   iconv-lite@0.6.3:
     resolution: {integrity: sha512-4fCk79wshMdzMp2rH06qWrJE4iolqLhCUH+OiuIgU++RB0+94NlDL81atO7GX55uUKueo0txHNtvEyI6D7WdMw==}
@@ -3611,6 +3665,22 @@ packages:
     resolution: {integrity: sha512-t0BRVXvbiE/o20Hfw669rLbMCDWtYZLvmJigy2f0MxsXF+71pxhR3xOkspmsO8h3ZlNzyibAmtCa3l4lYKk6gQ==}
     peerDependencies:
       react: ^19.2.7
+
+  react-i18next@17.0.8:
+    resolution: {integrity: sha512-0ooKbGLU8JXhe1zwpQUWIeXSgLPOfwJmgheWRIUpcoA0CpyabpGhayjdG+/eA5esC1AQ8h2jWpXjJfzQzeDOCw==}
+    peerDependencies:
+      i18next: '>= 26.2.0'
+      react: '>= 16.8.0'
+      react-dom: '*'
+      react-native: '*'
+      typescript: ^5 || ^6
+    peerDependenciesMeta:
+      react-dom:
+        optional: true
+      react-native:
+        optional: true
+      typescript:
+        optional: true
 
   react-is@18.3.1:
     resolution: {integrity: sha512-/LLMVyas0ljjAtoYiPqYiL8VWXzUUdThrmU5+n20DZv+a+ClRoevUzw5JxU+Ieh5/c87ytoTBV9G1FiKfNJdmg==}
@@ -4120,6 +4190,10 @@ packages:
         optional: true
       jsdom:
         optional: true
+
+  void-elements@3.1.0:
+    resolution: {integrity: sha512-Dhxzh5HZuiHQhbvTW9AMetFfBHDMYpo23Uo9btPXgdYP+3T5S+p+jgNy7spra+veYhBP2dCSgxR/i2Y02h5/6w==}
+    engines: {node: '>=0.10.0'}
 
   watchpack@2.5.2:
     resolution: {integrity: sha512-6i/00NBjP4yGPs+caKSyRfpTF/8Torsu0MOW3mMzIbhgISFder8i7xbqgHlLMwJrdiN8ndBV3UA1/AfzPSr+jg==}
@@ -7106,6 +7180,10 @@ snapshots:
 
   heap-js@2.7.1: {}
 
+  html-parse-stringify@3.0.1:
+    dependencies:
+      void-elements: 3.1.0
+
   http-errors@2.0.1:
     dependencies:
       depd: 2.0.0
@@ -7129,6 +7207,10 @@ snapshots:
       - supports-color
 
   hyperdyperid@1.2.0: {}
+
+  i18next@26.3.1(typescript@5.8.3):
+    optionalDependencies:
+      typescript: 5.8.3
 
   iconv-lite@0.6.3:
     dependencies:
@@ -7597,6 +7679,17 @@ snapshots:
       react: 19.2.7
       scheduler: 0.27.0
 
+  react-i18next@17.0.8(i18next@26.3.1(typescript@5.8.3))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(typescript@5.8.3):
+    dependencies:
+      '@babel/runtime': 7.29.7
+      html-parse-stringify: 3.0.1
+      i18next: 26.3.1(typescript@5.8.3)
+      react: 19.2.7
+      use-sync-external-store: 1.6.0(react@19.2.7)
+    optionalDependencies:
+      react-dom: 19.2.7(react@19.2.7)
+      typescript: 5.8.3
+
   react-is@18.3.1: {}
 
   react-refresh@0.18.0: {}
@@ -8031,6 +8124,8 @@ snapshots:
       - terser
       - tsx
       - yaml
+
+  void-elements@3.1.0: {}
 
   watchpack@2.5.2:
     dependencies:

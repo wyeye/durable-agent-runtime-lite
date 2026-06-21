@@ -1,5 +1,6 @@
 import type { ToolRiskLevel } from '@dar/contracts';
 import { Alert, Tag } from 'antd';
+import { displayRisk } from '../utils/i18n-labels.js';
 
 const colors: Record<ToolRiskLevel, string> = {
   L0: 'green',
@@ -11,9 +12,9 @@ const colors: Record<ToolRiskLevel, string> = {
 
 export function RiskTag({ risk }: { risk: ToolRiskLevel | string | undefined }) {
   if (!risk) {
-    return <Tag>unknown</Tag>;
+    return <Tag>未知</Tag>;
   }
-  return <Tag color={isRisk(risk) ? colors[risk] : 'default'}>{risk}</Tag>;
+  return <Tag color={isRisk(risk) ? colors[risk] : 'default'}>{displayRisk(risk)}</Tag>;
 }
 
 export function RiskNotice({ risk, sideEffect }: { risk: ToolRiskLevel | string | undefined; sideEffect?: boolean }) {

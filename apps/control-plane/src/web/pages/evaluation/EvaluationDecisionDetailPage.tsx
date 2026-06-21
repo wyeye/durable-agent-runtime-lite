@@ -31,7 +31,7 @@ export function EvaluationDecisionDetailPage() {
     mutationFn: async () => {
       const values = await form.validateFields();
       if (!query.data) {
-        throw new Error('Gate Decision 未加载');
+        throw new Error('门禁结论未加载');
       }
       return createOverride(client, query.data.decision.gate_decision_id, {
         resource_hash: query.data.decision.resource_hash,
@@ -54,8 +54,8 @@ export function EvaluationDecisionDetailPage() {
     <div className="cp-page">
       <div className="cp-page-header">
         <div>
-          <h1>Gate Decision Detail</h1>
-          <p><Link to="/evaluation/gates">Evaluation Gates</Link> / {decisionId}</p>
+          <h1>门禁结论详情</h1>
+          <p><Link to="/evaluation/gates">发布门禁</Link> / {decisionId}</p>
         </div>
         <Button onClick={() => query.refetch()} loading={query.isFetching}>刷新</Button>
       </div>
@@ -66,30 +66,30 @@ export function EvaluationDecisionDetailPage() {
           <section className="cp-section">
             <ExactRefDescriptions
               items={[
-                { label: 'decision', value: <GateDecisionBadge decision={item.decision.decision} /> },
-                { label: 'freshness', value: item.freshness.status },
-                { label: 'resource', value: `${item.decision.resource_type}/${item.decision.resource_id}@${item.decision.resource_version}` },
-                { label: 'resource hash', value: <HashText value={item.decision.resource_hash} /> },
-                { label: 'candidate bundle hash', value: <HashText value={item.decision.candidate_bundle_hash} /> },
-                { label: 'gate policy', value: `${item.decision.gate_policy_id}@${item.decision.gate_policy_version}` },
-                { label: 'gate policy hash', value: <HashText value={item.decision.gate_policy_hash} /> },
-                { label: 'run ids', value: item.decision.evaluation_run_ids.map((runId) => <Link key={runId} to={`/evaluation/runs/${encodeURIComponent(runId)}`}>{runId}</Link>) },
-                { label: 'decided_at', value: formatDateTime(item.decision.decided_at) },
-                { label: 'checked_at', value: formatDateTime(item.freshness.checked_at) },
+	                { label: '结论', value: <GateDecisionBadge decision={item.decision.decision} /> },
+	                { label: '新鲜度', value: item.freshness.status },
+	                { label: '资源', value: `${item.decision.resource_type}/${item.decision.resource_id}@${item.decision.resource_version}` },
+	                { label: '资源 hash', value: <HashText value={item.decision.resource_hash} /> },
+	                { label: '候选包 hash', value: <HashText value={item.decision.candidate_bundle_hash} /> },
+	                { label: 'Gate Policy', value: `${item.decision.gate_policy_id}@${item.decision.gate_policy_version}` },
+	                { label: 'Gate Policy hash', value: <HashText value={item.decision.gate_policy_hash} /> },
+	                { label: '评测任务', value: item.decision.evaluation_run_ids.map((runId) => <Link key={runId} to={`/evaluation/runs/${encodeURIComponent(runId)}`}>{runId}</Link>) },
+	                { label: '结论时间', value: formatDateTime(item.decision.decided_at) },
+	                { label: '检查时间', value: formatDateTime(item.freshness.checked_at) },
               ]}
             />
             <div style={{ marginTop: 12 }}><GateFreshnessAlert status={item.freshness.status} reasons={item.freshness.reasons} /></div>
           </section>
           <section className="cp-section">
-            <Typography.Title level={4}>Reasons</Typography.Title>
-            {item.decision.reasons.length ? item.decision.reasons.map((reason) => <p key={reason}>{reason}</p>) : <EmptyState description="无 Gate reason" />}
+	            <Typography.Title level={4}>原因</Typography.Title>
+	            {item.decision.reasons.length ? item.decision.reasons.map((reason) => <p key={reason}>{reason}</p>) : <EmptyState description="无门禁原因" />}
           </section>
           {isAdmin ? (
             <section className="cp-section">
               <Typography.Title level={4}>Override</Typography.Title>
-              <Typography.Paragraph type="secondary">Override 绑定当前 exact resource hash，reason 和 expires_at 必填。过期或 hash 改变后后端会阻断发布。</Typography.Paragraph>
+	              <Typography.Paragraph type="secondary">Override 绑定当前 exact resource hash，原因和过期时间必填。过期或 hash 改变后后端会阻断发布。</Typography.Paragraph>
               <Form form={form} layout="vertical">
-                <Form.Item name="reason" label="reason" rules={[{ required: true, min: 12 }]}>
+	                <Form.Item name="reason" label="原因" rules={[{ required: true, min: 12 }]}>
                   <Input.TextArea rows={3} />
                 </Form.Item>
                 <Form.Item name="expires_at" label="expires_at" rules={[{ required: true }]}>
@@ -100,8 +100,8 @@ export function EvaluationDecisionDetailPage() {
                     danger
                     loading={overrideMutation.isPending}
                     onClick={() => Modal.confirm({
-                      title: 'Create Gate Override',
-                      content: 'Override 会允许该 exact resource hash 使用当前 Gate Decision 发布，请确认风险和过期时间。',
+	                      title: '创建 Gate Override',
+	                      content: 'Override 会允许该 exact resource hash 使用当前门禁结论发布，请确认风险和过期时间。',
                       onOk: () => overrideMutation.mutate(),
                     })}
                   >
@@ -112,12 +112,12 @@ export function EvaluationDecisionDetailPage() {
             </section>
           ) : null}
           <section className="cp-section">
-            <Typography.Title level={4}>Safe JSON</Typography.Title>
+	            <Typography.Title level={4}>安全 JSON</Typography.Title>
             <SafeJsonPreview value={item} />
           </section>
         </>
       ) : (
-        <section className="cp-section"><EmptyState description="Gate Decision 未加载" /></section>
+	        <section className="cp-section"><EmptyState description="门禁结论未加载" /></section>
       )}
     </div>
   );

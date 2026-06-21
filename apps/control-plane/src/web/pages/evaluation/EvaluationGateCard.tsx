@@ -59,28 +59,28 @@ export function EvaluationGateCard({
     <section className="cp-section" data-testid="evaluation-gate-card">
       <div className="cp-page-header">
         <div>
-          <Typography.Title level={4} style={{ margin: 0 }}>Evaluation Gate</Typography.Title>
-          <Typography.Text type="secondary">Publish Gate 由后端按 exact hash/decision 判断，前端只传递选择的证据。</Typography.Text>
+          <Typography.Title level={4} style={{ margin: 0 }}>发布门禁</Typography.Title>
+          <Typography.Text type="secondary">发布门禁由后端按 exact hash/decision 判断，前端只传递选择的证据。</Typography.Text>
         </div>
         <Space>
           <Button size="small" onClick={() => query.refetch()} loading={query.isFetching}>刷新</Button>
-          <Link to={`/evaluation/runs?resource_id=${encodeURIComponent(record.resource_id)}`}>Run Evaluation</Link>
+	          <Link to={`/evaluation/runs?resource_id=${encodeURIComponent(record.resource_id)}`}>运行评测</Link>
         </Space>
       </div>
       {query.error ? <ErrorAlert error={query.error} /> : null}
       {latest && decision ? (
         <Space direction="vertical" style={{ width: '100%', marginTop: 12 }}>
           <Descriptions size="small" bordered column={{ xs: 1, md: 2 }}>
-            <Descriptions.Item label="latest decision"><GateDecisionBadge decision={decision?.decision} /></Descriptions.Item>
-            <Descriptions.Item label="freshness">{latest.freshness.status}</Descriptions.Item>
-            <Descriptions.Item label="decision id">
+	            <Descriptions.Item label="最新结论"><GateDecisionBadge decision={decision?.decision} /></Descriptions.Item>
+	            <Descriptions.Item label="新鲜度">{latest.freshness.status}</Descriptions.Item>
+	            <Descriptions.Item label="结论 ID">
               <Link to={`/evaluation/gate-decisions/${encodeURIComponent(decision.gate_decision_id)}`}>{decision.gate_decision_id}</Link>
             </Descriptions.Item>
-            <Descriptions.Item label="resource hash"><HashText value={decision.resource_hash} /></Descriptions.Item>
-            <Descriptions.Item label="current resource hash"><HashText value={record.sha256} /></Descriptions.Item>
-            <Descriptions.Item label="candidate bundle"><HashText value={decision.candidate_bundle_hash} /></Descriptions.Item>
-            <Descriptions.Item label="override">后端 publish 时解析 active override</Descriptions.Item>
-            <Descriptions.Item label="publish state">{latest.freshness.status === 'fresh' && decision.decision === 'passed' ? 'publish candidate available' : 'publish may be blocked'}</Descriptions.Item>
+	            <Descriptions.Item label="资源 hash"><HashText value={decision.resource_hash} /></Descriptions.Item>
+	            <Descriptions.Item label="当前资源 hash"><HashText value={record.sha256} /></Descriptions.Item>
+	            <Descriptions.Item label="候选包"><HashText value={decision.candidate_bundle_hash} /></Descriptions.Item>
+	            <Descriptions.Item label="Override">后端发布时解析 active override</Descriptions.Item>
+	            <Descriptions.Item label="发布状态">{latest.freshness.status === 'fresh' && decision.decision === 'passed' ? '可作为发布候选' : '发布可能被阻断'}</Descriptions.Item>
           </Descriptions>
           <GateFreshnessAlert status={latest.freshness.status} reasons={latest.freshness.reasons} />
           <Form
@@ -98,12 +98,12 @@ export function EvaluationGateCard({
               <Input />
             </Form.Item>
             <Form.Item name="evaluation_gate_override_id" label="evaluation_gate_override_id">
-              <Input placeholder="platform_admin override id, optional" />
+	              <Input placeholder="platform_admin override id，可选" />
             </Form.Item>
           </Form>
           <Space wrap>
             {decision.evaluation_run_ids.map((runId) => (
-              <Link key={runId} to={`/evaluation/runs/${encodeURIComponent(runId)}`}>Run {runId.slice(0, 12)}</Link>
+	              <Link key={runId} to={`/evaluation/runs/${encodeURIComponent(runId)}`}>评测任务 {runId.slice(0, 12)}</Link>
             ))}
           </Space>
         </Space>
@@ -112,8 +112,8 @@ export function EvaluationGateCard({
           style={{ marginTop: 12 }}
           type="warning"
           showIcon
-          message="No Evaluation Gate Decision returned"
-          description="需要先基于 exact Dataset 和 Execution Plan 创建 Evaluation Run。Publish 是否允许仍以后端响应为准。"
+	          message="未返回发布门禁结论"
+          description="需要先基于 exact Dataset 和 Execution Plan 创建评测任务。是否允许发布仍以后端响应为准。"
         />
       )}
     </section>

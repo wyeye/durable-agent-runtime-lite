@@ -26,6 +26,7 @@ export interface ConfigDrivenWorkflowInput {
   tenant_policy_hash?: string;
   tenant_admission_id?: string;
   task_status_owner?: boolean;
+  request_locale?: 'zh-CN';
   request_id: string;
   trace_id?: string;
   input_ref?: string;
@@ -47,6 +48,7 @@ export interface GenericAgentWorkflowInput {
   tenant_policy_snapshot_ref?: string;
   tenant_policy_hash?: string;
   tenant_admission_id?: string;
+  request_locale?: 'zh-CN';
   request_id: string;
   trace_id?: string;
   input_ref?: string;
@@ -78,6 +80,7 @@ export interface PiDurableAgentWorkflowInput {
   evaluation_execution_plan_ref?: string;
   evaluation_execution_plan_hash?: string;
   task_status_owner?: boolean;
+  request_locale?: 'zh-CN';
   request_id: string;
   trace_id?: string;
 }

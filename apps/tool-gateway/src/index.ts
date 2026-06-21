@@ -10,7 +10,14 @@ import type {
   ToolPreviewResponse,
 } from '@dar/contracts';
 import { getAppPort, getBuildInfo, loadConfig } from '@dar/config';
-import { createLogger } from '@dar/logger';
+import { createLogger, logErrorEvent, logEvent } from '@dar/logger';
+import {
+  errorResponse,
+  installFastifyLocale,
+  requestLocale,
+  successResponse,
+  zodErrorResponse,
+} from '@dar/i18n';
 import {
   ServiceAuthError,
   StaticServiceTokenVerifier,
@@ -37,43 +44,31 @@ const appName = 'tool-gateway' as const;
 const logger = createLogger(appName);
 
 function success<T>(data: T): StandardSuccessResponse<T> {
-  return { success: true, data, error: null };
+  return successResponse(data) as StandardSuccessResponse<T>;
 }
 
-function failure(error: unknown): StandardErrorResponse {
+function failure(error: unknown, locale?: unknown): StandardErrorResponse {
   if (error instanceof ZodError) {
-    return {
-      success: false,
-      data: null,
-      error: { code: 'VALIDATION_FAILED', message: '请求参数不合法', details: { issues: error.issues } },
-    };
+    return zodErrorResponse(error, { locale }) as StandardErrorResponse;
   }
 
-  return {
-    success: false,
-    data: null,
-    error: { code: 'INTERNAL_ERROR', message: '服务处理失败' },
-  };
+  return errorResponse({ code: 'INTERNAL_ERROR' }, { locale }) as StandardErrorResponse;
 }
 
-function authFailure(error: ServiceAuthError): StandardErrorResponse {
-  return {
-    success: false,
-    data: null,
-    error: {
-      code: error.code,
-      message: error.message,
-      ...(Object.keys(error.details).length > 0 ? { details: error.details } : {}),
-    },
-  };
+function authFailure(error: ServiceAuthError, locale?: unknown): StandardErrorResponse {
+  return errorResponse({
+    code: error.code,
+    ...(Object.keys(error.details).length > 0 ? { details: error.details } : {}),
+  }, { locale }) as StandardErrorResponse;
 }
 
-function runtimeFailure(error: RuntimeError): StandardErrorResponse {
-  return {
-    success: false,
-    data: null,
-    error,
-  };
+function runtimeFailure(error: RuntimeError, locale?: unknown): StandardErrorResponse {
+  return errorResponse({
+    code: error.code,
+    ...(error.message_key ? { messageKey: error.message_key } : {}),
+    ...(error.params ? { params: error.params as Record<string, string | number | boolean | null | undefined> } : {}),
+    ...(error.details ? { details: error.details } : {}),
+  }, { locale }) as StandardErrorResponse;
 }
 
 function deniedStatusCode(result: ToolInvokeResponse | ToolPreviewResponse | ToolCommitResponse): number {
@@ -124,6 +119,7 @@ export function buildServerWithReadiness(
   readiness?: ToolGatewayReadinessChecker,
 ): FastifyInstance {
   const server = Fastify({ logger: false });
+  installFastifyLocale(server);
   const serviceVerifier = new StaticServiceTokenVerifier({
     authMode: config.TOOL_GATEWAY_AUTH_MODE,
     nodeEnv: config.NODE_ENV,
@@ -137,26 +133,40 @@ export function buildServerWithReadiness(
     serviceVerifier.verify(request.headers, permission);
   }
 
-  server.get('/healthz', async () => ({
+  server.get('/healthz', async (request) => ({
     status: 'ok',
     app: appName,
+    message_key: 'common.health.processAlive',
+    message: request.t('common.health.processAlive'),
+    locale: request.locale,
   }));
 
-  server.get('/version', async () => getBuildInfo(appName, config));
+  server.get('/version', async (request) => ({
+    ...getBuildInfo(appName, config),
+    message_key: 'common.health.versionReady',
+    message: request.t('common.health.versionReady'),
+    locale: request.locale,
+  }));
 
-  server.get('/readyz', async (_request, reply) => {
+  server.get('/readyz', async (request, reply) => {
     if (readiness) {
       const result = await readiness.check();
       reply.code(result.ready ? 200 : 503);
       return {
         status: result.ready ? 'ready' : 'not_ready',
         app: appName,
+        message_key: result.ready ? 'common.readiness.serviceReady' : 'common.readiness.serviceNotReady',
+        message: request.t(result.ready ? 'common.readiness.serviceReady' : 'common.readiness.serviceNotReady'),
+        locale: request.locale,
         ...result,
       };
     }
     return {
       status: 'ready',
       app: appName,
+      message_key: 'common.readiness.serviceReady',
+      message: request.t('common.readiness.serviceReady'),
+      locale: request.locale,
       checks: {
         config: 'ok',
         registry: 'ok',
@@ -172,10 +182,10 @@ export function buildServerWithReadiness(
     } catch (error) {
       if (error instanceof ServiceAuthError) {
         reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
-        return authFailure(error);
+        return authFailure(error, requestLocale(request));
       }
       reply.code(500);
-      return failure(error);
+      return failure(error, requestLocale(request));
     }
   });
 
@@ -187,16 +197,16 @@ export function buildServerWithReadiness(
       const manifest = await toolService.getTool(toolName, tenantId);
       if (!manifest) {
         reply.code(404);
-        return { success: false, data: null, error: { code: 'TOOL_NOT_FOUND', message: '工具未注册' } };
+        return errorResponse({ code: 'TOOL_NOT_FOUND' }, { locale: requestLocale(request) });
       }
       return success(manifest);
     } catch (error) {
       if (error instanceof ServiceAuthError) {
         reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
-        return authFailure(error);
+        return authFailure(error, requestLocale(request));
       }
       reply.code(500);
-      return failure(error);
+      return failure(error, requestLocale(request));
     }
   });
 
@@ -207,8 +217,7 @@ export function buildServerWithReadiness(
       const result = await toolService.invoke(toolName, request.body);
       if (result.status === 'denied') {
         reply.code(deniedStatusCode(result));
-        logger.info(
-          {
+        logEvent(logger, 'info', 'tool.denied', { tool_name: toolName }, compactBindings({
             request_id: (request.body as { request_id?: string } | undefined)?.request_id,
             tenant_id: (request.body as { tenant_id?: string } | undefined)?.tenant_id,
             user_id: ((request.body as { user_context?: Record<string, unknown> } | undefined)?.user_context?.user_id as string | undefined),
@@ -216,29 +225,24 @@ export function buildServerWithReadiness(
             tool_name: toolName,
             status: result.status,
             error_code: result.error?.code,
-          },
-          'tool invoke denied',
-        );
-        return runtimeFailure(deniedError(result));
+        }));
+        return runtimeFailure(deniedError(result), requestLocale(request));
       }
-      logger.info(
-        {
+      logEvent(logger, 'info', 'tool.committed', { tool_name: toolName }, compactBindings({
           request_id: (request.body as { request_id?: string } | undefined)?.request_id,
           tenant_id: (request.body as { tenant_id?: string } | undefined)?.tenant_id,
           user_id: ((request.body as { user_context?: Record<string, unknown> } | undefined)?.user_context?.user_id as string | undefined),
           task_run_id: ((request.body as { task_context?: Record<string, unknown> } | undefined)?.task_context?.task_run_id as string | undefined),
           tool_name: toolName,
-        },
-        'tool invoked',
-      );
+      }));
       return success(result);
     } catch (error) {
       if (error instanceof ServiceAuthError) {
         reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
-        return authFailure(error);
+        return authFailure(error, requestLocale(request));
       }
       reply.code(error instanceof ZodError ? 400 : 500);
-      return failure(error);
+      return failure(error, requestLocale(request));
     }
   });
 
@@ -249,16 +253,16 @@ export function buildServerWithReadiness(
       const result = await toolService.preview(toolName, request.body);
       if (result.status === 'denied') {
         reply.code(deniedStatusCode(result));
-        return runtimeFailure(deniedError(result));
+        return runtimeFailure(deniedError(result), requestLocale(request));
       }
       return success(result);
     } catch (error) {
       if (error instanceof ServiceAuthError) {
         reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
-        return authFailure(error);
+        return authFailure(error, requestLocale(request));
       }
       reply.code(error instanceof ZodError ? 400 : 500);
-      return failure(error);
+      return failure(error, requestLocale(request));
     }
   });
 
@@ -269,30 +273,30 @@ export function buildServerWithReadiness(
       const result = await toolService.commit(toolName, request.body);
       if (result.status === 'denied' || result.status === 'failed') {
         reply.code(deniedStatusCode(result));
-        return runtimeFailure(deniedError(result));
+        return runtimeFailure(deniedError(result), requestLocale(request));
       }
       return success(result);
     } catch (error) {
       if (error instanceof ServiceAuthError) {
         reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
-        return authFailure(error);
+        return authFailure(error, requestLocale(request));
       }
       reply.code(error instanceof ZodError ? 400 : 500);
-      return failure(error);
+      return failure(error, requestLocale(request));
     }
   });
 
   server.get('/v1/audit-events', async (request, reply) => {
     try {
       authorize(request, 'audit:read');
-      return success(await toolService.listAuditEvents(request.query));
+      return success(await toolService.listAuditEvents(request.query, requestLocale(request)));
     } catch (error) {
       if (error instanceof ServiceAuthError) {
         reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
-        return authFailure(error);
+        return authFailure(error, requestLocale(request));
       }
       reply.code(500);
-      return failure(error);
+      return failure(error, requestLocale(request));
     }
   });
 
@@ -303,10 +307,10 @@ export function buildServerWithReadiness(
     } catch (error) {
       if (error instanceof ServiceAuthError) {
         reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
-        return authFailure(error);
+        return authFailure(error, requestLocale(request));
       }
       reply.code(500);
-      return failure(error);
+      return failure(error, requestLocale(request));
     }
   });
 
@@ -317,20 +321,16 @@ export function buildServerWithReadiness(
       const toolCall = await toolService.getToolCall(toolCallId);
       if (!toolCall) {
         reply.code(404);
-        return {
-          success: false,
-          data: null,
-          error: { code: 'TOOL_CALL_NOT_FOUND', message: '工具调用记录不存在' },
-        };
+        return errorResponse({ code: 'TOOL_CALL_NOT_FOUND' }, { locale: requestLocale(request) });
       }
       return success(toolCall);
     } catch (error) {
       if (error instanceof ServiceAuthError) {
         reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
-        return authFailure(error);
+        return authFailure(error, requestLocale(request));
       }
       reply.code(500);
-      return failure(error);
+      return failure(error, requestLocale(request));
     }
   });
 
@@ -338,31 +338,23 @@ export function buildServerWithReadiness(
     try {
       if (!config.TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED) {
         reply.code(404);
-        return {
-          success: false,
-          data: null,
-          error: { code: 'DEBUG_ENDPOINT_DISABLED', message: 'Debug endpoint is disabled' },
-        };
+        return errorResponse({ code: 'DEBUG_ENDPOINT_DISABLED' }, { locale: requestLocale(request) });
       }
       authorize(request, 'idempotency:debug');
       const { idempotencyKey } = request.params as { idempotencyKey: string };
       const record = await toolService.getIdempotencyRecord(idempotencyKey);
       if (!record) {
         reply.code(404);
-        return {
-          success: false,
-          data: null,
-          error: { code: 'IDEMPOTENCY_RECORD_NOT_FOUND', message: '幂等记录不存在' },
-        };
+        return errorResponse({ code: 'IDEMPOTENCY_RECORD_NOT_FOUND' }, { locale: requestLocale(request) });
       }
       return success(record);
     } catch (error) {
       if (error instanceof ServiceAuthError) {
         reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403);
-        return authFailure(error);
+        return authFailure(error, requestLocale(request));
       }
       reply.code(500);
-      return failure(error);
+      return failure(error, requestLocale(request));
     }
   });
 
@@ -429,6 +421,10 @@ function isProductionRuntime(config: RuntimeConfig): boolean {
   return config.NODE_ENV === 'production' || config.APP_ENV === 'production';
 }
 
+function compactBindings(input: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+}
+
 export async function start(): Promise<void> {
   const config = loadConfig();
   const { toolService, close, db, registry, tenantPolicySnapshotStore } = createToolGatewayService(config);
@@ -446,14 +442,14 @@ export async function start(): Promise<void> {
   });
 
   await server.listen({ host: config.HOST, port });
-  logger.info({ app: appName, port, host: config.HOST }, `${appName} listening`);
+  logEvent(logger, 'info', 'app.started', { service: appName }, { app: appName, port, host: config.HOST });
 }
 
 const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
 
 if (isMain) {
   start().catch((error: unknown) => {
-    logger.error({ err: error }, `${appName} startup failed`);
+    logErrorEvent(logger, 'app.startup_failed', error, { service: appName }, { app: appName });
     process.exit(1);
   });
 }

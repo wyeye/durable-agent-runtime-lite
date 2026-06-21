@@ -12,6 +12,7 @@ import { RiskTag } from '../../components/RiskTag.js';
 import { useApiClient } from '../../api/use-api-client.js';
 import { approveHumanTask, getHumanTask, listHumanTasks, rejectHumanTask } from '../../api/operations-api.js';
 import { formatDateTime } from '../../utils/format.js';
+import { displayStatus } from '../../utils/i18n-labels.js';
 import { stringifyPretty } from '../../utils/json.js';
 
 const statuses = ['created', 'assigned', 'pending', 'approved', 'resolved', 'rejected', 'cancelled', 'expired'];
@@ -39,7 +40,7 @@ export function HumanTasksPage() {
   const decisionMutation = useMutation({
     mutationFn: async (values: { release_note: string }) => {
       if (!selectedId || !decision) {
-        throw new Error('请选择 Human Task 和审批动作');
+        throw new Error('请选择人工任务和审批动作');
       }
       return decision === 'approve'
         ? approveHumanTask(client, selectedId, values.release_note)
@@ -53,20 +54,20 @@ export function HumanTasksPage() {
   });
 
   const columns: ColumnsType<HumanTask> = [
-    { title: 'human_task_id', dataIndex: 'human_task_id', key: 'human_task_id', render: (value: string) => <Button type="link" onClick={() => setSelectedId(value)}>{value}</Button> },
-    { title: 'status', dataIndex: 'status', key: 'status', render: (value: string) => <Tag>{value}</Tag> },
+    { title: '人工任务 ID', dataIndex: 'human_task_id', key: 'human_task_id', render: (value: string) => <Button type="link" onClick={() => setSelectedId(value)}>{value}</Button> },
+    { title: '状态', dataIndex: 'status', key: 'status', render: (value: string) => <Tag>{displayStatus(value)}</Tag> },
     { title: 'task_run_id', dataIndex: 'task_run_id', key: 'task_run_id' },
     { title: 'workflow_id', dataIndex: 'workflow_id', key: 'workflow_id', render: (value: string | undefined) => value ?? '-' },
-    { title: 'risk', key: 'risk', render: (_, row) => <RiskTag risk={riskFromPayload(row.payload)} /> },
-    { title: 'created_at', dataIndex: 'created_at', key: 'created_at', render: formatDateTime },
+    { title: '风险', key: 'risk', render: (_, row) => <RiskTag risk={riskFromPayload(row.payload)} /> },
+    { title: '创建时间', dataIndex: 'created_at', key: 'created_at', render: formatDateTime },
     {
-      title: 'decision',
+      title: '审批',
       key: 'decision',
       render: (_, row) => row.status === 'pending' ? (
         <Can permission="human_task:decide">
           <Space>
-            <Button size="small" type="primary" onClick={() => { setSelectedId(row.human_task_id); setDecision('approve'); }} data-testid="human-approve">Approve</Button>
-            <Button size="small" danger onClick={() => { setSelectedId(row.human_task_id); setDecision('reject'); }} data-testid="human-reject">Reject</Button>
+            <Button size="small" type="primary" onClick={() => { setSelectedId(row.human_task_id); setDecision('approve'); }} data-testid="human-approve">批准</Button>
+            <Button size="small" danger onClick={() => { setSelectedId(row.human_task_id); setDecision('reject'); }} data-testid="human-reject">拒绝</Button>
           </Space>
         </Can>
       ) : '-',
@@ -77,7 +78,7 @@ export function HumanTasksPage() {
     <div className="cp-page">
       <div className="cp-page-header">
         <div>
-          <h1>Human Tasks</h1>
+          <h1>人工任务</h1>
           <p>查看和审批 L3/L4 或人工介入任务，状态机仍由 runtime-api/Temporal 维护。</p>
         </div>
         <Button onClick={() => listQuery.refetch()} loading={listQuery.isFetching}>刷新</Button>
@@ -85,7 +86,7 @@ export function HumanTasksPage() {
       <ReadOnlyNotice />
       <section className="cp-section">
         <Form layout="inline" className="cp-filter-bar" initialValues={filters} onFinish={(values) => setFilters({ page_size: '50', ...clean(values) })}>
-          <Form.Item name="status"><Select allowClear placeholder="status" style={{ width: 160 }} options={statuses.map((status) => ({ value: status, label: status }))} /></Form.Item>
+          <Form.Item name="status"><Select allowClear placeholder="状态" style={{ width: 160 }} options={statuses.map((status) => ({ value: status, label: displayStatus(status) }))} /></Form.Item>
           <Form.Item name="task_run_id"><Input placeholder="task_run_id" /></Form.Item>
           <Button htmlType="submit">查询</Button>
         </Form>
@@ -98,21 +99,21 @@ export function HumanTasksPage() {
           columns={columns}
           dataSource={listQuery.data?.human_tasks ?? []}
           pagination={{ pageSize: 12 }}
-          locale={{ emptyText: <EmptyState description="暂无 Human Task" /> }}
+          locale={{ emptyText: <EmptyState description="暂无人工任务" /> }}
         />
       </section>
-      <Drawer title="Human Task Detail" open={Boolean(selectedId)} onClose={() => setSelectedId(undefined)} width={720}>
+      <Drawer title="人工任务详情" open={Boolean(selectedId)} onClose={() => setSelectedId(undefined)} width={720}>
         {detailQuery.error ? <ErrorAlert error={detailQuery.error} /> : null}
         {detailQuery.data?.human_task ? (
           <Space direction="vertical" style={{ width: '100%' }}>
             <Typography.Title level={4}>{detailQuery.data.human_task.human_task_id}</Typography.Title>
             <div className="cp-risk-line">
-              <Tag>{detailQuery.data.human_task.status}</Tag>
+              <Tag>{displayStatus(detailQuery.data.human_task.status)}</Tag>
               <RiskTag risk={riskFromPayload(detailQuery.data.human_task.payload)} />
             </div>
-            <Typography.Title level={5}>Tool preview / payload</Typography.Title>
+            <Typography.Title level={5}>工具预览 / 载荷</Typography.Title>
             <pre className="cp-json-pre">{stringifyPretty(detailQuery.data.human_task.payload)}</pre>
-            <Typography.Title level={5}>Decision history</Typography.Title>
+            <Typography.Title level={5}>审批历史</Typography.Title>
             <pre className="cp-json-pre">{stringifyPretty({
               decision: detailQuery.data.human_task.decision,
               decided_by: detailQuery.data.human_task.decided_by,
@@ -123,10 +124,10 @@ export function HumanTasksPage() {
         ) : null}
       </Drawer>
       <ConfirmActionModal
-        title={decision === 'approve' ? 'Approve Human Task' : 'Reject Human Task'}
+        title={decision === 'approve' ? '批准人工任务' : '拒绝人工任务'}
         open={Boolean(decision)}
         loading={decisionMutation.isPending}
-        noteLabel="decision reason"
+        noteLabel="审批原因"
         onCancel={() => setDecision(undefined)}
         onConfirm={(values) => decisionMutation.mutate({ release_note: values.release_note })}
       />

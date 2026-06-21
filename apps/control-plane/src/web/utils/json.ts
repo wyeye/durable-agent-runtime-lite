@@ -10,7 +10,7 @@ export function parseJson(text: string): JsonParseResult {
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : 'JSON parse failed',
+      error: error instanceof Error ? error.message : 'JSON 解析失败',
     };
   }
 }

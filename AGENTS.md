@@ -54,6 +54,16 @@ Core rules:
 - Running workflow instances must not be affected by newer FlowSpec versions.
 - Medium-risk and high-risk side-effect actions must support preview, human confirmation, idempotency and audit.
 
+Internationalization rules:
+
+- First-version locale support is `zh-CN` only; do not add empty `en-US` resource files or a language switcher until real English copy is implemented.
+- Keep machine fields stable and untranslated: error codes, event codes, event types, status enums, resource types, API paths, JSON field names, ids, hashes, model ids, tool names and provider ids.
+- Localize only display text such as API `message`, UI labels, status labels, safe error explanations, log messages, audit display messages, OpenAPI descriptions, validation messages and health/readiness descriptions.
+- API responses use request `Accept-Language` and set `Content-Language` plus `Vary: Accept-Language`; unsupported languages fall back to `zh-CN`.
+- Runtime logs use deployment-level `LOG_LOCALE`, not per-request locale.
+- Audit facts must remain `event_type`, `message_key` and `message_params`; `display_message` is a render result, not the source of truth.
+- Locale must not affect Workflow branching, policy decisions, idempotency keys, hashes, signatures or authorization.
+
 ---
 
 ## 3. Production Apps

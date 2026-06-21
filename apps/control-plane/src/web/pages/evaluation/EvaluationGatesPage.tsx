@@ -12,6 +12,7 @@ import { useApiClient } from '../../api/use-api-client.js';
 import { createGatePolicy, listGatePolicies } from '../../api/evaluation-api.js';
 import { formatDateTime } from '../../utils/format.js';
 import { parseJson, stringifyPretty } from '../../utils/json.js';
+import { displayStatus } from '../../utils/i18n-labels.js';
 import { EvaluationStatusTag, HashText } from './evaluation-utils.js';
 
 const statuses: EvaluationDatasetStatus[] = ['draft', 'validated', 'published', 'deprecated', 'disabled'];
@@ -43,7 +44,7 @@ export function EvaluationGatesPage() {
       return createGatePolicy(client, parsed.value as { policy: EvaluationGatePolicy });
     },
     onSuccess: async (policy) => {
-      message.success('Gate Policy draft 已创建');
+      message.success('发布门禁策略草稿已创建');
       setCreateOpen(false);
       await queryClient.invalidateQueries({ queryKey: ['evaluation-gate-policies'] });
       navigate(`/evaluation/gates/${encodeURIComponent(policy.gate_policy_id)}/versions/${policy.version}`);
@@ -59,21 +60,21 @@ export function EvaluationGatesPage() {
         <Link to={`/evaluation/gates/${encodeURIComponent(value)}/versions/${row.version}`}>{value}</Link>
       ),
     },
-    { title: 'version', dataIndex: 'version', key: 'version', width: 90 },
-    { title: 'status', dataIndex: 'status', key: 'status', render: (status: string) => <EvaluationStatusTag status={status} /> },
-    { title: 'resource types', dataIndex: 'resource_types', key: 'resource_types', render: (values: string[]) => values.join(', ') },
-    { title: 'required datasets', dataIndex: 'required_dataset_refs', key: 'datasets', render: (values: EvaluationGatePolicy['required_dataset_refs']) => values.map((ref) => `${ref.dataset_id}@${ref.version}`).join(', ') },
+    { title: '版本', dataIndex: 'version', key: 'version', width: 90 },
+    { title: '状态', dataIndex: 'status', key: 'status', render: (status: string) => <EvaluationStatusTag status={status} /> },
+    { title: '资源类型', dataIndex: 'resource_types', key: 'resource_types', render: (values: string[]) => values.join(', ') },
+    { title: '必需数据集', dataIndex: 'required_dataset_refs', key: 'datasets', render: (values: EvaluationGatePolicy['required_dataset_refs']) => values.map((ref) => `${ref.dataset_id}@${ref.version}`).join(', ') },
     { title: 'allow_override', dataIndex: 'allow_override', key: 'allow_override', render: String },
     { title: 'hash', dataIndex: 'gate_policy_hash', key: 'hash', render: (value: string | undefined) => <HashText value={value} /> },
-    { title: 'updated_at', dataIndex: 'updated_at', key: 'updated_at', render: formatDateTime },
+    { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', render: formatDateTime },
   ];
 
   return (
     <div className="cp-page">
       <div className="cp-page-header">
         <div>
-          <h1>Evaluation Gates</h1>
-          <p>管理 Gate Policy exact Dataset refs，并查看 Gate Decision。</p>
+          <h1>发布门禁</h1>
+          <p>管理 Gate Policy 的 exact Dataset 引用，并查看门禁结论。</p>
         </div>
         <Space>
           <Button onClick={() => query.refetch()} loading={query.isFetching}>刷新</Button>
@@ -85,7 +86,7 @@ export function EvaluationGatesPage() {
       <ReadOnlyNotice />
       <section className="cp-section">
         <Form layout="inline" className="cp-filter-bar" onFinish={(values) => setFilters(clean(values))}>
-          <Form.Item name="status"><Select allowClear placeholder="status" style={{ width: 160 }} options={statuses.map((status) => ({ value: status, label: status }))} /></Form.Item>
+          <Form.Item name="status"><Select allowClear placeholder="状态" style={{ width: 160 }} options={statuses.map((status) => ({ value: status, label: displayStatus(status) }))} /></Form.Item>
           <Button htmlType="submit">查询</Button>
         </Form>
       </section>
@@ -97,10 +98,10 @@ export function EvaluationGatesPage() {
           columns={columns}
           dataSource={query.data?.items ?? []}
           pagination={{ pageSize: 12 }}
-          locale={{ emptyText: <EmptyState description="暂无 Gate Policy" /> }}
+          locale={{ emptyText: <EmptyState description="暂无发布门禁策略" /> }}
         />
       </section>
-      <Drawer title="创建 Gate Policy draft" open={createOpen} onClose={() => setCreateOpen(false)} width={820}>
+      <Drawer title="创建发布门禁策略草稿" open={createOpen} onClose={() => setCreateOpen(false)} width={820}>
         {createMutation.error ? <ErrorAlert error={createMutation.error} /> : null}
         <Space direction="vertical" style={{ width: '100%' }}>
           <JsonEditor value={createText} onChange={setCreateText} minRows={18} />

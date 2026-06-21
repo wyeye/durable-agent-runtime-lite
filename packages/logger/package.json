@@ -11,6 +11,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@dar/i18n": "workspace:*",
     "pino": "^9.0.0"
   },
   "devDependencies": {

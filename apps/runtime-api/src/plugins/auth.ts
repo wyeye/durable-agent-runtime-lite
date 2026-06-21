@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { RuntimeConfig } from '@dar/config';
+import { errorResponse, requestLocale } from '@dar/i18n';
 import type { AuthContext, ControlPlanePermission } from '@dar/security';
 import {
   AuthError,
@@ -38,7 +39,7 @@ export function runtimeAuthPlugin(server: FastifyInstance, options: { config: Ru
       request.authContext.request_id ??= createRequestId();
     } catch (error) {
       if (error instanceof AuthError) {
-        await sendAuthError(reply, error);
+        await sendAuthError(reply, error, request);
         return;
       }
       throw error;
@@ -170,14 +171,13 @@ function headerValue(request: FastifyRequest, name: string): string | undefined 
   return Array.isArray(value) ? value[0] : value;
 }
 
-async function sendAuthError(reply: FastifyReply, error: AuthError): Promise<void> {
-  reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403).send({
-    success: false,
-    data: null,
-    error: {
-      code: error.code,
-      message: error.message,
-      ...(Object.keys(error.details).length > 0 ? { details: error.details } : {}),
-    },
-  });
+async function sendAuthError(reply: FastifyReply, error: AuthError, request?: FastifyRequest): Promise<void> {
+  const traceId = request ? headerValue(request, 'x-request-id') : undefined;
+  reply.code(error.code === 'UNAUTHORIZED' ? 401 : 403).send(errorResponse({
+    code: error.code,
+    ...(Object.keys(error.details).length > 0 ? { details: error.details } : {}),
+  }, {
+    ...(request ? { locale: requestLocale(request) } : {}),
+    ...(traceId ? { traceId } : {}),
+  }));
 }

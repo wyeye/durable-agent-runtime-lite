@@ -98,7 +98,7 @@ export function EvaluationDatasetDetailPage() {
   const validateMutation = useMutation({
     mutationFn: () => validateDataset(client, datasetId!, datasetVersion),
     onSuccess: async (dataset) => {
-      message.success('validate 已完成');
+      message.success('校验已完成');
       await refresh(dataset);
     },
   });
@@ -114,7 +114,7 @@ export function EvaluationDatasetDetailPage() {
   const cloneMutation = useMutation({
     mutationFn: () => cloneDataset(client, datasetId!, datasetVersion),
     onSuccess: async (dataset) => {
-      message.success('已 clone 新 draft');
+      message.success('已克隆新草稿');
       await refresh(dataset);
     },
   });
@@ -122,12 +122,12 @@ export function EvaluationDatasetDetailPage() {
   const rollbackMutation = useMutation({
     mutationFn: () => {
       if (!rollbackTarget || !datasetId) {
-        throw new Error('请选择 rollback target_version');
+        throw new Error('请选择回滚目标版本');
       }
       return rollbackDataset(client, datasetId, { target_version: rollbackTarget });
     },
     onSuccess: async (dataset) => {
-      message.success('Dataset rollback 已完成');
+      message.success('Dataset 回滚已完成');
       setRollbackTarget(undefined);
       await refresh(dataset);
     },
@@ -170,21 +170,21 @@ export function EvaluationDatasetDetailPage() {
 
   const caseColumns: ColumnsType<EvaluationCase> = [
     {
-      title: 'case',
+      title: 'Case',
       dataIndex: 'case_id',
       key: 'case_id',
       render: (value: string, row) => (
         <Button type="link" onClick={() => openCaseEditor(row)}>{value}</Button>
       ),
     },
-    { title: 'enabled', dataIndex: 'enabled', key: 'enabled', render: (value: boolean) => <Switch size="small" checked={value} disabled /> },
-    { title: 'weight', dataIndex: 'weight', key: 'weight', width: 90 },
-    { title: 'expected status', dataIndex: 'expected_status', key: 'expected_status', render: (value: string | undefined) => value ?? '-' },
-    { title: 'tool assertions', dataIndex: 'expected_tool_calls', key: 'tools', render: (value: unknown[]) => value?.length ?? 0 },
-    { title: 'final assertions', dataIndex: 'final_assertions', key: 'final', render: (value: unknown[]) => value?.length ?? 0 },
-    { title: 'performance budget', key: 'budget', render: (_, row) => budgetText(row) },
+    { title: '启用', dataIndex: 'enabled', key: 'enabled', render: (value: boolean) => <Switch size="small" checked={value} disabled /> },
+    { title: '权重', dataIndex: 'weight', key: 'weight', width: 90 },
+    { title: '预期状态', dataIndex: 'expected_status', key: 'expected_status', render: (value: string | undefined) => value ?? '-' },
+    { title: '工具断言', dataIndex: 'expected_tool_calls', key: 'tools', render: (value: unknown[]) => value?.length ?? 0 },
+    { title: '最终断言', dataIndex: 'final_assertions', key: 'final', render: (value: unknown[]) => value?.length ?? 0 },
+    { title: '性能预算', key: 'budget', render: (_, row) => budgetText(row) },
     {
-      title: 'actions',
+      title: '操作',
       key: 'actions',
       render: (_, row) => (
         <Space>
@@ -215,16 +215,16 @@ export function EvaluationDatasetDetailPage() {
     <div className="cp-page">
       <div className="cp-page-header">
         <div>
-          <h1>Dataset Detail</h1>
-          <p><Link to="/evaluation/datasets">Evaluation Datasets</Link> / {datasetId}@{version}</p>
+          <h1>评测数据集详情</h1>
+          <p><Link to="/evaluation/datasets">评测数据集</Link> / {datasetId}@{version}</p>
         </div>
         <Space wrap>
           <Button onClick={() => datasetQuery.refetch()} loading={datasetQuery.isFetching}>刷新</Button>
           <Can permission="registry:write">
-            <Button onClick={() => cloneMutation.mutate()} loading={cloneMutation.isPending}>clone</Button>
+            <Button onClick={() => cloneMutation.mutate()} loading={cloneMutation.isPending}>克隆</Button>
           </Can>
           <Can permission="registry:validate">
-            <Button disabled={!editable} onClick={() => validateMutation.mutate()} loading={validateMutation.isPending}>validate</Button>
+            <Button disabled={!editable} onClick={() => validateMutation.mutate()} loading={validateMutation.isPending}>校验</Button>
           </Can>
           <Can permission="registry:publish">
             <Button
@@ -233,13 +233,13 @@ export function EvaluationDatasetDetailPage() {
               loading={publishMutation.isPending}
               onClick={() => {
                 Modal.confirm({
-                  title: 'Publish Dataset exact version',
+                  title: '发布 Dataset exact 版本',
                   content: '发布后 Dataset hash 将作为评测源，不会被运行中的 Evaluation Run 自动改写。',
                   onOk: () => publishMutation.mutate(),
                 });
               }}
             >
-              publish
+              发布
             </Button>
           </Can>
         </Space>
@@ -261,20 +261,20 @@ export function EvaluationDatasetDetailPage() {
               <Descriptions.Item label="status"><EvaluationStatusTag status={dataset.status} /></Descriptions.Item>
               <Descriptions.Item label="revision">{dataset.revision}</Descriptions.Item>
               <Descriptions.Item label="domain">{dataset.domain ?? '-'}</Descriptions.Item>
-              <Descriptions.Item label="enabled cases">{enabledCases}/{cases.length}</Descriptions.Item>
+              <Descriptions.Item label="启用 Case">{enabledCases}/{cases.length}</Descriptions.Item>
               <Descriptions.Item label="dataset hash"><HashText value={dataset.dataset_hash} /></Descriptions.Item>
               <Descriptions.Item label="updated_at">{formatDateTime(dataset.updated_at)}</Descriptions.Item>
               <Descriptions.Item label="published_at">{formatDateTime(dataset.published_at)}</Descriptions.Item>
             </Descriptions>
             <div style={{ marginTop: 12 }}>
-              <CopyHashButton value={dataset.dataset_hash} label="copy dataset hash" />
+              <CopyHashButton value={dataset.dataset_hash} label="复制 dataset hash" />
             </div>
           </section>
           <Tabs
             items={[
               {
                 key: 'metadata',
-                label: 'Metadata',
+	                label: '元数据',
                 children: (
                   <section className="cp-section">
                     <Space direction="vertical" style={{ width: '100%' }}>
@@ -290,20 +290,20 @@ export function EvaluationDatasetDetailPage() {
                           保存 draft
                         </Button>
                       </Can>
-                      {!editable ? <Typography.Text type="secondary">published Dataset 只读；需要修改请 clone 新版本。</Typography.Text> : null}
+	                      {!editable ? <Typography.Text type="secondary">已发布 Dataset 只读；需要修改请克隆新版本。</Typography.Text> : null}
                     </Space>
                   </section>
                 ),
               },
               {
                 key: 'cases',
-                label: 'Cases',
+	                label: 'Case 列表',
                 children: (
                   <section className="cp-section">
                     <div className="cp-page-header">
                       <div>
                         <Typography.Title level={4} style={{ margin: 0 }}>Case 列表</Typography.Title>
-                        <Typography.Text type="secondary">只展示安全结构化断言，不提供 arbitrary code assertion editor。</Typography.Text>
+	                        <Typography.Text type="secondary">只展示安全结构化断言，不提供任意代码断言编辑器。</Typography.Text>
                       </div>
                       <Can permission="registry:write">
                         <Button
@@ -324,14 +324,14 @@ export function EvaluationDatasetDetailPage() {
                       columns={caseColumns}
                       dataSource={cases}
                       pagination={{ pageSize: 10 }}
-                      locale={{ emptyText: <EmptyState description="暂无 Evaluation Case" /> }}
+	                      locale={{ emptyText: <EmptyState description="暂无评测 Case" /> }}
                     />
                   </section>
                 ),
               },
               {
                 key: 'versions',
-                label: 'Versions',
+	                label: '版本',
                 children: (
                   <section className="cp-section">
                     <Table
@@ -340,11 +340,11 @@ export function EvaluationDatasetDetailPage() {
                       loading={versionsQuery.isLoading}
                       pagination={false}
                       columns={[
-                        { title: 'version', dataIndex: 'version', key: 'version' },
-                        { title: 'status', dataIndex: 'status', key: 'status', render: (status: string) => <EvaluationStatusTag status={status} /> },
+	                        { title: '版本', dataIndex: 'version', key: 'version' },
+	                        { title: '状态', dataIndex: 'status', key: 'status', render: (status: string) => <EvaluationStatusTag status={status} /> },
                         { title: 'hash', dataIndex: 'dataset_hash', key: 'hash', render: (value: string | undefined) => <HashText value={value} /> },
                         {
-                          title: 'open',
+	                          title: '打开',
                           key: 'open',
                           render: (_, row) => <Link to={`/evaluation/datasets/${encodeURIComponent(row.dataset_id)}/versions/${row.version}`}>打开</Link>,
                         },
@@ -352,19 +352,19 @@ export function EvaluationDatasetDetailPage() {
                     />
                     <Can permission="registry:rollback">
                       <Space style={{ marginTop: 12 }} wrap>
-                        <InputNumber min={1} value={rollbackTarget ?? null} onChange={(value) => setRollbackTarget(typeof value === 'number' ? value : undefined)} placeholder="target_version" />
+	                        <InputNumber min={1} value={rollbackTarget ?? null} onChange={(value) => setRollbackTarget(typeof value === 'number' ? value : undefined)} placeholder="目标版本" />
                         <Button
                           disabled={!rollbackTarget}
                           loading={rollbackMutation.isPending}
                           onClick={() => {
                             Modal.confirm({
-                              title: 'Rollback Dataset pointer',
-                              content: 'Rollback 只切换后端版本指针，运行中的 Evaluation Run 仍使用已锁定 Dataset 版本。',
+	                              title: '回滚 Dataset 指针',
+                              content: '回滚只切换后端版本指针，运行中的评测任务仍使用已锁定 Dataset 版本。',
                               onOk: () => rollbackMutation.mutate(),
                             });
                           }}
                         >
-                          rollback
+	                          回滚
                         </Button>
                       </Space>
                     </Can>
@@ -426,8 +426,8 @@ function caseTemplate(datasetId: string, version: number): EvaluationCase {
     case_id: `case_${Date.now()}`,
     dataset_id: datasetId,
     dataset_version: version,
-    name: 'Evaluation case',
-    input: { text: 'input text' },
+    name: '评测 Case',
+    input: { text: '输入文本' },
     context_refs: [],
     expected_status: 'completed',
     expected_tool_calls: [],

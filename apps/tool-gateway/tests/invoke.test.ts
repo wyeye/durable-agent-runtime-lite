@@ -1239,6 +1239,14 @@ describe('tool-gateway invoke', () => {
     expect(audit.statusCode).toBe(200);
     expect(audit.json().data).toHaveLength(1);
     expect(audit.json().data[0].payload.token).toBe('[REDACTED]');
+    expect(audit.json().data[0]).toMatchObject({
+      message_key: 'audit.toolCommit',
+      display_message: '工具调用已提交。',
+      locale: 'zh-CN',
+      message_params: {
+        targetId: 'knowledge.search',
+      },
+    });
 
     const toolCalls = await server.inject({
       method: 'GET',

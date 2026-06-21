@@ -13,3 +13,4 @@
 - Added Evaluation Temporal history export support for run success, case success, and case system-error replay fixtures.
 - Wired Evaluation backend smokes and replay into the Integration workflow without adding a production app, container, tag, release, or version change.
 - Added AR-2B Evaluation control-plane UI for datasets/cases, runs/results/comparison, gate policies/decisions/overrides, registry Gate Cards, and Playwright Evaluation UI smoke command.
+- Added shared fullstack i18n foundation for `zh-CN`, including API messages, Zod issue localization, deployment-level log messages, audit display localization, and control-plane Chinese UI copy.

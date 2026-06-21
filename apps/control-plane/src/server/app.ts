@@ -3,8 +3,9 @@ import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { RuntimeConfig } from '@dar/config';
 import { getRuntimeApiUrl, getToolGatewayUrl, loadConfig } from '@dar/config';
-import { createLogger } from '@dar/logger';
+import { createLogger, logEvent } from '@dar/logger';
 import { closeDb, createDb, type Database } from '@dar/db';
+import { installFastifyLocale } from '@dar/i18n';
 import { sql, type Kysely } from 'kysely';
 import { RuntimeApiClient, type RuntimeApiOperationsClient } from './clients/runtime-api-client.js';
 import { ToolGatewayClient, type ToolGatewayOperationsClient } from './clients/tool-gateway-client.js';
@@ -63,6 +64,7 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
     });
   }
 
+  installFastifyLocale(app);
   await errorHandlerPlugin(app);
   await openApiPlugin(app, { config });
   await authPlugin(app, { config });
@@ -75,14 +77,14 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
   await operationsRoutes(app, { registryService, runtimeApiClient, toolGatewayClient });
 
   app.addHook('onResponse', async (request, reply) => {
-    logger.info({
-      request_id: request.headers['x-request-id'],
+    logEvent(logger, 'info', 'http.request_completed', { service: appName }, compactBindings({
+      request_id: headerString(request.headers['x-request-id']),
       tenant_id: request.authContext?.tenant_id,
       user_id: request.authContext?.user_id,
       method: request.method,
       path: request.url,
       status_code: reply.statusCode,
-    }, 'control-plane request completed');
+    }));
   });
 
   if (shouldServeStaticFiles(config, options)) {
@@ -138,4 +140,12 @@ function requireDb(db: Kysely<Database> | undefined): Kysely<Database> {
     throw new Error('Database handle is required for control-plane services');
   }
   return db;
+}
+
+function headerString(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function compactBindings(input: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 }

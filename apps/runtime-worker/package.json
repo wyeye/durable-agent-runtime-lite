@@ -15,6 +15,7 @@
     "@dar/config": "workspace:*",
     "@dar/contracts": "workspace:*",
     "@dar/db": "workspace:*",
+    "@dar/i18n": "workspace:*",
     "@dar/logger": "workspace:*",
     "@dar/model-client": "workspace:*",
     "@dar/security": "workspace:*",

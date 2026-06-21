@@ -14,7 +14,7 @@ export function ConfirmActionModal({
   loading,
   requireGrayPolicy = false,
   versionOptions = [],
-  noteLabel = 'release_note',
+  noteLabel = '发布说明',
   onCancel,
   onConfirm,
 }: {
@@ -58,10 +58,10 @@ export function ConfirmActionModal({
         ) : null}
         {requireGrayPolicy ? (
           <>
-            <Form.Item label="tenant allowlist" name="tenant_allowlist">
+            <Form.Item label="租户白名单" name="tenant_allowlist">
               <Input placeholder="tenant-a, tenant-b" />
             </Form.Item>
-            <Form.Item label="user allowlist" name="user_allowlist">
+            <Form.Item label="用户白名单" name="user_allowlist">
               <Input placeholder="user-a, user-b" />
             </Form.Item>
           </>
@@ -69,7 +69,7 @@ export function ConfirmActionModal({
         <Form.Item
           label={noteLabel}
           name="release_note"
-          rules={[{ required: true, message: '请输入 release_note' }]}
+          rules={[{ required: true, message: '请输入发布说明' }]}
         >
           <Input.TextArea data-testid="release-note" autoSize={{ minRows: 3, maxRows: 6 }} />
         </Form.Item>

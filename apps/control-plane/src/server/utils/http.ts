@@ -1,5 +1,11 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError, type ZodType, toJSONSchema } from 'zod';
+import {
+  errorResponse,
+  requestLocale,
+  successResponse,
+  zodErrorResponse,
+} from '@dar/i18n';
 import type {
   RuntimeError,
   StandardErrorResponse,
@@ -21,15 +27,17 @@ export class ControlPlaneHttpError extends Error {
 }
 
 export function ok<T>(data: T, requestId?: string): StandardSuccessResponse<T> {
-  return requestId
-    ? { success: true, data, error: null, trace_id: requestId }
-    : { success: true, data, error: null };
+  return successResponse(data, responseOptions(requestId)) as StandardSuccessResponse<T>;
 }
 
-export function fail(error: RuntimeError, requestId?: string): StandardErrorResponse {
-  return requestId
-    ? { success: false, data: null, error, trace_id: requestId }
-    : { success: false, data: null, error };
+export function fail(error: RuntimeError, requestId?: string, locale?: unknown): StandardErrorResponse {
+  const input: Parameters<typeof errorResponse>[0] = {
+    code: error.code,
+    ...(error.message_key ? { messageKey: error.message_key } : {}),
+    ...(error.params ? { params: error.params as Record<string, string | number | boolean | null | undefined> } : {}),
+    ...(error.details ? { details: error.details } : {}),
+  };
+  return errorResponse(input, responseOptions(requestId, locale)) as StandardErrorResponse;
 }
 
 export function requestIdOf(request: FastifyRequest): string | undefined {
@@ -52,30 +60,27 @@ export function jsonSchema(schema: ZodType): unknown {
   return stripJsonSchemaMeta(toJSONSchema(schema, { io: 'input' }));
 }
 
-export function mapError(error: unknown): { statusCode: number; body: StandardErrorResponse } {
-  const requestId = undefined;
+export function mapError(error: unknown, request?: FastifyRequest): { statusCode: number; body: StandardErrorResponse } {
+  const requestId = request ? requestIdOf(request) : undefined;
+  const locale = request ? requestLocale(request) : undefined;
   if (error instanceof ControlPlaneHttpError) {
     return {
       statusCode: error.statusCode,
-      body: fail({ code: error.code, message: error.message, details: scrubDetails(error.details) }, requestId),
+      body: fail({ code: error.code, message: error.message, details: scrubDetails(error.details) }, requestId, locale),
     };
   }
 
   if (error instanceof AuthError) {
     return {
       statusCode: error.code === 'UNAUTHORIZED' ? 401 : 403,
-      body: fail({ code: error.code, message: error.message, details: scrubDetails(error.details) }, requestId),
+      body: fail({ code: error.code, message: error.message, details: scrubDetails(error.details) }, requestId, locale),
     };
   }
 
   if (error instanceof ZodError) {
     return {
       statusCode: 400,
-      body: fail({
-        code: 'BAD_REQUEST',
-        message: 'Request validation failed',
-        details: { issues: error.issues },
-      }, requestId),
+      body: zodErrorResponse(error, responseOptions(requestId, locale)) as StandardErrorResponse,
     };
   }
 
@@ -86,7 +91,7 @@ export function mapError(error: unknown): { statusCode: number; body: StandardEr
         code: error.code,
         message: error.message,
         details: scrubDetails(error.details),
-      }, requestId),
+      }, requestId, locale),
     };
   }
 
@@ -97,7 +102,7 @@ export function mapError(error: unknown): { statusCode: number; body: StandardEr
         code: error.code,
         message: error.message,
         details: scrubDetails(error.details),
-      }, requestId),
+      }, requestId, locale),
     };
   }
 
@@ -108,28 +113,26 @@ export function mapError(error: unknown): { statusCode: number; body: StandardEr
         code: error.code,
         message: error.message,
         details: scrubDetails(error.details),
-      }, requestId),
+      }, requestId, locale),
     };
   }
 
   if (error instanceof Error && /validation failed|can_publish=false|dependency/i.test(error.message)) {
     return {
       statusCode: 422,
-      body: fail({ code: 'REGISTRY_VALIDATION_FAILED', message: 'Registry validation failed' }, requestId),
+      body: fail({ code: 'REGISTRY_VALIDATION_FAILED', message: 'Registry validation failed' }, requestId, locale),
     };
   }
 
   return {
     statusCode: 500,
-    body: fail({ code: 'INTERNAL_SERVER_ERROR', message: 'Internal server error' }, requestId),
+    body: fail({ code: 'INTERNAL_ERROR', message: 'Internal server error' }, requestId, locale),
   };
 }
 
 export function installErrorHandler(reply: FastifyReply, request: FastifyRequest, error: unknown): StandardErrorResponse {
-  const mapped = mapError(error);
-  const body = mapped.body.trace_id
-    ? mapped.body
-    : { ...mapped.body, trace_id: requestIdOf(request) };
+  const mapped = mapError(error, request);
+  const body = mapped.body.trace_id ? mapped.body : { ...mapped.body, trace_id: requestIdOf(request) };
   reply.code(mapped.statusCode);
   return body;
 }
@@ -148,6 +151,13 @@ function statusForRegistryError(code: string): number {
     return 409;
   }
   return 400;
+}
+
+function responseOptions(traceId?: string, locale?: unknown): { traceId?: string; locale?: unknown } {
+  return {
+    ...(traceId ? { traceId } : {}),
+    ...(locale ? { locale } : {}),
+  };
 }
 
 function statusForEvaluationRepositoryError(code: string): number {

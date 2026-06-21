@@ -1,7 +1,8 @@
 import { pathToFileURL } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { getAppPort, getBuildInfo, loadConfig, type RuntimeConfig } from '@dar/config';
-import { createLogger } from '@dar/logger';
+import { createLogger, logErrorEvent, logEvent } from '@dar/logger';
+import { installFastifyLocale } from '@dar/i18n';
 import { startTemporalWorker, type TemporalWorkerHandle } from './worker.js';
 
 const appName = 'runtime-worker' as const;
@@ -16,23 +17,36 @@ export function buildServer(
   config: RuntimeConfig = loadConfig(),
 ): FastifyInstance {
   const server = Fastify({ logger: false });
+  installFastifyLocale(server);
 
-  server.get('/healthz', async () => ({
+  server.get('/healthz', async (request) => ({
     status: 'ok',
     app: appName,
+    message_key: 'common.health.processAlive',
+    message: request.t('common.health.processAlive'),
+    locale: request.locale,
   }));
 
-  server.get('/version', async () => getBuildInfo(appName, config));
+  server.get('/version', async (request) => ({
+    ...getBuildInfo(appName, config),
+    message_key: 'common.health.versionReady',
+    message: request.t('common.health.versionReady'),
+    locale: request.locale,
+  }));
 
-  server.get('/readyz', async (_request, reply) => {
+  server.get('/readyz', async (request, reply) => {
     const piReady = piReadiness(config);
     const evaluationReady = !config.EVALUATION_WORKER_ENABLED || Boolean(worker.evaluationState?.ready);
     if (!worker.state.ready || !evaluationReady || !piReady.ready) {
       reply.code(503);
     }
+    const ready = worker.state.ready && evaluationReady && piReady.ready;
     return {
-      status: worker.state.ready && evaluationReady && piReady.ready ? 'ready' : 'not_ready',
+      status: ready ? 'ready' : 'not_ready',
       app: appName,
+      message_key: ready ? 'common.readiness.serviceReady' : 'common.readiness.serviceNotReady',
+      message: request.t(ready ? 'common.readiness.serviceReady' : 'common.readiness.serviceNotReady'),
+      locale: request.locale,
       checks: {
         config: 'ok',
         temporal_worker: worker.mode,
@@ -62,28 +76,28 @@ export async function start(): Promise<void> {
   let shuttingDown = false;
 
   await server.listen({ host: config.HOST, port });
-  logger.info({ app: appName, port, host: config.HOST }, `${appName} listening`);
+  logEvent(logger, 'info', 'app.started', { service: appName }, { app: appName, port, host: config.HOST });
 
   async function shutdown(signal: NodeJS.Signals): Promise<void> {
     if (shuttingDown) {
       return;
     }
     shuttingDown = true;
-    logger.info({ signal }, 'runtime-worker graceful shutdown started');
+    logEvent(logger, 'info', 'app.shutdown_started', { service: appName }, { signal });
     await server.close();
     await workerHandle.shutdown();
-    logger.info({ signal }, 'runtime-worker graceful shutdown completed');
+    logEvent(logger, 'info', 'app.shutdown_completed', { service: appName }, { signal });
   }
 
   process.once('SIGTERM', () => {
     shutdown('SIGTERM').catch((error: unknown) => {
-      logger.error({ err: error }, 'runtime-worker shutdown failed');
+      logErrorEvent(logger, 'app.shutdown_failed', error, { service: appName }, { signal: 'SIGTERM' });
       process.exitCode = 1;
     });
   });
   process.once('SIGINT', () => {
     shutdown('SIGINT').catch((error: unknown) => {
-      logger.error({ err: error }, 'runtime-worker shutdown failed');
+      logErrorEvent(logger, 'app.shutdown_failed', error, { service: appName }, { signal: 'SIGINT' });
       process.exitCode = 1;
     });
   });
@@ -194,7 +208,7 @@ const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[
 
 if (isMain) {
   start().catch((error: unknown) => {
-    logger.error({ err: error }, `${appName} startup failed`);
+    logErrorEvent(logger, 'app.startup_failed', error, { service: appName }, { app: appName });
     process.exit(1);
   });
 }

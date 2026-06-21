@@ -6,6 +6,7 @@ export interface ForwardHeaders {
   tenantId: string;
   roles: string[];
   requestId?: string;
+  locale?: string;
 }
 
 export interface HttpClientOptions {
@@ -77,6 +78,7 @@ function forwardHeaders(input: ForwardHeaders): Record<string, string> {
     'x-tenant-id': input.tenantId,
     'x-roles': input.roles.join(','),
     ...(input.requestId ? { 'x-request-id': input.requestId } : {}),
+    'accept-language': input.locale ?? 'zh-CN',
   };
 }
 

@@ -42,9 +42,13 @@ RUNTIME_API_WORKFLOW_STARTER=mock
 RUNTIME_WORKER_MODE=mock
 RUNTIME_API_ROUTE_SOURCE=memory
 TOOL_GATEWAY_REGISTRY_SOURCE=memory
+DEFAULT_LOCALE=zh-CN
+LOG_LOCALE=zh-CN
 ```
 
 `RUNTIME_API_WORKFLOW_STARTER=temporal` 会通过 Temporal Client 启动 workflow；`RUNTIME_WORKER_MODE=temporal` 会启动真实 Temporal Worker。默认 mock 模式不要求本地 Temporal 可用。
+
+国际化第一版只开放 `zh-CN`。API 使用请求 `Accept-Language` 并在不支持语言时回退到 `zh-CN`；运行日志使用部署级 `LOG_LOCALE`；Audit 以 `message_key` 和 `message_params` 作为事实源。详见 `docs/55_fullstack_i18n.md`。
 
 DB-backed registry 模式：
 
