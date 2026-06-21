@@ -6,7 +6,7 @@ R0/AR-2A 状态：
 
 - AR-1 Platform Core 已冻结为 `0.8.0`，见 `docs/PLATFORM_CORE_BASELINE.md`。
 - AR-2A 当前为 `IMPLEMENTATION COMPLETE`：本地容器化 Ollama final/readonly/L3 gate 通过，mock-server 和 deterministic Pi 未参与，远端 `origin/main@27598fe` 的 CI 与 Integration 均通过。没有创建 tag、GitHub Release 或版本晋级，平台版本仍为 `0.8.0`。
-- AR-2B 当前为 `PARTIAL`：Evaluation 数据模型、评分/回归比较、Temporal 评测 runner、Registry Publish Gate、backend Evaluation smoke/replay 脚本和 Integration 步骤已接入；本轮仍未完成 React Evaluation UI、Ollama Evaluation 和四镜像本地完整 smoke 证据。
+- AR-2B 当前为 `PARTIAL`：Evaluation 数据模型、评分/回归比较、Temporal 评测 runner、Registry Publish Gate、backend Evaluation smoke/replay 脚本、React Evaluation UI 和 Integration 步骤已接入；本轮仍未完成 Ollama Evaluation 和四镜像本地完整 smoke 证据。
 
 Durable Agent Runtime Lite 是一个四应用通用 Agent Runtime 骨架：
 
@@ -213,7 +213,13 @@ corepack pnpm temporal:export-evaluation-replay-fixtures
 corepack pnpm test:temporal-replay
 ```
 
-三个 smoke 共用 `scripts/smoke-evaluation-backend-e2e.ts`，覆盖 control-plane API、runtime-api、Temporal EvaluationRun/Case workflow、Pi Durable Agent Runtime、Tool Gateway、Evidence Collector、Scoring 和 PostgreSQL。该路径不包含 React Evaluation 页面，也不运行 Ollama Evaluation。
+三个 smoke 共用 `scripts/smoke-evaluation-backend-e2e.ts`，覆盖 control-plane API、runtime-api、Temporal EvaluationRun/Case workflow、Pi Durable Agent Runtime、Tool Gateway、Evidence Collector、Scoring 和 PostgreSQL。React Evaluation UI smoke 使用同一栈和 mock OpenAI-compatible model gateway：
+
+```bash
+corepack pnpm smoke:evaluation-ui-e2e
+```
+
+Evaluation UI 路径包括 `/evaluation/datasets`、`/evaluation/runs`、`/evaluation/gates` 和 Registry Prompt/Agent/ModelPolicy Gate Card。页面只调用同源 `/api/v1/*`，不直接访问 runtime-api、tool-gateway 或数据库；smoke 的 setup 仅准备 UI 无法创建的 immutable candidate snapshot / execution plan。该路径仍不运行 Ollama Evaluation。
 
 Tenant Policy production-closure smoke:
 
@@ -281,6 +287,7 @@ control-plane UI smoke 会在浏览器中打开 `http://localhost:3100`，设置
 
 ```bash
 corepack pnpm smoke:control-plane-ui-e2e
+corepack pnpm smoke:evaluation-ui-e2e
 ```
 
 如果本机没有 Playwright Chromium：
@@ -319,7 +326,7 @@ React 运营页面：
 /tenant-admissions
 ```
 
-页面只请求同源 `/api/v1/...`。Registry 页面支持 JSON draft 编辑、validate、publish、gray、rollback、deprecate、disable、release history 和版本对比；Operations 页面通过 control-plane BFF 查询 runtime-api/tool-gateway。
+页面只请求同源 `/api/v1/...`。Registry 页面支持 JSON draft 编辑、validate、publish、gray、rollback、deprecate、disable、release history 和版本对比；Operations 页面通过 control-plane BFF 查询 runtime-api/tool-gateway。Evaluation 页面支持 Dataset/Case、Run/Result/Comparison、Gate Policy/Decision/Override，并在 Prompt/Agent/ModelPolicy 详情区显示 Gate Card；Gate 是否允许发布始终以后端 exact hash 检查为准。
 
 Snapshot 和 Admission 是只读运行时运营资源，不是可编辑 Registry Resource：
 
@@ -395,6 +402,7 @@ pnpm smoke:db-registry
 pnpm smoke:temporal-db-e2e
 pnpm smoke:control-plane-api-e2e
 pnpm smoke:control-plane-ui-e2e
+pnpm smoke:evaluation-ui-e2e
 pnpm smoke:pi-readonly-e2e
 pnpm smoke:pi-l3-e2e
 pnpm smoke:pi-user-input-e2e

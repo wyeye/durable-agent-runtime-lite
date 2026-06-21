@@ -109,9 +109,12 @@ POST /api/v1/evaluation-gate-policies/:gatePolicyId/versions/:version/publish
 POST /api/v1/evaluation-runs
 GET  /api/v1/evaluation-runs/:runId
 GET  /api/v1/evaluation-runs/:runId/results
+POST /api/v1/evaluation-runs/:runId/cancel
 GET  /api/v1/evaluation-gate-decisions
+GET  /api/v1/evaluation-gate-decisions/:decisionId
 POST /api/v1/evaluation-gate-decisions/:decisionId/override
 POST /api/v1/evaluation-comparisons
+GET  /api/v1/evaluation-comparisons/:comparisonId
 ```
 
 Registry publish requests for `prompts`, `agents`, and `model-policies` accept `evaluation_candidate_bundle_hash`, `evaluation_gate_decision_id`, and `evaluation_gate_override_id`. Exact resource hash, candidate bundle hash, gate policy hash, and override expiry/RBAC are checked server-side; stale or mismatched inputs fail closed when `EVALUATION_GATE_MODE=required`.
@@ -124,7 +127,23 @@ corepack pnpm smoke:evaluation-regression-gate-e2e
 corepack pnpm smoke:evaluation-publish-gate-e2e
 ```
 
-No React Evaluation page is documented here yet.
+React Evaluation UI and smoke:
+
+```text
+/evaluation/datasets
+/evaluation/datasets/:datasetId/versions/:version
+/evaluation/runs
+/evaluation/runs/:runId
+/evaluation/gates
+/evaluation/gates/:gatePolicyId/versions/:version
+/evaluation/gate-decisions/:decisionId
+```
+
+```bash
+corepack pnpm smoke:evaluation-ui-e2e
+```
+
+The UI uses only same-origin `/api/v1/*`. Dataset/Case, Run, Gate Policy, Gate Decision, Override, and Registry Gate Card flows do not directly call runtime-api, tool-gateway, PostgreSQL, or external model providers.
 
 ## React 运营页面
 
@@ -137,6 +156,9 @@ Fastify 在 production 同进程托管 Vite build 产物。前端页面均通过
 /registry/tools
 /registry/agents
 /registry/prompts
+/evaluation/datasets
+/evaluation/runs
+/evaluation/gates
 /releases
 /human-tasks
 /task-runs

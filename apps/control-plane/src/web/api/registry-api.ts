@@ -59,6 +59,9 @@ export interface ReleaseListParams {
 export interface ReleaseActionInput {
   release_note: string;
   metadata_json?: Record<string, unknown>;
+  evaluation_candidate_bundle_hash?: string;
+  evaluation_gate_decision_id?: string;
+  evaluation_gate_override_id?: string;
 }
 
 export interface GrayActionInput extends ReleaseActionInput {

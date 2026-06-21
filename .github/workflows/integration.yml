@@ -221,6 +221,19 @@ jobs:
       - name: Evaluation Publish Gate Smoke
         run: pnpm smoke:evaluation-publish-gate-e2e
 
+      - name: Evaluation UI Smoke
+        run: pnpm smoke:evaluation-ui-e2e
+
+      - name: Check Evaluation UI artifacts for secret-like strings
+        if: always()
+        run: |
+          if [ -d artifacts/evaluation-ui-e2e ]; then
+            if grep -R -E "(Bearer [A-Za-z0-9_.-]+|TOKEN=|SECRET=|PASSWORD=|API_KEY=)" artifacts/evaluation-ui-e2e; then
+              echo "Secret-like content found in Evaluation UI artifacts"
+              exit 1
+            fi
+          fi
+
       - name: Export Evaluation Histories
         run: pnpm temporal:export-evaluation-replay-fixtures
 

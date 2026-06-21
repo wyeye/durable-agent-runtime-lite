@@ -15,6 +15,13 @@ import { AuditEventsPage } from './pages/audit/AuditEventsPage.js';
 import { ToolCallsPage } from './pages/tool-calls/ToolCallsPage.js';
 import { PolicySnapshotsPage } from './pages/policy-snapshots/PolicySnapshotsPage.js';
 import { TenantAdmissionsPage } from './pages/tenant-admissions/TenantAdmissionsPage.js';
+import { EvaluationDatasetDetailPage } from './pages/evaluation/EvaluationDatasetDetailPage.js';
+import { EvaluationDatasetsPage } from './pages/evaluation/EvaluationDatasetsPage.js';
+import { EvaluationDecisionDetailPage } from './pages/evaluation/EvaluationDecisionDetailPage.js';
+import { EvaluationGateDetailPage } from './pages/evaluation/EvaluationGateDetailPage.js';
+import { EvaluationGatesPage } from './pages/evaluation/EvaluationGatesPage.js';
+import { EvaluationRunDetailPage } from './pages/evaluation/EvaluationRunDetailPage.js';
+import { EvaluationRunsPage } from './pages/evaluation/EvaluationRunsPage.js';
 
 export const router = createBrowserRouter([
   {
@@ -37,6 +44,13 @@ export const router = createBrowserRouter([
       { path: 'tool-calls', element: <ToolCallsPage /> },
       { path: 'policy-snapshots', element: <PolicySnapshotsPage /> },
       { path: 'tenant-admissions', element: <TenantAdmissionsPage /> },
+      { path: 'evaluation/datasets', element: <EvaluationDatasetsPage /> },
+      { path: 'evaluation/datasets/:datasetId/versions/:version', element: <EvaluationDatasetDetailPage /> },
+      { path: 'evaluation/runs', element: <EvaluationRunsPage /> },
+      { path: 'evaluation/runs/:runId', element: <EvaluationRunDetailPage /> },
+      { path: 'evaluation/gates', element: <EvaluationGatesPage /> },
+      { path: 'evaluation/gates/:gatePolicyId/versions/:version', element: <EvaluationGateDetailPage /> },
+      { path: 'evaluation/gate-decisions/:decisionId', element: <EvaluationDecisionDetailPage /> },
       { path: '*', element: <Navigate to="/dashboard" replace /> },
     ],
   },

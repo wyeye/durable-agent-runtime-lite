@@ -10,9 +10,9 @@ export interface ApiClientOptions {
 export interface ApiRequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
-  query?: object;
-  signal?: AbortSignal;
-  timeoutMs?: number;
+  query?: object | undefined;
+  signal?: AbortSignal | undefined;
+  timeoutMs?: number | undefined;
 }
 
 export class ApiError extends Error {

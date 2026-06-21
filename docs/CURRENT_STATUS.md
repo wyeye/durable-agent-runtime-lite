@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-06-21 for AR-2B-E2E-GATE backend smoke/replay pass.
+Last updated: 2026-06-21 for AR-2B-UI-CLOSURE implementation pass.
 
 ## Platform Version
 
@@ -10,7 +10,7 @@ The root `package.json` version is the authority. `corepack pnpm version:check` 
 
 ## Baseline
 
-- Observed local HEAD and `origin/main` before the AR-2B-P0-CLOSURE pass: `55cac36713a2b658650e432088fdbe62658d3419`.
+- Observed local HEAD and `origin/main` before the AR-2B-UI-CLOSURE pass: `e12104fbf2d54b2f4bfc88d1341541be6f7db066`.
 - Platform Core Baseline file: `docs/PLATFORM_CORE_BASELINE.md`.
 - Migration head: `016_evaluation_registry_and_tool_safety.sql`.
 
@@ -133,12 +133,13 @@ Evaluation backend E2E smoke entry points:
 corepack pnpm smoke:evaluation-framework-e2e
 corepack pnpm smoke:evaluation-regression-gate-e2e
 corepack pnpm smoke:evaluation-publish-gate-e2e
+corepack pnpm smoke:evaluation-ui-e2e
 TEMPORAL_REPLAY_SMOKE_RESULT_FILE=artifacts/evaluation-backend-e2e/framework.json \
   corepack pnpm temporal:export-evaluation-replay-fixtures
 corepack pnpm test:temporal-replay
 ```
 
-These Evaluation smoke commands require the Docker/Temporal/PostgreSQL stack and a `model_gateway` runtime-worker using the mock OpenAI-compatible server. They exercise control-plane API -> runtime-api -> Temporal EvaluationRunWorkflow/EvaluationCaseWorkflow -> Pi Durable Agent Runtime -> Tool Gateway -> Evidence Collector -> Scoring -> PostgreSQL. They do not implement React Evaluation UI and do not run Ollama Evaluation.
+These Evaluation smoke commands require the Docker/Temporal/PostgreSQL stack and a `model_gateway` runtime-worker using the mock OpenAI-compatible server. Backend smokes exercise control-plane API -> runtime-api -> Temporal EvaluationRunWorkflow/EvaluationCaseWorkflow -> Pi Durable Agent Runtime -> Tool Gateway -> Evidence Collector -> Scoring -> PostgreSQL. The UI smoke drives the React Evaluation pages through Playwright while setup only prepares immutable candidate snapshot / execution plan records that the UI does not create. They do not run Ollama Evaluation.
 
 Protected live probes:
 
@@ -235,11 +236,25 @@ Current AR-2B-E2E-GATE implementation additions:
 - Temporal replay fixture export now recognizes Evaluation smoke summaries and exports `evaluation-run-success`, `evaluation-case-success`, and `evaluation-case-system-error` histories.
 - Integration workflow now runs three Evaluation smoke steps, exports Evaluation histories, and replays them while runtime-worker is in `model_gateway` smoke mode.
 
-## Next AR-2B Work
+## AR-2B UI Closure
 
 Current AR-2B status: `AR-2B PARTIAL`.
 
-Implemented in this development pass:
+Implemented in this UI closure pass:
+
+- Evaluation navigation group with Datasets, Runs, and Gates.
+- Dataset List/Detail pages with draft creation, Case create/update/delete, validate, publish, clone, rollback, exact hash display, JSON parse blocking, and published read-only behavior.
+- Run List/Detail pages with create exact-version Run modal, polling for queued/running states, cancel, Case Results, safe evidence drawer, aggregate/progress, Comparison, and Gate Decision panels.
+- Gate Policy List/Detail pages with exact Dataset refs, validate/publish confirmation, version viewing, clone, thresholds, regression rules, and allow_override display.
+- Gate Decision Detail with freshness/stale reasons, exact hashes, run links, and platform_admin-only Override form.
+- Prompt, Agent, and ModelPolicy Registry detail Gate Card with latest run/decision/freshness, exact resource hash, candidate bundle hash, decision links, and publish metadata fields for exact decision/override.
+- `apps/control-plane/src/web/api/evaluation-api.ts` using the existing API client, identity headers, Standard Error parsing, pagination params, AbortSignal, and `@dar/contracts` types.
+- `scripts/smoke-evaluation-ui-e2e.ts` and root `corepack pnpm smoke:evaluation-ui-e2e`.
+- Integration workflow `Evaluation UI Smoke` step after backend Evaluation smoke, plus artifact secret-pattern scan.
+- `docs/53_evaluation_ui.md`.
+- Local Docker-backed verification in this pass ran the backend Evaluation framework/regression/publish-gate smokes and the Evaluation UI smoke on the existing stack after rebuilding/restarting the control-plane image.
+
+Backend AR-2B implementation already includes:
 
 - Evaluation dataset, case, subject snapshot, execution plan, run, result, gate policy, gate decision, and override contracts.
 - Forward migration `013_evaluation_and_release_gates.sql`.
@@ -266,8 +281,7 @@ Implemented in this development pass:
 
 Still open:
 
-- Local execution of the new Evaluation smoke commands against a freshly started Docker stack in this pass.
-- Four-image Docker build evidence for this pass.
+- Fresh four-image Docker rebuild evidence from a clean Docker state for this pass.
 - Real Ollama Evaluation E2E.
-- Control-plane evaluation pages.
-- Evaluation UI selection flow for gate decisions and overrides.
+
+Current version remains `0.8.0`. No tag or release has been created.

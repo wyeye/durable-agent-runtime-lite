@@ -74,6 +74,16 @@ x-request-id
 - 前端不还原敏感字段；后端脱敏后原样展示。
 - 下游不可用显示 503 友好错误。
 
+## Evaluation UI 规则
+
+- Evaluation 页面只调用 control-plane 同源 `/api/v1/evaluation-*` 和 `/api/v1/evaluation-runs*`。
+- Dataset / Case 页面不使用 sample/mock 生产数据；empty 仅表示后端成功返回空结果。
+- Create Run 必须输入 exact Dataset version/hash、Subject Snapshot ref/hash、EvaluationExecutionPlan ref/hash，不允许 latest。
+- Run Detail 只显示 safe evidence refs 和 summary，不显示完整 Tool Result、raw Provider Response 或 hidden reasoning。
+- Gate Decision freshness/stale reasons 以后端返回为准，前端不重算 Gate Decision。
+- Override 按钮仅 `platform_admin` 可见；后端仍负责 403、expiry、exact resource hash 和 allow_override 校验。
+- Prompt、Agent、ModelPolicy Registry Gate Card 只传递 exact candidate bundle / decision / override metadata；publish allowed/blocked 以后端响应为准。
+
 ## 常见错误展示
 
 - `401`：缺少身份，提示设置 Identity Panel 或检查生产认证头。
@@ -99,6 +109,9 @@ Docker/DB smoke：
 corepack pnpm smoke:temporal-db-e2e
 corepack pnpm smoke:control-plane-api-e2e
 corepack pnpm smoke:control-plane-ui-e2e
+corepack pnpm smoke:evaluation-ui-e2e
 ```
 
 UI smoke 需要 control-plane、runtime-api、runtime-worker、tool-gateway、PostgreSQL、Temporal 已运行。它会在浏览器中设置开发身份，验证页面渲染，创建并发布 Registry 资源，执行 router preview、rollback，并通过 Human Task 页面 approve 一个 L3 pending task。
+
+Evaluation UI smoke 还需要 mock-server 和 `PI_AGENT_MODE=model_gateway` 的 runtime-worker。它通过浏览器完成 Dataset/Case、Gate Policy、Run、Gate Decision、Registry Gate Card 和 Override/RBAC 操作；setup 只准备 UI 当前不负责创建的 immutable candidate snapshot / execution plan。

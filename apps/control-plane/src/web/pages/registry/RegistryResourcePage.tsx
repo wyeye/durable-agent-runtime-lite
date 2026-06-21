@@ -32,6 +32,7 @@ import {
 } from '../../api/registry-api.js';
 import { formatDateTime } from '../../utils/format.js';
 import { parseJson, stringifyPretty } from '../../utils/json.js';
+import { EvaluationGateCard, type GatePublishMetadata } from '../evaluation/EvaluationGateCard.js';
 import { resourceConfigs } from './resource-config.js';
 
 interface Filters {
@@ -61,6 +62,7 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
   const [cloneTarget, setCloneTarget] = useState<number | undefined>();
   const [compareLeft, setCompareLeft] = useState<number | undefined>();
   const [compareRight, setCompareRight] = useState<number | undefined>();
+  const [gatePublishMetadata, setGatePublishMetadata] = useState<GatePublishMetadata>({});
 
   const listQuery = useQuery({
     queryKey: ['registry', resourceType, filters],
@@ -168,7 +170,10 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
       }
       const base = { release_note: values.release_note, metadata_json: {} };
       if (action === 'publish') {
-        return publishResource(apiClient, resourceType, selected.resource_id, selected.version, base);
+        return publishResource(apiClient, resourceType, selected.resource_id, selected.version, {
+          ...base,
+          ...gatePublishMetadata,
+        });
       }
       if (action === 'gray') {
         return grayResource(apiClient, resourceType, selected.resource_id, selected.version, {
@@ -316,6 +321,9 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
                 {releaseMutation.error ? <ErrorAlert error={releaseMutation.error} /> : null}
                 {cloneMutation.error ? <ErrorAlert error={cloneMutation.error} /> : null}
                 {config.renderSummary(selected)}
+                {isEvaluationGatedResource(resourceType) ? (
+                  <EvaluationGateCard record={selected} onChange={setGatePublishMetadata} />
+                ) : null}
                 <Tabs
                   items={[
                     {
@@ -458,4 +466,8 @@ function actionTitle(action: ReleaseAction | undefined): string {
     return '回滚当前发布指针';
   }
   return '确认操作';
+}
+
+function isEvaluationGatedResource(resourceType: RegistryResourceType): boolean {
+  return resourceType === 'prompt' || resourceType === 'agent' || resourceType === 'model_policy';
 }
