@@ -6,7 +6,7 @@ R0/AR-2A 状态：
 
 - AR-1 Platform Core 已冻结为 `0.8.0`，见 `docs/PLATFORM_CORE_BASELINE.md`。
 - AR-2A 当前为 `IMPLEMENTATION COMPLETE`：本地容器化 Ollama final/readonly/L3 gate 通过，mock-server 和 deterministic Pi 未参与，远端 `origin/main@27598fe` 的 CI 与 Integration 均通过。没有创建 tag、GitHub Release 或版本晋级，平台版本仍为 `0.8.0`。
-- AR-2B 当前为 `PARTIAL`：Evaluation 数据模型、评分/回归比较基础、Registry Publish Gate 的 exact hash fail-closed 基础路径已接入；Temporal 评测 runner、Ollama Evaluation E2E 和 control-plane 评测页面仍未完成。
+- AR-2B 当前为 `PARTIAL`：Evaluation 数据模型、评分/回归比较、Temporal 评测 runner、Registry Publish Gate、backend Evaluation smoke/replay 脚本和 Integration 步骤已接入；本轮仍未完成 React Evaluation UI、Ollama Evaluation 和四镜像本地完整 smoke 证据。
 
 Durable Agent Runtime Lite 是一个四应用通用 Agent Runtime 骨架：
 
@@ -202,6 +202,18 @@ TEMPORAL_REPLAY_SMOKE_RESULT_FILE=artifacts/pi-worker-crash-resume/result.json \
   corepack pnpm temporal:export-replay-fixtures
 corepack pnpm test:temporal-replay
 ```
+
+Evaluation backend gate smoke 使用同一 Docker/Temporal/PostgreSQL 栈，并要求 `runtime-worker` 处于 `PI_AGENT_MODE=model_gateway` 的 mock OpenAI-compatible 模式：
+
+```bash
+corepack pnpm smoke:evaluation-framework-e2e
+corepack pnpm smoke:evaluation-regression-gate-e2e
+corepack pnpm smoke:evaluation-publish-gate-e2e
+corepack pnpm temporal:export-evaluation-replay-fixtures
+corepack pnpm test:temporal-replay
+```
+
+三个 smoke 共用 `scripts/smoke-evaluation-backend-e2e.ts`，覆盖 control-plane API、runtime-api、Temporal EvaluationRun/Case workflow、Pi Durable Agent Runtime、Tool Gateway、Evidence Collector、Scoring 和 PostgreSQL。该路径不包含 React Evaluation 页面，也不运行 Ollama Evaluation。
 
 Tenant Policy production-closure smoke:
 

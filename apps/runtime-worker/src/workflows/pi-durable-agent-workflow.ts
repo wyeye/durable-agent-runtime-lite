@@ -287,6 +287,11 @@ export async function piDurableAgentWorkflow(
     ...(input.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: input.tenant_policy_snapshot_ref } : {}),
     ...(input.tenant_policy_hash ? { tenant_policy_hash: input.tenant_policy_hash } : {}),
     ...(input.tenant_admission_id ? { tenant_admission_id: input.tenant_admission_id } : {}),
+    ...(input.execution_context_type ? { execution_context_type: input.execution_context_type } : {}),
+    ...(input.evaluation_run_id ? { evaluation_run_id: input.evaluation_run_id } : {}),
+    ...(input.evaluation_case_id ? { evaluation_case_id: input.evaluation_case_id } : {}),
+    ...(input.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: input.evaluation_execution_plan_ref } : {}),
+    ...(input.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: input.evaluation_execution_plan_hash } : {}),
   };
   const executionPlan = await loadAgentExecutionPlanByRefActivity(input.agent_execution_plan_ref, input.tenant_id);
   const executionContext: ActivityContext = {

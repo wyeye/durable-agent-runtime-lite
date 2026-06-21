@@ -117,6 +117,9 @@ function parseWorkflowIdMap(value: string): FixtureRequest[] {
 
 function parseSmokeResult(value: string): FixtureRequest[] {
   const parsed = recordOrThrow(JSON.parse(value) as unknown, 'TEMPORAL_REPLAY_SMOKE_RESULT_FILE');
+  if (Array.isArray(parsed.runs)) {
+    return parseEvaluationSmokeResult(parsed);
+  }
   const scenarios = recordOrThrow(parsed.scenarios, 'smoke scenarios');
   return Object.entries(scenarios).flatMap(([name, scenario]) => {
     const record = recordOrThrow(scenario, `smoke scenario ${name}`);
@@ -141,6 +144,39 @@ function parseSmokeResult(value: string): FixtureRequest[] {
     }
     return requests;
   });
+}
+
+function parseEvaluationSmokeResult(parsed: Record<string, unknown>): FixtureRequest[] {
+  const runs = parsed.runs;
+  assert.ok(Array.isArray(runs), 'evaluation smoke runs must be an array');
+  const run = runs.map((entry) => recordOrThrow(entry, 'evaluation smoke run'))
+    .find((entry) => stringOrUndefined(entry.workflow_id) && Array.isArray(entry.case_workflows));
+  assert.ok(run, 'evaluation smoke result must contain a run workflow');
+  const workflowId = stringOrThrow(run.workflow_id, 'evaluation run workflow_id');
+  const runId = stringOrUndefined(run.workflow_run_id);
+  const caseWorkflows = (run.case_workflows as unknown[])
+    .map((entry, index) => recordOrThrow(entry, `evaluation case workflow ${index}`));
+  const successCase = caseWorkflows.find((entry) => entry.status === 'passed' && stringOrUndefined(entry.workflow_id));
+  const systemErrorCase = caseWorkflows.find((entry) => entry.status === 'system_error' && stringOrUndefined(entry.workflow_id));
+  assert.ok(successCase, 'evaluation smoke must include a passed case workflow');
+  assert.ok(systemErrorCase, 'evaluation smoke must include a system_error case workflow');
+  return [
+    optionalObject({
+      name: 'evaluation-run-success',
+      workflowId,
+      runId,
+    }) as FixtureRequest,
+    optionalObject({
+      name: 'evaluation-case-success',
+      workflowId: stringOrThrow(successCase.workflow_id, 'evaluation success case workflow_id'),
+      runId: stringOrUndefined(successCase.workflow_run_id),
+    }) as FixtureRequest,
+    optionalObject({
+      name: 'evaluation-case-system-error',
+      workflowId: stringOrThrow(systemErrorCase.workflow_id, 'evaluation system_error case workflow_id'),
+      runId: stringOrUndefined(systemErrorCase.workflow_run_id),
+    }) as FixtureRequest,
+  ];
 }
 
 function countHistoryEvents(history: unknown): number {

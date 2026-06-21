@@ -72,6 +72,11 @@ export interface PiDurableAgentWorkflowInput {
   tenant_policy_snapshot_ref?: string;
   tenant_policy_hash?: string;
   tenant_admission_id?: string;
+  execution_context_type?: 'runtime' | 'evaluation';
+  evaluation_run_id?: string;
+  evaluation_case_id?: string;
+  evaluation_execution_plan_ref?: string;
+  evaluation_execution_plan_hash?: string;
   task_status_owner?: boolean;
   request_id: string;
   trace_id?: string;

@@ -178,6 +178,46 @@ jobs:
       - name: Pi model gateway smoke test
         run: pnpm smoke:pi-model-gateway-e2e
 
+      - name: Switch control-plane to required evaluation gate mode
+        run: |
+          EVALUATION_GATE_MODE=required \
+            docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d control-plane
+
+      - name: Wait for control-plane readiness after gate mode switch
+        run: |
+          node - <<'NODE'
+          const deadline = Date.now() + 60_000;
+          while (Date.now() < deadline) {
+            try {
+              const response = await fetch('http://localhost:3100/readyz');
+              if (response.ok) {
+                console.log(JSON.stringify(await response.json()));
+                process.exit(0);
+              }
+              console.log(`control-plane readiness status ${response.status}`);
+            } catch (error) {
+              console.log(`control-plane readiness probe failed: ${error.message}`);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+          throw new Error('control-plane did not become ready after gate mode switch');
+          NODE
+
+      - name: Evaluation Framework Smoke
+        run: pnpm smoke:evaluation-framework-e2e
+
+      - name: Evaluation Regression Gate Smoke
+        run: pnpm smoke:evaluation-regression-gate-e2e
+
+      - name: Evaluation Publish Gate Smoke
+        run: pnpm smoke:evaluation-publish-gate-e2e
+
+      - name: Export Evaluation Histories
+        run: pnpm temporal:export-evaluation-replay-fixtures
+
+      - name: Replay Evaluation Histories
+        run: pnpm test:temporal-replay
+
       - name: Switch worker back to deterministic smoke mode
         run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d runtime-worker
 

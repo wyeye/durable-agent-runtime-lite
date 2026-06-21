@@ -102,21 +102,27 @@ function responseForScenario(scenario: string, request: GenerateRequest): MockGe
   }
   switch (scenario) {
     case 'readonly_tool':
+    case 'repeated_tool':
     case 'rate_limit_then_success':
     case 'upstream_500_then_success':
-      return toolCallResponse(model, 'call_readonly_1', 'knowledge.search', { query: 'mock gateway lookup' });
+      return scenario === 'repeated_tool'
+        ? toolCallResponse(model, [
+            { id: 'call_readonly_1', name: 'knowledge.search', args: { query: 'mock gateway lookup 1' } },
+            { id: 'call_readonly_2', name: 'knowledge.search', args: { query: 'mock gateway lookup 2' } },
+          ])
+        : toolCallResponse(model, [{ id: 'call_readonly_1', name: 'knowledge.search', args: { query: 'mock gateway lookup' } }]);
     case 'l3_tool':
-      return toolCallResponse(model, 'call_l3_1', 'record.write.mock', { record: { summary: 'mock gateway write' } });
+      return toolCallResponse(model, [{ id: 'call_l3_1', name: 'record.write.mock', args: { record: { summary: 'mock gateway write' } } }]);
     case 'user_input':
-      return toolCallResponse(model, 'call_user_1', 'request_user_input', {
+      return toolCallResponse(model, [{ id: 'call_user_1', name: 'request_user_input', args: {
         question: 'Please provide the missing value.',
         requested_schema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] },
-      });
+      } }]);
     case 'handoff':
-      return toolCallResponse(model, 'call_handoff_1', 'handoff_to_workflow', {
+      return toolCallResponse(model, [{ id: 'call_handoff_1', name: 'handoff_to_workflow', args: {
         target_execution_plan_ref: 'db://flow-execution-plan/plan_handoff',
         arguments: { source: 'mock-gateway' },
-      });
+      } }]);
     case 'malformed_tool_call':
       return {
         id: 'mock_malformed',
@@ -139,13 +145,21 @@ function responseForScenario(scenario: string, request: GenerateRequest): MockGe
   }
 }
 
-function toolCallResponse(model: string, id: string, name: string, args: Record<string, unknown>): MockGenerateResponse {
+function toolCallResponse(
+  model: string,
+  calls: Array<{ id: string; name: string; args: Record<string, unknown> }>,
+): MockGenerateResponse {
   return {
-    id: `mock_${id}`,
+    id: `mock_${calls.map((call) => call.id).join('_')}`,
     model,
     message: {
       role: 'assistant',
-      content: [{ type: 'tool_call', id, name, arguments: args }],
+      content: calls.map((call): MockContentBlock => ({
+        type: 'tool_call',
+        id: call.id,
+        name: call.name,
+        arguments: call.args,
+      })),
     },
     finish_reason: 'tool_call',
     usage: usage(),
@@ -249,6 +263,7 @@ function scenarioFromMessages(messages: Array<{ role: string; content: string }>
   const joined = messages.map((message) => message.content).join('\n').toLowerCase();
   for (const scenario of [
     'readonly_tool',
+    'repeated_tool',
     'l3_tool',
     'user_input',
     'handoff',

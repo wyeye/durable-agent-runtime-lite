@@ -94,6 +94,38 @@ GET  /api/v1/tenant-agent-admissions/:admissionId
 
 BFF 会向下游透传 `x-user-id`、`x-tenant-id`、`x-roles`、`x-request-id`，下游不可用映射为 `503 DOWNSTREAM_UNAVAILABLE`。
 
+## Evaluation API
+
+Evaluation Registry 和运行 API 仍通过 control-plane 暴露，不新增生产 app：
+
+```text
+POST /api/v1/evaluation-datasets
+POST /api/v1/evaluation-datasets/:datasetId/versions/:version/cases
+POST /api/v1/evaluation-datasets/:datasetId/versions/:version/validate
+POST /api/v1/evaluation-datasets/:datasetId/versions/:version/publish
+POST /api/v1/evaluation-gate-policies
+POST /api/v1/evaluation-gate-policies/:gatePolicyId/versions/:version/validate
+POST /api/v1/evaluation-gate-policies/:gatePolicyId/versions/:version/publish
+POST /api/v1/evaluation-runs
+GET  /api/v1/evaluation-runs/:runId
+GET  /api/v1/evaluation-runs/:runId/results
+GET  /api/v1/evaluation-gate-decisions
+POST /api/v1/evaluation-gate-decisions/:decisionId/override
+POST /api/v1/evaluation-comparisons
+```
+
+Registry publish requests for `prompts`, `agents`, and `model-policies` accept `evaluation_candidate_bundle_hash`, `evaluation_gate_decision_id`, and `evaluation_gate_override_id`. Exact resource hash, candidate bundle hash, gate policy hash, and override expiry/RBAC are checked server-side; stale or mismatched inputs fail closed when `EVALUATION_GATE_MODE=required`.
+
+Backend smoke commands:
+
+```bash
+corepack pnpm smoke:evaluation-framework-e2e
+corepack pnpm smoke:evaluation-regression-gate-e2e
+corepack pnpm smoke:evaluation-publish-gate-e2e
+```
+
+No React Evaluation page is documented here yet.
+
 ## React 运营页面
 
 Fastify 在 production 同进程托管 Vite build 产物。前端页面均通过本文件中的 `/api/v1` API 获取数据：

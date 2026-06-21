@@ -66,14 +66,23 @@ describe('Evaluation workflows', () => {
         };
       },
       loadAgentExecutionPlanByRefActivity: async () => agentExecutionPlan(),
+      loadTenantPolicySnapshotActivity: async () => undefined,
       updateAgentRunActivity: async (input: { agent_run_id: string }) => ({
         agent_run_id: input.agent_run_id,
       }),
       updateAgentStepActivity: async () => ({}),
-      runPiSegmentActivity: async (input: { agent_run_id: string }) => {
+      runPiSegmentActivity: async (input: { agent_run_id: string; request_context?: Record<string, unknown> }) => {
+        expect(input.request_context).toMatchObject({
+          execution_context_type: 'evaluation',
+          evaluation_run_id: 'eval_run_workflow',
+          evaluation_execution_plan_ref: 'db://evaluation-execution-plan/plan_eval',
+          evaluation_execution_plan_hash: 'b'.repeat(64),
+        });
         if (input.agent_run_id.includes('case_pi_error')) {
           throw ApplicationFailure.nonRetryable('pi child failed for case', 'PI_CASE_FAILED');
         }
+        const caseId = input.agent_run_id.includes('case_pi_error') ? 'case_pi_error' : 'case_pass';
+        expect(input.request_context).toMatchObject({ evaluation_case_id: caseId });
         return {
           status: 'completed',
           final_answer: 'ok',

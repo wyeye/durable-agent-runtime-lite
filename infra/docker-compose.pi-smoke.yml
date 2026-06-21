@@ -41,5 +41,5 @@ services:
     environment:
       NODE_ENV: development
       APP_ENV: development
-      EVALUATION_GATE_MODE: advisory
+      EVALUATION_GATE_MODE: ${EVALUATION_GATE_MODE:-advisory}
       CONTROL_PLANE_STATIC_ENABLED: "true"

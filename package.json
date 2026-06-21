@@ -25,6 +25,9 @@
     "admission:reconcile": "tsx scripts/reconcile-tenant-agent-admissions.ts",
     "smoke:db-registry": "tsx scripts/smoke-db-registry.ts",
     "smoke:evaluation-gates": "tsx scripts/smoke-evaluation-gates.ts",
+    "smoke:evaluation-framework-e2e": "EVALUATION_GATE_MODE=required EVALUATION_SMOKE_SCENARIO=framework tsx scripts/smoke-evaluation-backend-e2e.ts",
+    "smoke:evaluation-regression-gate-e2e": "EVALUATION_GATE_MODE=required EVALUATION_SMOKE_SCENARIO=regression tsx scripts/smoke-evaluation-backend-e2e.ts",
+    "smoke:evaluation-publish-gate-e2e": "EVALUATION_GATE_MODE=required EVALUATION_SMOKE_SCENARIO=publish_gate tsx scripts/smoke-evaluation-backend-e2e.ts",
     "smoke:temporal-db-e2e": "tsx scripts/smoke-temporal-db-e2e.ts",
     "smoke:control-plane-api-e2e": "tsx scripts/smoke-control-plane-api-e2e.ts",
     "smoke:control-plane-ui-e2e": "tsx scripts/smoke-control-plane-ui-e2e.ts",
@@ -53,7 +56,8 @@
     "smoke:tenant-handoff-lineage-e2e": "TENANT_DEEP_SMOKE_SCENARIO=handoff_lineage SMOKE_TENANT_ID=default tsx scripts/smoke-tenant-deep-chain-e2e.ts",
     "smoke:tenant-policy-crash-snapshot-e2e": "TENANT_DEEP_SMOKE_SCENARIO=policy_crash_snapshot tsx scripts/smoke-tenant-deep-chain-e2e.ts",
     "smoke:tenant-admission-reconcile-e2e": "TENANT_DEEP_SMOKE_SCENARIO=admission_reconcile tsx scripts/smoke-tenant-deep-chain-e2e.ts",
-    "temporal:export-replay-fixtures": "tsx scripts/export-temporal-replay-fixtures.ts"
+    "temporal:export-replay-fixtures": "tsx scripts/export-temporal-replay-fixtures.ts",
+    "temporal:export-evaluation-replay-fixtures": "TEMPORAL_REPLAY_SMOKE_RESULT_FILE=artifacts/evaluation-backend-e2e/framework.json tsx scripts/export-temporal-replay-fixtures.ts"
   },
   "devDependencies": {
     "@dar/config": "workspace:*",

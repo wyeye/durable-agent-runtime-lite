@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-06-20 for AR-2B-P0-CLOSURE development pass.
+Last updated: 2026-06-21 for AR-2B-E2E-GATE backend smoke/replay pass.
 
 ## Platform Version
 
@@ -127,6 +127,19 @@ corepack pnpm smoke:tenant-policy-crash-snapshot-e2e
 corepack pnpm smoke:tenant-admission-reconcile-e2e
 ```
 
+Evaluation backend E2E smoke entry points:
+
+```bash
+corepack pnpm smoke:evaluation-framework-e2e
+corepack pnpm smoke:evaluation-regression-gate-e2e
+corepack pnpm smoke:evaluation-publish-gate-e2e
+TEMPORAL_REPLAY_SMOKE_RESULT_FILE=artifacts/evaluation-backend-e2e/framework.json \
+  corepack pnpm temporal:export-evaluation-replay-fixtures
+corepack pnpm test:temporal-replay
+```
+
+These Evaluation smoke commands require the Docker/Temporal/PostgreSQL stack and a `model_gateway` runtime-worker using the mock OpenAI-compatible server. They exercise control-plane API -> runtime-api -> Temporal EvaluationRunWorkflow/EvaluationCaseWorkflow -> Pi Durable Agent Runtime -> Tool Gateway -> Evidence Collector -> Scoring -> PostgreSQL. They do not implement React Evaluation UI and do not run Ollama Evaluation.
+
 Protected live probes:
 
 ```bash
@@ -182,7 +195,7 @@ corepack pnpm smoke:model-gateway-live-l3-e2e
 
 The Ollama containerized smoke used Dockerized `runtime-api`, `runtime-worker`, `tool-gateway`, and `control-plane`; only Ollama ran on the host.
 
-## Verification In Current AR-2B-P0-CLOSURE Pass
+## Verification In Current AR-2B-E2E-GATE Pass
 
 Passed:
 
@@ -211,6 +224,16 @@ git diff --check
 ```
 
 The local `gh` CLI is not installed, but the public GitHub Actions API showed CI and Integration succeeded for `55cac36713a2b658650e432088fdbe62658d3419`. No Docker image build, container startup smoke, live Ollama evaluation smoke, or new evaluation E2E smoke was completed in this pass.
+
+Current AR-2B-E2E-GATE implementation additions:
+
+- Added `scripts/smoke-evaluation-backend-e2e.ts` with `framework`, `regression`, and `publish_gate` scenarios.
+- Framework smoke asserts real TaskRun, AgentRun, ModelCall, ToolCall, Evidence refs, gate decision, audit, Tool Gateway redaction, and PostgreSQL reservation behavior.
+- Regression smoke compares baseline/degraded candidates with the same dataset id/version/hash and waits for persisted comparison and gate decision.
+- Publish gate smoke covers PromptDefinition, AgentSpec, ModelPolicy exact decision publishing, stale hash blocking, override RBAC, expired override failure, and ModelPolicy release history.
+- EvaluationCaseWorkflow now forwards evaluation context into `piDurableAgentWorkflow`, so Tool Gateway policy sees `execution_context_type=evaluation`, evaluation run/case ids, and execution plan ref/hash.
+- Temporal replay fixture export now recognizes Evaluation smoke summaries and exports `evaluation-run-success`, `evaluation-case-success`, and `evaluation-case-system-error` histories.
+- Integration workflow now runs three Evaluation smoke steps, exports Evaluation histories, and replays them while runtime-worker is in `model_gateway` smoke mode.
 
 ## Next AR-2B Work
 
@@ -243,12 +266,8 @@ Implemented in this development pass:
 
 Still open:
 
-- Production-complete Temporal-backed evaluation smoke coverage.
-- Dataset/Case full control-plane API, audit coverage, clone/rollback tests, and production-ready lifecycle service surface.
-- Gate Policy full control-plane API, audit coverage, clone/rollback tests, and production-ready lifecycle service surface.
-- Evidence Collector size caps, tamper/retry tests, final output object storage refs, and end-to-end DB evidence export.
-- Tool Evaluation Safety cross-process PostgreSQL reservation integration tests, redaction production E2E, and full service-level smoke coverage.
-- Gate Decision stale/override closed loop and publish UI selection flow.
+- Local execution of the new Evaluation smoke commands against a freshly started Docker stack in this pass.
+- Four-image Docker build evidence for this pass.
 - Real Ollama Evaluation E2E.
 - Control-plane evaluation pages.
-- Evaluation smoke scripts, CI workflow coverage, and full regression suite rerun.
+- Evaluation UI selection flow for gate decisions and overrides.
