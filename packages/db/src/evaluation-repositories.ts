@@ -283,7 +283,7 @@ export class EvaluationDatasetRepository {
       name: parsed.name,
       description: parsed.description ?? null,
       domain: parsed.domain ?? null,
-      tags_json: parsed.tags,
+      tags_json: toDbJson(parsed.tags),
       default_weight: parsed.default_weight,
       revision: 1,
       dataset_hash: datasetHash,
@@ -335,7 +335,7 @@ export class EvaluationDatasetRepository {
         ...(input.name !== undefined ? { name: update.name } : {}),
         ...(input.description !== undefined ? { description: update.description ?? null } : {}),
         ...(input.domain !== undefined ? { domain: update.domain ?? null } : {}),
-        ...(input.tags !== undefined ? { tags_json: update.tags } : {}),
+        ...(input.tags !== undefined ? { tags_json: toDbJson(update.tags) } : {}),
         ...(input.defaultWeight !== undefined ? { default_weight: update.default_weight } : {}),
         status: 'draft',
         dataset_hash: datasetHash,
@@ -633,20 +633,20 @@ export class EvaluationCaseRepository {
       dataset_version: parsed.dataset_version,
       name: parsed.name,
       description: parsed.description ?? null,
-      input_json: parsed.input,
-      context_refs_json: parsed.context_refs,
+      input_json: toDbJson(parsed.input),
+      context_refs_json: toDbJson(parsed.context_refs),
       expected_status: parsed.expected_status ?? null,
-      expected_tool_calls_json: parsed.expected_tool_calls,
-      forbidden_tools_json: parsed.forbidden_tools,
-      final_assertions_json: parsed.final_assertions,
-      policy_assertions_json: parsed.policy_assertions,
+      expected_tool_calls_json: toDbJson(parsed.expected_tool_calls),
+      forbidden_tools_json: toDbJson(parsed.forbidden_tools),
+      final_assertions_json: toDbJson(parsed.final_assertions),
+      policy_assertions_json: toDbJson(parsed.policy_assertions),
       latency_budget_ms: parsed.latency_budget_ms ?? null,
       input_token_budget: parsed.input_token_budget ?? null,
       output_token_budget: parsed.output_token_budget ?? null,
       total_token_budget: parsed.total_token_budget ?? null,
       cost_budget: parsed.cost_budget ?? null,
       weight: parsed.weight,
-      tags_json: parsed.tags,
+      tags_json: toDbJson(parsed.tags),
       enabled: parsed.enabled,
       updated_at: new Date(),
     };
@@ -933,7 +933,7 @@ export class EvaluationSubjectSnapshotRepository {
       primary_subject_id: snapshot.primary_subject_id,
       primary_subject_version: snapshot.primary_subject_version,
       primary_subject_hash: snapshot.primary_subject_hash,
-      candidate_bundle_json: snapshot.candidate_bundle,
+      candidate_bundle_json: toDbJson(snapshot.candidate_bundle),
       candidate_bundle_hash: snapshot.candidate_bundle_hash,
       created_at: snapshot.created_at,
     };
@@ -987,7 +987,7 @@ export class EvaluationExecutionPlanRepository {
       dataset_version: parsed.dataset_version,
       dataset_hash: parsed.dataset_hash,
       candidate_bundle_hash: parsed.candidate_bundle_hash,
-      plan_json: parsed,
+      plan_json: toDbJson(parsed),
       plan_hash: parsed.plan_hash,
       created_at: parsed.created_at,
     };
@@ -1300,8 +1300,8 @@ export class EvaluationCaseResultRepository {
       workflow_run_id: parsed.workflow_run_id ?? null,
       status: parsed.status,
       score: parsed.score ?? null,
-      metric_results_json: parsed.metric_results,
-      evidence_snapshot_json: parsed.evidence_snapshot ?? null,
+      metric_results_json: toDbJson(parsed.metric_results),
+      evidence_snapshot_json: parsed.evidence_snapshot ? toDbJson(parsed.evidence_snapshot) : null,
       evidence_hash: parsed.evidence_hash ?? null,
       candidate_fidelity_verified: parsed.candidate_fidelity_verified,
       assertion_failure_count: parsed.assertion_failure_count,
@@ -1310,10 +1310,10 @@ export class EvaluationCaseResultRepository {
       actual_status: parsed.actual_status ?? null,
       task_run_id: parsed.task_run_id ?? null,
       agent_run_id: parsed.agent_run_id ?? null,
-      model_call_ids_json: parsed.model_call_ids,
-      tool_call_ids_json: parsed.tool_call_ids,
+      model_call_ids_json: toDbJson(parsed.model_call_ids),
+      tool_call_ids_json: toDbJson(parsed.tool_call_ids),
       final_output_ref: parsed.final_output_ref ?? null,
-      safe_output_json: parsed.safe_output ?? null,
+      safe_output_json: parsed.safe_output ? toDbJson(parsed.safe_output) : null,
       latency_ms: parsed.latency_ms ?? null,
       input_tokens: parsed.input_tokens ?? null,
       output_tokens: parsed.output_tokens ?? null,
@@ -1389,7 +1389,7 @@ export class EvaluationComparisonRepository {
       dataset_version: parsed.dataset_version ?? 1,
       dataset_hash: parsed.dataset_hash ?? '0'.repeat(64),
       comparable: parsed.comparable,
-      result_json: parsed,
+      result_json: toDbJson(parsed),
       created_by: createdBy ?? parsed.created_by ?? null,
       created_at: parsed.created_at ?? new Date(),
     };
@@ -1490,11 +1490,11 @@ export class EvaluationGatePolicyRepository {
       gate_policy_id: parsed.gate_policy_id,
       version: parsed.version,
       status: 'draft',
-      resource_types_json: parsed.resource_types,
-      required_dataset_refs_json: parsed.required_dataset_refs,
-      thresholds_json: parsed.thresholds,
-      regression_rules_json: parsed.regression_rules,
-      required_case_tags_json: parsed.required_case_tags,
+      resource_types_json: toDbJson(parsed.resource_types),
+      required_dataset_refs_json: toDbJson(parsed.required_dataset_refs),
+      thresholds_json: toDbJson(parsed.thresholds),
+      regression_rules_json: toDbJson(parsed.regression_rules),
+      required_case_tags_json: toDbJson(parsed.required_case_tags),
       allow_override: parsed.allow_override,
       revision: 1,
       gate_policy_hash: policyHash,
@@ -1603,11 +1603,11 @@ export class EvaluationGatePolicyRepository {
     const row = await this.db
       .updateTable('evaluation_gate_policy')
       .set({
-        resource_types_json: parsed.resource_types,
-        required_dataset_refs_json: parsed.required_dataset_refs,
-        thresholds_json: parsed.thresholds,
-        regression_rules_json: parsed.regression_rules,
-        required_case_tags_json: parsed.required_case_tags,
+        resource_types_json: toDbJson(parsed.resource_types),
+        required_dataset_refs_json: toDbJson(parsed.required_dataset_refs),
+        thresholds_json: toDbJson(parsed.thresholds),
+        regression_rules_json: toDbJson(parsed.regression_rules),
+        required_case_tags_json: toDbJson(parsed.required_case_tags),
         allow_override: parsed.allow_override,
         status: 'draft',
         gate_policy_hash: policyHash,
@@ -1903,9 +1903,9 @@ export class EvaluationGateDecisionRepository {
       gate_policy_id: parsed.gate_policy_id,
       gate_policy_version: parsed.gate_policy_version,
       gate_policy_hash: parsed.gate_policy_hash,
-      evaluation_run_ids_json: parsed.evaluation_run_ids,
+      evaluation_run_ids_json: toDbJson(parsed.evaluation_run_ids),
       decision: parsed.decision,
-      reasons_json: parsed.reasons,
+      reasons_json: toDbJson(parsed.reasons),
       decided_at: parsed.decided_at,
       created_at: parsed.created_at ?? new Date(),
     };
@@ -3914,11 +3914,28 @@ async function appendEvaluationAudit(
 }
 
 function jsonArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
+  const parsed = parseDbJson(value);
+  return Array.isArray(parsed) ? parsed : [];
 }
 
 function jsonRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  const parsed = parseDbJson(value);
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+}
+
+function toDbJson(value: unknown): string {
+  return JSON.stringify(value);
+}
+
+function parseDbJson(value: unknown): unknown {
+  if (typeof value !== 'string') {
+    return value;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }
 
 function limit(value: number | undefined): number {
