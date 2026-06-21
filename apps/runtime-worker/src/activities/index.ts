@@ -68,6 +68,7 @@ import {
   EvaluationRunRepository,
   EvaluationScoringEngine,
   EvaluationSubjectSnapshotRepository,
+  type EvaluationEvidenceSnapshot,
   assertCandidateFidelity,
   hashEvaluationSubjectSnapshot,
   hashJson,
@@ -1172,7 +1173,11 @@ export async function collectAndScoreEvaluationCaseActivity(input: {
     if (!evaluationCase || evaluationCase.dataset_id !== run.dataset_id || evaluationCase.dataset_version !== run.dataset_version) {
       throw ApplicationFailure.nonRetryable('EvaluationCase not found for run dataset', 'NOT_FOUND');
     }
-    const evidence = await new EvaluationEvidenceCollector(db).collect({
+    const config = loadConfig();
+    const evidence = await new EvaluationEvidenceCollector(db, {
+      outputMaxBytes: config.EVALUATION_OUTPUT_MAX_BYTES,
+      evidenceMaxBytes: config.EVALUATION_EVIDENCE_MAX_BYTES,
+    }).collect({
       tenantId: input.tenant_id,
       evaluationRunId: input.evaluation_run_id,
       caseId: input.case_id,
@@ -1180,47 +1185,51 @@ export async function collectAndScoreEvaluationCaseActivity(input: {
       ...(input.agent_run_id ? { agentRunId: input.agent_run_id } : {}),
       ...(input.started_at_ms !== undefined ? { startedAtMs: input.started_at_ms } : {}),
     });
-    const evidenceIncomplete = evidence.completeness_status !== 'complete';
+    const evidenceWithLimits = enforceEvidenceSizeLimits(evidence, {
+      outputMaxBytes: config.EVALUATION_OUTPUT_MAX_BYTES,
+      evidenceMaxBytes: config.EVALUATION_EVIDENCE_MAX_BYTES,
+    });
+    const evidenceIncomplete = evidenceWithLimits.completeness_status !== 'complete';
     const scored = new EvaluationScoringEngine().scoreCase({
       evaluationCase,
-      actualStatus: evidenceIncomplete ? 'system_error' : normalizeActualStatus(evidence.actual_status),
-      finalOutput: evidence.final_output_safe,
-      toolCalls: evidence.tool_calls.map((call) => ({
+      actualStatus: evidenceIncomplete ? 'system_error' : normalizeActualStatus(evidenceWithLimits.actual_status),
+      finalOutput: evidenceWithLimits.final_output_safe,
+      toolCalls: evidenceWithLimits.tool_calls.map((call) => ({
         tool_name: call.tool_name,
         status: call.status,
       })),
-      policyViolations: evidence.policy_violation_count,
-      unauthorizedToolCount: evidence.unauthorized_tool_count,
-      sideEffectWithoutApprovalCount: evidence.side_effect_without_approval_count,
-      crossTenantViolationCount: evidence.cross_tenant_violation_count,
-      secretLeakCount: evidence.secret_leak_count,
-      hiddenReasoningLeakCount: evidence.hidden_reasoning_leak_count,
-      modelCallCount: evidence.model_call_count,
-      fallbackCount: evidence.fallback_count,
-      systemError: Boolean(evidence.system_error) || evidenceIncomplete,
-      ...(evidence.latency.ms !== undefined ? { latencyMs: evidence.latency.ms } : {}),
-      ...(evidence.tokens.input !== undefined ? { inputTokens: evidence.tokens.input } : {}),
-      ...(evidence.tokens.output !== undefined ? { outputTokens: evidence.tokens.output } : {}),
-      ...(evidence.tokens.total !== undefined ? { totalTokens: evidence.tokens.total } : {}),
-      ...(evidence.cost.estimated !== undefined ? { estimatedCost: evidence.cost.estimated } : {}),
+      policyViolations: evidenceWithLimits.policy_violation_count,
+      unauthorizedToolCount: evidenceWithLimits.unauthorized_tool_count,
+      sideEffectWithoutApprovalCount: evidenceWithLimits.side_effect_without_approval_count,
+      crossTenantViolationCount: evidenceWithLimits.cross_tenant_violation_count,
+      secretLeakCount: evidenceWithLimits.secret_leak_count,
+      hiddenReasoningLeakCount: evidenceWithLimits.hidden_reasoning_leak_count,
+      modelCallCount: evidenceWithLimits.model_call_count,
+      fallbackCount: evidenceWithLimits.fallback_count,
+      systemError: Boolean(evidenceWithLimits.system_error) || evidenceIncomplete,
+      ...(evidenceWithLimits.latency.ms !== undefined ? { latencyMs: evidenceWithLimits.latency.ms } : {}),
+      ...(evidenceWithLimits.tokens.input !== undefined ? { inputTokens: evidenceWithLimits.tokens.input } : {}),
+      ...(evidenceWithLimits.tokens.output !== undefined ? { outputTokens: evidenceWithLimits.tokens.output } : {}),
+      ...(evidenceWithLimits.tokens.total !== undefined ? { totalTokens: evidenceWithLimits.tokens.total } : {}),
+      ...(evidenceWithLimits.cost.estimated !== undefined ? { estimatedCost: evidenceWithLimits.cost.estimated } : {}),
     });
     const result = await new EvaluationCaseResultRepository(db).upsert({
       ...scored,
       evaluation_run_id: input.evaluation_run_id,
       workflow_id: input.workflow_id,
       ...(input.workflow_run_id ? { workflow_run_id: input.workflow_run_id } : {}),
-      evidence_snapshot: evidence as unknown as Record<string, unknown>,
-      evidence_hash: hashJson(evidence),
+      evidence_snapshot: evidenceWithLimits as unknown as Record<string, unknown>,
+      evidence_hash: hashJson(evidenceWithLimits),
       candidate_fidelity_verified: true,
       assertion_failure_count: scored.metric_results.filter((metric) => !metric.hard_gate && !metric.passed).length,
       hard_gate_failure_count: scored.metric_results.filter((metric) => metric.hard_gate && !metric.passed).length,
-      ...(evidence.system_error?.code || evidenceIncomplete ? { system_error_class: evidence.system_error?.code ?? 'EVALUATION_EVIDENCE_INCOMPLETE' } : {}),
+      ...(evidenceWithLimits.system_error?.code || evidenceIncomplete ? { system_error_class: evidenceWithLimits.system_error?.code ?? 'EVALUATION_EVIDENCE_INCOMPLETE' } : {}),
       task_run_id: input.task_run_id,
-      ...(input.agent_run_id ?? evidence.refs.agent_run_id ? { agent_run_id: input.agent_run_id ?? evidence.refs.agent_run_id } : {}),
-      model_call_ids: evidence.refs.model_call_ids,
-      tool_call_ids: evidence.refs.tool_call_ids,
-      ...(evidence.final_output_ref ? { final_output_ref: evidence.final_output_ref } : {}),
-      ...(evidence.final_output_safe !== undefined ? { safe_output: evidence.final_output_safe } : {}),
+      ...(input.agent_run_id ?? evidenceWithLimits.refs.agent_run_id ? { agent_run_id: input.agent_run_id ?? evidenceWithLimits.refs.agent_run_id } : {}),
+      model_call_ids: evidenceWithLimits.refs.model_call_ids,
+      tool_call_ids: evidenceWithLimits.refs.tool_call_ids,
+      ...(evidenceWithLimits.final_output_ref ? { final_output_ref: evidenceWithLimits.final_output_ref } : {}),
+      ...(evidenceWithLimits.final_output_safe !== undefined ? { safe_output: evidenceWithLimits.final_output_safe } : {}),
     });
     return result;
   });
@@ -1283,10 +1292,10 @@ export async function recordEvaluationCaseSystemErrorActivity(input: {
           passed: false,
           hard_gate: !input.cancelled,
           actual: input.error_code,
-          reason: input.error_message,
+          reason: input.error_code,
         },
       ],
-      evidence_snapshot: collectedEvidence,
+      evidence_snapshot: collectedEvidence as unknown as Record<string, unknown>,
       evidence_hash: hashJson(collectedEvidence),
       candidate_fidelity_verified: true,
       assertion_failure_count: 0,
@@ -1299,7 +1308,6 @@ export async function recordEvaluationCaseSystemErrorActivity(input: {
       tool_call_ids: collectedEvidence.refs.tool_call_ids,
       ...(latencyMs !== undefined ? { latency_ms: latencyMs } : {}),
       error_code: input.error_code,
-      error_message: input.error_message,
       started_at: startedAt,
       completed_at: completedAt,
     });
@@ -1335,8 +1343,12 @@ async function collectSystemErrorEvidence(input: {
   errorCode: string;
   errorMessage: string;
 }) {
+  const config = loadConfig();
   try {
-    const evidence = await new EvaluationEvidenceCollector(input.db).collect({
+    const evidence = await new EvaluationEvidenceCollector(input.db, {
+      outputMaxBytes: config.EVALUATION_OUTPUT_MAX_BYTES,
+      evidenceMaxBytes: config.EVALUATION_EVIDENCE_MAX_BYTES,
+    }).collect({
       tenantId: input.tenantId,
       evaluationRunId: input.evaluationRunId,
       caseId: input.caseId,
@@ -1344,16 +1356,19 @@ async function collectSystemErrorEvidence(input: {
       ...(input.agentRunId ? { agentRunId: input.agentRunId } : {}),
       ...(input.startedAtMs !== undefined ? { startedAtMs: input.startedAtMs } : {}),
     });
-    return {
+    return enforceEvidenceSizeLimits({
       ...evidence,
       actual_status: input.cancelled ? 'cancelled' : 'system_error',
       system_error: {
         code: input.errorCode,
         class: 'evaluation_case_system_error',
       },
-    };
+    }, {
+      outputMaxBytes: config.EVALUATION_OUTPUT_MAX_BYTES,
+      evidenceMaxBytes: config.EVALUATION_EVIDENCE_MAX_BYTES,
+    });
   } catch {
-    return {
+    return enforceEvidenceSizeLimits({
       actual_status: input.cancelled ? 'cancelled' : 'system_error',
       system_error: {
         code: input.errorCode,
@@ -1393,8 +1408,10 @@ async function collectSystemErrorEvidence(input: {
         audit_event_ids: [],
         idempotency_record_ids: [],
       },
-      collector_error_code: 'EVALUATION_EVIDENCE_COLLECTOR_FAILED',
-    };
+    }, {
+      outputMaxBytes: config.EVALUATION_OUTPUT_MAX_BYTES,
+      evidenceMaxBytes: config.EVALUATION_EVIDENCE_MAX_BYTES,
+    });
   }
 }
 
@@ -1451,6 +1468,84 @@ function runWithAggregate(run: EvaluationRun, aggregate: EvaluationAggregateResu
     system_error_cases: Number(aggregate.metric_summary.system_error_cases ?? 0),
     aggregate_score: aggregate.weighted_score,
   };
+}
+
+function enforceEvidenceSizeLimits(
+  evidence: EvaluationEvidenceSnapshot,
+  limits: { outputMaxBytes: number; evidenceMaxBytes: number },
+): EvaluationEvidenceSnapshot {
+  let checked = evidence;
+  if (
+    checked.final_output_safe !== undefined &&
+    jsonByteLength(checked.final_output_safe) > limits.outputMaxBytes
+  ) {
+    const { final_output_safe: _finalOutputSafe, ...withoutOutput } = checked;
+    checked = {
+      ...withoutOutput,
+      actual_status: 'system_error',
+      system_error: {
+        code: 'EVALUATION_EVIDENCE_SIZE_LIMIT_EXCEEDED',
+        class: 'evaluation_evidence_error',
+      },
+      completeness_status: 'incomplete',
+      completeness_reasons: appendUniqueString(
+        checked.completeness_reasons,
+        checked.final_output_ref
+          ? 'final_output_safe_omitted_due_to_size'
+          : 'final_output_size_limit_exceeded',
+      ),
+      error_code: 'EVALUATION_EVIDENCE_INCOMPLETE',
+    };
+  }
+  if (jsonByteLength(checked) <= limits.evidenceMaxBytes) {
+    return checked;
+  }
+  return {
+    actual_status: 'system_error',
+    ...(typeof checked.final_output_ref === 'string' ? { final_output_ref: checked.final_output_ref } : {}),
+    tool_calls: Array.isArray(checked.tool_calls) ? checked.tool_calls : [],
+    tool_call_order: Array.isArray(checked.tool_call_order) ? checked.tool_call_order : [],
+    tool_order: Array.isArray(checked.tool_order) ? checked.tool_order : [],
+    tool_arguments: Array.isArray(checked.tool_arguments) ? checked.tool_arguments : [],
+    tool_results_refs: Array.isArray(checked.tool_results_refs) ? checked.tool_results_refs : [],
+    tool_result_refs: Array.isArray(checked.tool_result_refs) ? checked.tool_result_refs : [],
+    unauthorized_tool_count: Number(checked.unauthorized_tool_count ?? 0),
+    forbidden_tool_count: Number(checked.forbidden_tool_count ?? 0),
+    side_effect_without_approval_count: Number(checked.side_effect_without_approval_count ?? 0),
+    duplicate_tool_call_count: Number(checked.duplicate_tool_call_count ?? 0),
+    duplicate_commit_count: Number(checked.duplicate_commit_count ?? 0),
+    policy_violation_count: Number(checked.policy_violation_count ?? 0),
+    cross_tenant_violation_count: Number(checked.cross_tenant_violation_count ?? 0),
+    secret_leak_count: Number(checked.secret_leak_count ?? 0),
+    hidden_reasoning_leak_count: Number(checked.hidden_reasoning_leak_count ?? 0),
+    model_call_count: Number(checked.model_call_count ?? 0),
+    fallback_count: Number(checked.fallback_count ?? 0),
+    latency: checked.latency,
+    tokens: checked.tokens,
+    cost: checked.cost,
+    system_error: {
+      code: 'EVALUATION_EVIDENCE_SIZE_LIMIT_EXCEEDED',
+      class: 'evaluation_evidence_error',
+    },
+    completeness_status: 'incomplete',
+    completeness_reasons: appendUniqueString(
+      checked.completeness_reasons,
+      'evidence_size_limit_exceeded',
+    ),
+    error_code: 'EVALUATION_EVIDENCE_INCOMPLETE',
+    refs: checked.refs,
+  };
+}
+
+function appendUniqueString(value: unknown, next: string): string[] {
+  const values = Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+  return [...new Set([...values, next])];
+}
+
+function jsonByteLength(value: unknown): number {
+  return Buffer.byteLength(stableStringify(value), 'utf8');
 }
 
 export async function generateEvaluationGateDecisionActivity(input: {

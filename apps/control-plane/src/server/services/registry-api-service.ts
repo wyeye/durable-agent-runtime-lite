@@ -35,8 +35,6 @@ import {
 import {
   AgentSpecRepository,
   CapabilityReleaseRepository,
-  EvaluationGateError,
-  EvaluationGateService,
   FlowDefinitionRepository,
   hashModelPolicy,
   hashTenantRuntimePolicy,
@@ -368,97 +366,12 @@ export class RegistryApiService implements RegistryApi {
       });
       return this.latestTenantPolicyRelease(actor.tenantId);
     }
-    if (resourceType === 'model_policy') {
-      const gate = await this.assertModelPolicyEvaluationGate(resourceId, version, input, actor);
-      await this.modelPolicies.publish(resourceId, version, {
-        tenantId: actor.tenantId,
-        operatorId: actor.operatorId,
-        releaseNote: input.release_note,
-        ...(typeof gate.evaluation_gate_decision_id === 'string' ? { evaluationGateDecisionId: gate.evaluation_gate_decision_id } : {}),
-        ...(typeof gate.evaluation_gate_override_id === 'string' ? { evaluationGateOverrideId: gate.evaluation_gate_override_id } : {}),
-        metadataJson: {
-          ...input.metadata_json,
-          ...gate,
-          ...(actor.requestId ? { request_id: actor.requestId } : {}),
-        },
-      });
-      return this.latestModelPolicyRelease(actor.tenantId, resourceId);
-    }
     return this.release.publish(
       resourceType,
       resourceId,
       version,
       releaseOptions(actor, input, this.options.evaluationGateMode),
     );
-  }
-
-  private async assertModelPolicyEvaluationGate(
-    modelPolicyId: string,
-    version: number,
-    input: PublishResourceRequest,
-    actor: ActorOptions,
-  ): Promise<Record<string, unknown>> {
-    const mode = this.options.evaluationGateMode ?? 'advisory';
-    if (mode === 'disabled') {
-      return { evaluation_gate_warning: 'evaluation gate disabled' };
-    }
-    if (!input.evaluation_candidate_bundle_hash) {
-      if (mode === 'advisory') {
-        return {
-          evaluation_gate_warning:
-            'EVALUATION_CANDIDATE_BUNDLE_HASH_REQUIRED: Evaluation candidate bundle hash is required',
-        };
-      }
-      throw new EvaluationGateError(
-        'EVALUATION_CANDIDATE_BUNDLE_HASH_REQUIRED',
-        'Evaluation candidate bundle hash is required',
-        { resource_type: 'model_policy', resource_id: modelPolicyId, resource_version: version },
-      );
-    }
-    const policy = await this.modelPolicies.getByIdAndVersion(modelPolicyId, version, { tenantId: actor.tenantId });
-    if (!policy) {
-      throw new ControlPlaneHttpError(404, 'REGISTRY_VERSION_NOT_FOUND', 'Registry resource version not found', {
-        resource_type: 'model_policy',
-        resource_id: modelPolicyId,
-        version,
-      });
-    }
-    const result = await new EvaluationGateService(this.db).assertPublishAllowed({
-      resourceType: 'model_policy',
-      resourceId: modelPolicyId,
-      resourceVersion: version,
-      resourceHash: hashModelPolicy(policy),
-      candidateBundleHash: input.evaluation_candidate_bundle_hash,
-      operatorId: actor.operatorId,
-      tenantId: actor.tenantId,
-      mode,
-    });
-    if (
-      input.evaluation_gate_decision_id &&
-      result.decision?.gate_decision_id !== input.evaluation_gate_decision_id
-    ) {
-      throw new EvaluationGateError(
-        'EVALUATION_GATE_DECISION_MISMATCH',
-        'Evaluation gate decision id does not match the exact candidate gate decision',
-        { resource_type: 'model_policy', resource_id: modelPolicyId, resource_version: version },
-      );
-    }
-    if (
-      input.evaluation_gate_override_id &&
-      result.override?.override_id !== input.evaluation_gate_override_id
-    ) {
-      throw new EvaluationGateError(
-        'EVALUATION_GATE_OVERRIDE_MISMATCH',
-        'Evaluation gate override id does not match the exact candidate gate override',
-        { resource_type: 'model_policy', resource_id: modelPolicyId, resource_version: version },
-      );
-    }
-    return {
-      evaluation_candidate_bundle_hash: input.evaluation_candidate_bundle_hash,
-      ...(result.decision ? { evaluation_gate_decision_id: result.decision.gate_decision_id } : {}),
-      ...(result.override ? { evaluation_gate_override_id: result.override.override_id } : {}),
-      ...(result.warning ? { evaluation_gate_warning: result.warning } : {}),
-    };
   }
 
   async gray(

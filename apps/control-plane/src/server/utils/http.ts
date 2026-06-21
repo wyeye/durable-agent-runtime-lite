@@ -5,7 +5,7 @@ import type {
   StandardErrorResponse,
   StandardSuccessResponse,
 } from '@dar/contracts';
-import { EvaluationGateError, RegistryRepositoryError } from '@dar/db';
+import { EvaluationGateError, EvaluationRepositoryError, RegistryRepositoryError } from '@dar/db';
 import { AuthError } from '@dar/security';
 
 export class ControlPlaneHttpError extends Error {
@@ -101,6 +101,17 @@ export function mapError(error: unknown): { statusCode: number; body: StandardEr
     };
   }
 
+  if (error instanceof EvaluationRepositoryError) {
+    return {
+      statusCode: statusForEvaluationRepositoryError(error.code),
+      body: fail({
+        code: error.code,
+        message: error.message,
+        details: scrubDetails(error.details),
+      }, requestId),
+    };
+  }
+
   if (error instanceof Error && /validation failed|can_publish=false|dependency/i.test(error.message)) {
     return {
       statusCode: 422,
@@ -135,6 +146,31 @@ function statusForRegistryError(code: string): number {
     code === 'REGISTRY_ROLLBACK_TARGET_NOT_PUBLISHED'
   ) {
     return 409;
+  }
+  return 400;
+}
+
+function statusForEvaluationRepositoryError(code: string): number {
+  if (code.endsWith('_NOT_FOUND')) {
+    return 404;
+  }
+  if (
+    code.endsWith('_REVISION_CONFLICT') ||
+    code.endsWith('_IMMUTABLE') ||
+    code.endsWith('_NOT_MUTABLE') ||
+    code.endsWith('_ROLLBACK_TARGET_INVALID')
+  ) {
+    return 409;
+  }
+  if (
+    code.endsWith('_NOT_PUBLISHABLE') ||
+    code.endsWith('_NOT_VALIDATABLE') ||
+    code.endsWith('_EMPTY') ||
+    code.endsWith('_MISMATCH') ||
+    code.endsWith('_REQUIRED') ||
+    code.endsWith('_NOT_PUBLISHED')
+  ) {
+    return 422;
   }
   return 400;
 }

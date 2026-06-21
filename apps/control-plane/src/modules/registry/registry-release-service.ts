@@ -377,7 +377,7 @@ export class RegistryReleaseService {
     resourceHash: string,
     options: RegistryReleaseServiceOptions,
   ): Promise<PublishGateResult> {
-    if (resourceType !== 'prompt' && resourceType !== 'agent') {
+    if (resourceType !== 'prompt' && resourceType !== 'agent' && resourceType !== 'model_policy') {
       return {};
     }
     const mode = options.evaluationGateMode ?? 'advisory';

@@ -13,8 +13,10 @@ import { errorHandlerPlugin } from './plugins/error-handler.js';
 import { openApiPlugin } from './plugins/openapi.js';
 import { staticFilesPlugin } from './plugins/static-files.js';
 import { healthRoutes } from './routes/health.js';
+import { evaluationRoutes } from './routes/evaluation.js';
 import { operationsRoutes } from './routes/operations.js';
 import { registryRoutes } from './routes/registry.js';
+import { EvaluationApiService, type EvaluationApi } from './services/evaluation-api-service.js';
 import { RegistryApiService, type RegistryApi } from './services/registry-api-service.js';
 
 export interface ControlPlaneAppOptions {
@@ -23,6 +25,7 @@ export interface ControlPlaneAppOptions {
   runtimeApiClient?: RuntimeApiOperationsClient;
   toolGatewayClient?: ToolGatewayOperationsClient;
   registryService?: RegistryApi;
+  evaluationService?: EvaluationApi;
   readyCheck?: () => Promise<void>;
   staticRoot?: string;
 }
@@ -38,7 +41,7 @@ const logger = createLogger(appName);
 export async function createApp(options: ControlPlaneAppOptions = {}): Promise<ControlPlaneAppHandle> {
   const config = options.config ?? loadConfig();
   validateControlPlaneConfig(config);
-  const needsDb = !options.db && (!options.registryService || !options.readyCheck);
+  const needsDb = !options.db && (!options.registryService || !options.evaluationService || !options.readyCheck);
   const createdDb = needsDb ? createDb({ databaseUrl: config.DATABASE_URL }) : undefined;
   const db = options.db ?? createdDb;
   const app = Fastify({ logger: false });
@@ -46,6 +49,7 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
     requireDb(db),
     { evaluationGateMode: config.EVALUATION_GATE_MODE },
   );
+  const evaluationService: EvaluationApi = options.evaluationService ?? new EvaluationApiService(requireDb(db));
   const runtimeApiClient = options.runtimeApiClient ?? new RuntimeApiClient(getRuntimeApiUrl(config));
   const toolGatewayClient = options.toolGatewayClient ?? new ToolGatewayClient(
     getToolGatewayUrl(config),
@@ -67,6 +71,7 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
     readyCheck: options.readyCheck ?? (async () => { await sql`select 1`.execute(requireDb(db)); }),
   });
   await registryRoutes(app, { service: registryService });
+  await evaluationRoutes(app, { service: evaluationService });
   await operationsRoutes(app, { registryService, runtimeApiClient, toolGatewayClient });
 
   app.addHook('onResponse', async (request, reply) => {
@@ -130,7 +135,7 @@ function defaultStaticRoot(): string {
 
 function requireDb(db: Kysely<Database> | undefined): Kysely<Database> {
   if (!db) {
-    throw new Error('Database handle is required for control-plane registry operations');
+    throw new Error('Database handle is required for control-plane services');
   }
   return db;
 }

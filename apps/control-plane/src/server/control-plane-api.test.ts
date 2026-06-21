@@ -6,7 +6,13 @@ import type {
   AgentRunRecord,
   AgentStepRecord,
   CapabilityRelease,
+  EvaluationCase,
   EvaluationCaseResult,
+  EvaluationComparison,
+  EvaluationDataset,
+  EvaluationGateDecisionWithFreshness,
+  EvaluationGateOverride,
+  EvaluationGatePolicy,
   EvaluationRun,
   FlowSpec,
   HumanTaskDecisionResponse,
@@ -26,6 +32,7 @@ import type {
 import { loadConfig } from '@dar/config';
 import { ControlPlaneHttpError } from './utils/http.js';
 import { createApp, shouldServeStaticFiles } from './app.js';
+import type { EvaluationApi } from './services/evaluation-api-service.js';
 import type { RegistryApi, ActorOptions } from './services/registry-api-service.js';
 import { EvaluationGateError, type RegistryResourceRecord } from '@dar/db';
 
@@ -264,6 +271,111 @@ describe('control-plane API', () => {
     await close();
   });
 
+  it('exposes evaluation backend operations through service APIs', async () => {
+    const service = new FakeEvaluationApi();
+    const { app, close } = await testApp({ evaluationService: service });
+
+    const datasets = await app.inject({
+      method: 'GET',
+      url: '/api/v1/evaluation-datasets?page_size=5',
+      headers: auditorHeaders,
+    });
+    expect(datasets.statusCode).toBe(200);
+    expect(datasets.json().data.items[0].dataset_id).toBe('eval_dataset');
+
+    const createDataset = await app.inject({
+      method: 'POST',
+      url: '/api/v1/evaluation-datasets',
+      headers: authHeaders,
+      payload: evaluationDataset(),
+    });
+    expect(createDataset.statusCode).toBe(200);
+    expect(service.lastActor).toMatchObject({ tenantId: 'tenant_1', operatorId: 'operator_1' });
+
+    const createCase = await app.inject({
+      method: 'POST',
+      url: '/api/v1/evaluation-datasets/eval_dataset/versions/1/cases',
+      headers: authHeaders,
+      payload: evaluationCase(),
+    });
+    expect(createCase.statusCode).toBe(200);
+    expect(service.lastCaseRoute).toEqual({ datasetId: 'eval_dataset', version: 1 });
+
+    const createGatePolicy = await app.inject({
+      method: 'POST',
+      url: '/api/v1/evaluation-gate-policies',
+      headers: authHeaders,
+      payload: { policy: gatePolicyCreatePayload() },
+    });
+    expect(createGatePolicy.statusCode).toBe(200);
+    expect(createGatePolicy.json().data.gate_policy_id).toBe('gate_policy_1');
+
+    const decisions = await app.inject({
+      method: 'GET',
+      url: `/api/v1/evaluation-gate-decisions?resource_type=prompt&resource_id=prompt_api&current_resource_hash=${'a'.repeat(64)}&current_candidate_bundle_hash=${'b'.repeat(64)}`,
+      headers: auditorHeaders,
+    });
+    expect(decisions.statusCode).toBe(200);
+    expect(decisions.json().data.items[0].freshness.status).toBe('fresh');
+    expect(service.lastGateDecisionQuery).toMatchObject({
+      resource_type: 'prompt',
+      resource_id: 'prompt_api',
+      current_resource_hash: 'a'.repeat(64),
+      current_candidate_bundle_hash: 'b'.repeat(64),
+    });
+
+    const comparison = await app.inject({
+      method: 'POST',
+      url: '/api/v1/evaluation-comparisons',
+      headers: authHeaders,
+      payload: { candidate_run_id: 'run_1', baseline_run_id: 'run_0' },
+    });
+    expect(comparison.statusCode).toBe(200);
+    expect(comparison.json().data.candidate_run_id).toBe('run_1');
+
+    const fetchedComparison = await app.inject({
+      method: 'GET',
+      url: '/api/v1/evaluation-comparisons/cmp_1',
+      headers: auditorHeaders,
+    });
+    expect(fetchedComparison.statusCode).toBe(200);
+    expect(fetchedComparison.json().data.comparison_id).toBe('cmp_1');
+
+    await close();
+  });
+
+  it('allows only platform_admin to create evaluation gate overrides', async () => {
+    const service = new FakeEvaluationApi();
+    const { app, close } = await testApp({ evaluationService: service });
+    const payload = {
+      resource_hash: 'a'.repeat(64),
+      reason: 'admin override after verified review',
+      scope: 'single_resource_hash',
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    };
+
+    const operatorAttempt = await app.inject({
+      method: 'POST',
+      url: '/api/v1/evaluation-gate-decisions/gate_decision_1/override',
+      headers: authHeaders,
+      payload,
+    });
+    expect(operatorAttempt.statusCode).toBe(403);
+    expect(service.overrideCalls).toBe(0);
+
+    const adminOverride = await app.inject({
+      method: 'POST',
+      url: '/api/v1/evaluation-gate-decisions/gate_decision_1/override',
+      headers: adminHeaders,
+      payload,
+    });
+    expect(adminOverride.statusCode).toBe(200);
+    expect(adminOverride.json().data.gate_decision_id).toBe('gate_decision_1');
+    expect(service.overrideCalls).toBe(1);
+
+    await close();
+  });
+
   it('exposes release list and OpenAPI', async () => {
     const { app, close } = await testApp();
     const releases = await app.inject({
@@ -410,6 +522,7 @@ describe('control-plane API', () => {
 async function testApp(options: {
   configEnv?: NodeJS.ProcessEnv;
   registryService?: RegistryApi;
+  evaluationService?: EvaluationApi;
   runtimeApiClient?: FakeRuntimeApiClient;
   toolGatewayClient?: FakeToolGatewayClient;
   staticRoot?: string;
@@ -425,6 +538,7 @@ async function testApp(options: {
       ...(options.configEnv ?? {}),
     }),
     registryService: options.registryService ?? new FakeRegistryApi(),
+    evaluationService: options.evaluationService ?? new FakeEvaluationApi(),
     runtimeApiClient: options.runtimeApiClient ?? new FakeRuntimeApiClient(),
     toolGatewayClient: options.toolGatewayClient ?? new FakeToolGatewayClient(),
     readyCheck: async () => undefined,
@@ -559,6 +673,130 @@ class FakeRegistryApi implements RegistryApi {
 
   async getTenantAgentAdmission() {
     return admission();
+  }
+}
+
+class FakeEvaluationApi implements EvaluationApi {
+  lastActor?: ActorOptions;
+  lastCaseRoute?: { datasetId: string; version: number };
+  lastGateDecisionQuery?: unknown;
+  overrideCalls = 0;
+
+  async listDatasets(): Promise<PaginatedResponse<EvaluationDataset>> {
+    return { items: [evaluationDataset()], page: 1, page_size: 20 };
+  }
+
+  async getDataset(): Promise<EvaluationDataset> {
+    return evaluationDataset();
+  }
+
+  async listDatasetVersions(): Promise<EvaluationDataset[]> {
+    return [evaluationDataset()];
+  }
+
+  async createDataset(_input: unknown, actor: ActorOptions): Promise<EvaluationDataset> {
+    this.lastActor = actor;
+    return evaluationDataset({ created_by: actor.operatorId });
+  }
+
+  async updateDataset(_datasetId: string, _version: number, _input: unknown, actor: ActorOptions): Promise<EvaluationDataset> {
+    this.lastActor = actor;
+    return evaluationDataset({ revision: 2, updated_by: actor.operatorId });
+  }
+
+  async cloneDataset(): Promise<EvaluationDataset> {
+    return evaluationDataset({ version: 2 });
+  }
+
+  async validateDataset(): Promise<EvaluationDataset> {
+    return evaluationDataset({ status: 'validated' });
+  }
+
+  async publishDataset(): Promise<EvaluationDataset> {
+    return evaluationDataset({ status: 'published', published_by: 'operator_1' });
+  }
+
+  async rollbackDataset(): Promise<EvaluationDataset> {
+    return evaluationDataset({ status: 'published' });
+  }
+
+  async listCases(): Promise<EvaluationCase[]> {
+    return [evaluationCase()];
+  }
+
+  async getCase(): Promise<EvaluationCase> {
+    return evaluationCase();
+  }
+
+  async createCase(datasetId: string, version: number, _input: unknown, actor: ActorOptions): Promise<EvaluationCase> {
+    this.lastActor = actor;
+    this.lastCaseRoute = { datasetId, version };
+    return evaluationCase({ dataset_id: datasetId, dataset_version: version });
+  }
+
+  async updateCase(_caseId: string, _input: unknown, actor: ActorOptions): Promise<EvaluationCase> {
+    this.lastActor = actor;
+    return evaluationCase({ name: 'updated case' });
+  }
+
+  async deleteCase(): Promise<EvaluationCase> {
+    return evaluationCase();
+  }
+
+  async listGatePolicies(): Promise<PaginatedResponse<EvaluationGatePolicy>> {
+    return { items: [evaluationGatePolicy()], page: 1, page_size: 20 };
+  }
+
+  async getGatePolicy(): Promise<EvaluationGatePolicy> {
+    return evaluationGatePolicy();
+  }
+
+  async listGatePolicyVersions(): Promise<EvaluationGatePolicy[]> {
+    return [evaluationGatePolicy()];
+  }
+
+  async createGatePolicy(_input: unknown, actor: ActorOptions): Promise<EvaluationGatePolicy> {
+    this.lastActor = actor;
+    return evaluationGatePolicy({ created_by: actor.operatorId });
+  }
+
+  async updateGatePolicy(): Promise<EvaluationGatePolicy> {
+    return evaluationGatePolicy({ revision: 2 });
+  }
+
+  async cloneGatePolicy(): Promise<EvaluationGatePolicy> {
+    return evaluationGatePolicy({ version: 2 });
+  }
+
+  async validateGatePolicy(): Promise<EvaluationGatePolicy> {
+    return evaluationGatePolicy({ status: 'validated' });
+  }
+
+  async publishGatePolicy(): Promise<EvaluationGatePolicy> {
+    return evaluationGatePolicy({ status: 'published', published_by: 'operator_1' });
+  }
+
+  async listGateDecisions(input?: unknown): Promise<PaginatedResponse<EvaluationGateDecisionWithFreshness>> {
+    this.lastGateDecisionQuery = input;
+    return { items: [evaluationGateDecisionWithFreshness()], page: 1, page_size: 20 };
+  }
+
+  async getGateDecision(): Promise<EvaluationGateDecisionWithFreshness> {
+    return evaluationGateDecisionWithFreshness();
+  }
+
+  async createOverride(decisionId: string, _input: unknown, actor: ActorOptions & { roles: string[] }): Promise<EvaluationGateOverride> {
+    this.lastActor = actor;
+    this.overrideCalls += 1;
+    return evaluationGateOverride({ gate_decision_id: decisionId, operator_id: actor.operatorId });
+  }
+
+  async createComparison(): Promise<EvaluationComparison> {
+    return evaluationComparison();
+  }
+
+  async getComparison(): Promise<EvaluationComparison> {
+    return evaluationComparison();
   }
 }
 
@@ -768,6 +1006,153 @@ function admission(overrides: Partial<TenantAgentAdmission> = {}): TenantAgentAd
     activated_at: new Date('2025-01-01T00:00:01.000Z').toISOString(),
     updated_at: new Date('2025-01-01T00:00:01.000Z').toISOString(),
     revision: 2,
+    ...overrides,
+  };
+}
+
+function evaluationDataset(overrides: Partial<EvaluationDataset> = {}): EvaluationDataset {
+  return {
+    dataset_id: 'eval_dataset',
+    version: 1,
+    status: 'draft',
+    name: 'Runtime evaluation dataset',
+    tags: ['smoke'],
+    default_weight: 1,
+    revision: 1,
+    dataset_hash: 'a'.repeat(64),
+    created_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    updated_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    ...overrides,
+  };
+}
+
+function evaluationCase(overrides: Partial<EvaluationCase> = {}): EvaluationCase {
+  return {
+    case_id: 'case_1',
+    dataset_id: 'eval_dataset',
+    dataset_version: 1,
+    name: 'Case 1',
+    input: { text: 'hello' },
+    context_refs: [],
+    expected_tool_calls: [],
+    forbidden_tools: [],
+    final_assertions: [],
+    policy_assertions: [],
+    weight: 1,
+    tags: ['smoke'],
+    enabled: true,
+    created_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    updated_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    ...overrides,
+  };
+}
+
+function gatePolicyCreatePayload(): Omit<EvaluationGatePolicy, 'revision' | 'gate_policy_hash' | 'created_at' | 'updated_at' | 'published_at'> {
+  return {
+    gate_policy_id: 'gate_policy_1',
+    version: 1,
+    status: 'draft',
+    resource_types: ['prompt', 'agent', 'model_policy'],
+    required_dataset_refs: [{ dataset_id: 'eval_dataset', version: 1, dataset_hash: 'a'.repeat(64) }],
+    thresholds: {
+      minimum_pass_rate: 1,
+      minimum_weighted_score: 0.9,
+      minimum_tool_selection_score: 0,
+      maximum_forbidden_tool_calls: 0,
+      maximum_policy_violations: 0,
+      maximum_side_effect_without_approval: 0,
+      maximum_secret_leaks: 0,
+      maximum_hidden_reasoning_leaks: 0,
+      maximum_cross_tenant_violations: 0,
+      maximum_system_error_rate: 0,
+    },
+    regression_rules: {
+      maximum_score_regression: 0,
+      maximum_pass_rate_regression: 0,
+      maximum_latency_regression_percent: 0,
+      maximum_token_regression_percent: 0,
+      maximum_cost_regression_percent: 0,
+      block_newly_failed_cases: true,
+      block_safety_regression: true,
+      block_tool_regression: true,
+      require_same_dataset: true,
+    },
+    required_case_tags: ['smoke'],
+    allow_override: true,
+  };
+}
+
+function evaluationGatePolicy(overrides: Partial<EvaluationGatePolicy> = {}): EvaluationGatePolicy {
+  return {
+    ...gatePolicyCreatePayload(),
+    revision: 1,
+    gate_policy_hash: 'b'.repeat(64),
+    created_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    updated_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    ...overrides,
+  };
+}
+
+function evaluationGateDecisionWithFreshness(): EvaluationGateDecisionWithFreshness {
+  return {
+    decision: {
+      gate_decision_id: 'gate_decision_1',
+      resource_type: 'prompt',
+      resource_id: 'prompt_api',
+      resource_version: 1,
+      resource_hash: 'a'.repeat(64),
+      candidate_bundle_hash: 'b'.repeat(64),
+      gate_policy_id: 'gate_policy_1',
+      gate_policy_version: 1,
+      gate_policy_hash: 'c'.repeat(64),
+      evaluation_run_ids: ['run_1'],
+      decision: 'passed',
+      reasons: [],
+      decided_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+      created_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    },
+    freshness: {
+      status: 'fresh',
+      reasons: [],
+      checked_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    },
+  };
+}
+
+function evaluationGateOverride(overrides: Partial<EvaluationGateOverride> = {}): EvaluationGateOverride {
+  return {
+    override_id: 'override_1',
+    gate_decision_id: 'gate_decision_1',
+    resource_type: 'prompt',
+    resource_id: 'prompt_api',
+    resource_version: 1,
+    resource_hash: 'a'.repeat(64),
+    operator_id: 'operator_1',
+    reason: 'admin override after verified review',
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    created_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    ...overrides,
+  };
+}
+
+function evaluationComparison(overrides: Partial<EvaluationComparison> = {}): EvaluationComparison {
+  return {
+    comparison_id: 'cmp_1',
+    candidate_run_id: 'run_1',
+    baseline_run_id: 'run_0',
+    comparable: true,
+    dataset_id: 'eval_dataset',
+    dataset_version: 1,
+    dataset_hash: 'a'.repeat(64),
+    overall_score_delta: 0,
+    pass_rate_delta: 0,
+    newly_failed_cases: [],
+    newly_passed_cases: [],
+    unchanged_failures: [],
+    regression_severity: 'none',
+    reasons: [],
+    result: {},
+    created_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
     ...overrides,
   };
 }

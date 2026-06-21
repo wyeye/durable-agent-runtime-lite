@@ -148,6 +148,7 @@ export const runtimeConfigSchema = z.object({
     z.enum(['disabled', 'advisory', 'required']).default('advisory'),
   ),
   EVALUATION_OUTPUT_MAX_BYTES: positiveIntSchema(1_000_000),
+  EVALUATION_EVIDENCE_MAX_BYTES: positiveIntSchema(2_000_000),
   EVALUATION_REGEX_TIMEOUT_MS: positiveIntSchema(250),
   SEED_EVALUATION_DATASETS: z.preprocess(emptyToUndefined, z.coerce.boolean().default(false)),
   TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED: z.preprocess(

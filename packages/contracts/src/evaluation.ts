@@ -152,6 +152,15 @@ export const evaluationGateDecisionStatusSchema = z.enum([
   'overridden',
   'advisory_failed',
 ]);
+export const evaluationGateFreshnessReasonSchema = z.enum([
+  'RESOURCE_HASH_CHANGED',
+  'CANDIDATE_BUNDLE_CHANGED',
+  'DATASET_HASH_CHANGED',
+  'GATE_POLICY_HASH_CHANGED',
+  'RUN_NOT_COMPLETED',
+  'RUN_MISSING',
+  'DECISION_MISMATCH',
+]);
 export const evaluationTriggerTypeSchema = z.enum(['manual', 'publish_gate', 'regression', 'ci']);
 export const evaluationComparisonSeveritySchema = z.enum([
   'none',
@@ -514,7 +523,7 @@ export const evaluationGateOverrideSchema = z.object({
   resource_hash: sha256Schema,
   operator_id: z.string().min(1),
   reason: z.string().min(12).max(2000),
-  expires_at: z.string().datetime().optional(),
+  expires_at: z.string().datetime(),
   created_at: z.string().datetime().optional(),
 });
 
@@ -570,7 +579,18 @@ export const evaluationOverrideRequestSchema = z.object({
   resource_hash: sha256Schema,
   reason: z.string().min(12).max(2000),
   scope: z.enum(['single_resource_hash']),
-  expires_at: z.string().datetime().optional(),
+  expires_at: z.string().datetime(),
+});
+
+export const evaluationGateDecisionFreshnessSchema = z.object({
+  status: z.enum(['fresh', 'stale']),
+  reasons: z.array(evaluationGateFreshnessReasonSchema).default([]),
+  checked_at: z.string().datetime(),
+});
+
+export const evaluationGateDecisionWithFreshnessSchema = z.object({
+  decision: evaluationGateDecisionSchema,
+  freshness: evaluationGateDecisionFreshnessSchema,
 });
 
 export type EvaluationDatasetStatus = z.infer<typeof evaluationDatasetStatusSchema>;
@@ -581,6 +601,9 @@ export type EvaluationMetricType = z.infer<typeof evaluationMetricTypeSchema>;
 export type EvaluationGateMode = z.infer<typeof evaluationGateModeSchema>;
 export type EvaluationGateDecisionStatus = z.infer<
   typeof evaluationGateDecisionStatusSchema
+>;
+export type EvaluationGateFreshnessReason = z.infer<
+  typeof evaluationGateFreshnessReasonSchema
 >;
 export type EvaluationAssertion = z.infer<typeof evaluationAssertionSchema>;
 export type ExpectedToolCall = z.infer<typeof expectedToolCallSchema>;
@@ -609,3 +632,9 @@ export type EvaluationGatePolicyCreateRequest = z.infer<
   typeof evaluationGatePolicyCreateRequestSchema
 >;
 export type EvaluationOverrideRequest = z.infer<typeof evaluationOverrideRequestSchema>;
+export type EvaluationGateDecisionFreshness = z.infer<
+  typeof evaluationGateDecisionFreshnessSchema
+>;
+export type EvaluationGateDecisionWithFreshness = z.infer<
+  typeof evaluationGateDecisionWithFreshnessSchema
+>;

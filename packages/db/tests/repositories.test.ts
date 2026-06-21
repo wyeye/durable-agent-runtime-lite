@@ -38,9 +38,14 @@ import {
   ToolManifestRepository,
   AuditEventRepository,
   EvaluationComparisonService,
+  createEvaluationOverride,
   buildCandidateAgentExecutionPlan,
   assertCandidateFidelity,
+  EvaluationDatasetRepository,
   EvaluationGateError,
+  EvaluationGateOverrideRepository,
+  EvaluationGateFreshnessService,
+  EvaluationGatePolicyRepository,
   EvaluationGateService,
   EvaluationEvidenceCollector,
   EvaluationScoringEngine,
@@ -123,7 +128,12 @@ class FakeQuery {
   }
 
   set(value: unknown) {
-    this.first = { ...(this.rows[0] as object | undefined), ...(value as object) };
+    const current = (this.rows[0] as Record<string, unknown> | undefined) ?? {};
+    const patch = { ...(value as Record<string, unknown>) };
+    if (patch.revision !== undefined && typeof patch.revision !== 'number' && typeof current.revision === 'number') {
+      patch.revision = current.revision + 1;
+    }
+    this.first = { ...current, ...patch };
     return this;
   }
 
@@ -148,6 +158,10 @@ class FakeDb {
   calls: Array<{ op: string; table: string }> = [];
 
   constructor(private readonly rows: Record<string, unknown[]>) {}
+
+  rowsForTest(): Record<string, unknown[]> {
+    return this.rows;
+  }
 
   selectFrom(table: string) {
     this.calls.push({ op: 'select', table });
@@ -600,6 +614,75 @@ describe('db repositories', () => {
       revision: 1,
     });
     expect(policyHash).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it('returns validated evaluation datasets and gate policies to draft when mutable fields change', async () => {
+    const now = '2026-01-01T00:00:00.000Z';
+    const datasetDb = new FakeDb({
+      evaluation_dataset: [{
+        dataset_id: 'runtime-agent-core-v1',
+        version: 1,
+        status: 'validated',
+        name: 'Runtime Agent Core',
+        description: null,
+        domain: null,
+        tags_json: ['runtime'],
+        default_weight: 1,
+        revision: 2,
+        dataset_hash: 'a'.repeat(64),
+        created_by: 'operator',
+        updated_by: 'operator',
+        published_by: null,
+        created_at: now,
+        updated_at: now,
+        published_at: null,
+      }],
+      evaluation_case: [],
+    });
+
+    await expect(new EvaluationDatasetRepository(datasetDb as never).updateDraft(
+      'runtime-agent-core-v1',
+      1,
+      { name: 'Runtime Agent Core Draft', expectedRevision: 2 },
+      { operatorId: 'operator', tenantId: 'tenant_1' },
+    )).resolves.toMatchObject({
+      status: 'draft',
+      name: 'Runtime Agent Core Draft',
+      updated_by: 'operator',
+    });
+
+    const gatePolicyDb = new FakeDb({
+      evaluation_gate_policy: [{
+        gate_policy_id: 'registry-publish-v1',
+        version: 1,
+        status: 'validated',
+        resource_types_json: ['prompt'],
+        required_dataset_refs_json: [{ dataset_id: 'runtime-agent-core-v1', version: 1, dataset_hash: 'b'.repeat(64) }],
+        thresholds_json: { minimum_pass_rate: 1 },
+        regression_rules_json: {},
+        required_case_tags_json: [],
+        allow_override: true,
+        revision: 3,
+        gate_policy_hash: 'c'.repeat(64),
+        created_by: 'operator',
+        updated_by: 'operator',
+        published_by: null,
+        created_at: now,
+        updated_at: now,
+        published_at: null,
+      }],
+    });
+
+    await expect(new EvaluationGatePolicyRepository(gatePolicyDb as never).updateDraft(
+      'registry-publish-v1',
+      1,
+      { policy: { allow_override: false }, expectedRevision: 3 },
+      { operatorId: 'operator', tenantId: 'tenant_1' },
+    )).resolves.toMatchObject({
+      status: 'draft',
+      allow_override: false,
+      updated_by: 'operator',
+    });
   });
 
   it('builds prompt candidate execution plans with candidate prompt content, not agent current prompt', () => {
@@ -1163,8 +1246,9 @@ describe('db repositories', () => {
         idempotency_record_ids: ['task_eval:knowledge.search'],
       },
     });
-    expect(evidence.final_output_safe).toEqual({ error_message: 'agent failed after tool evidence' });
-    expect(evidence.final_output_ref).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(evidence.final_output_safe).toEqual({ output_ref: 'sha256:agent-output' });
+    expect(evidence.final_output_ref).toBe('sha256:agent-output');
+    expect(JSON.stringify(evidence)).not.toContain('agent failed after tool evidence');
     expect(evidence.system_error).toEqual({
       code: 'AGENT_FAILED',
       class: 'evaluation_evidence_error',
@@ -1189,10 +1273,89 @@ describe('db repositories', () => {
     });
   });
 
+  it('fails closed when evaluation evidence output or snapshot exceeds configured size', async () => {
+    const now = '2026-01-01T00:00:00.000Z';
+    const largeSafeResponse = { text: 'x'.repeat(512) };
+    const baseRows = {
+      task_run: [taskRunRow()],
+      agent_run: [agentRunRow({ error_message: 'internal error text must not persist' })],
+      agent_step: [
+        {
+          agent_step_id: 'agent_step_large',
+          agent_run_id: 'agent_eval',
+          segment_index: 0,
+          stable_step_key: 'agent_eval:0',
+          segment_status: 'completed',
+          decision_summary: 'completed',
+          proposed_tool_calls_json: [],
+          tool_result_refs_json: [],
+          authoritative_tool_result_refs_json: [],
+          human_task_ids_json: [],
+          context_snapshot_before_ref: null,
+          context_snapshot_after_ref: null,
+          handoff_refs_json: [],
+          context_snapshot_ref: null,
+          output_ref: 'sha256:large-agent-output',
+          usage_json: {},
+          error_code: null,
+          error_message: 'internal step text must not persist',
+          created_at: now,
+          updated_at: now,
+        },
+      ],
+      model_call_log: [modelCallRow({
+        safe_response_json: largeSafeResponse,
+        response_hash: 'f'.repeat(64),
+      })],
+      model_call_attempt: [],
+      tool_call_log: [],
+      human_task: [],
+      audit_event: [],
+    };
+
+    const outputLimited = await new EvaluationEvidenceCollector(new FakeDb(baseRows) as never, {
+      outputMaxBytes: 64,
+      evidenceMaxBytes: 4096,
+    }).collect({
+      tenantId: 'tenant_1',
+      evaluationRunId: 'eval_run_1',
+      caseId: 'case_1',
+      taskRunId: 'task_eval',
+      agentRunId: 'agent_eval',
+    });
+    expect(outputLimited.final_output_safe).toBeUndefined();
+    expect(outputLimited.final_output_ref).toBe('sha256:large-agent-output');
+    expect(outputLimited.completeness_status).toBe('complete');
+    expect(JSON.stringify(outputLimited)).not.toContain('internal error text must not persist');
+
+    const evidenceLimited = await new EvaluationEvidenceCollector(new FakeDb(baseRows) as never, {
+      outputMaxBytes: 4096,
+      evidenceMaxBytes: 256,
+    }).collect({
+      tenantId: 'tenant_1',
+      evaluationRunId: 'eval_run_1',
+      caseId: 'case_1',
+      taskRunId: 'task_eval',
+      agentRunId: 'agent_eval',
+    });
+    expect(evidenceLimited).toMatchObject({
+      actual_status: 'system_error',
+      final_output_ref: 'sha256:large-agent-output',
+      completeness_status: 'incomplete',
+      system_error: {
+        code: 'EVALUATION_EVIDENCE_SIZE_LIMIT_EXCEEDED',
+        class: 'evaluation_evidence_error',
+      },
+      error_code: 'EVALUATION_EVIDENCE_INCOMPLETE',
+    });
+    expect(evidenceLimited.completeness_reasons).toContain('evidence_size_limit_exceeded');
+    expect(JSON.stringify(evidenceLimited)).not.toContain(largeSafeResponse.text);
+  });
+
   it('fails closed for publish gates unless an exact passed decision exists', async () => {
     const resourceHash = 'c'.repeat(64);
-    const bundleHash = 'd'.repeat(64);
     const policyHash = 'e'.repeat(64);
+    const missingBundleHash = 'd'.repeat(64);
     const noPolicyDb = new FakeDb({ evaluation_gate_policy: [], audit_event: [] });
 
     await expect(new EvaluationGateService(noPolicyDb as never).assertPublishAllowed({
@@ -1200,7 +1363,7 @@ describe('db repositories', () => {
       resourceId: 'release_prompt',
       resourceVersion: 1,
       resourceHash,
-      candidateBundleHash: bundleHash,
+      candidateBundleHash: missingBundleHash,
       operatorId: 'operator',
       tenantId: 'tenant_1',
       mode: 'required',
@@ -1214,7 +1377,7 @@ describe('db repositories', () => {
       resourceId: 'release_prompt',
       resourceVersion: 1,
       resourceHash,
-      candidateBundleHash: bundleHash,
+      candidateBundleHash: missingBundleHash,
       operatorId: 'operator',
       tenantId: 'tenant_1',
       mode: 'advisory',
@@ -1223,6 +1386,132 @@ describe('db repositories', () => {
     });
 
     const now = '2026-01-01T00:00:00.000Z';
+    const agentPlan = buildCandidateAgentExecutionPlan({
+      tenantId: 'tenant_1',
+      agent: {
+        sha256: resourceHash,
+        spec: {
+          agent_id: 'agent_1',
+          version: 1,
+          status: 'published',
+          prompt_ref: 'release_prompt@1',
+          model_policy: 'deterministic:final_only',
+          model_policy_ref: {
+            model_policy_id: 'policy_1',
+            model_policy_version: 1,
+            model_policy_hash: 'f'.repeat(64),
+          },
+          allowed_tools: [],
+          allowed_handoffs: [],
+          max_steps: 3,
+          max_tokens: 1000,
+        },
+      },
+      prompt: {
+        sha256: resourceHash,
+        spec: {
+          prompt_id: 'release_prompt',
+          version: 1,
+          name: 'release prompt',
+          content: 'release prompt',
+          variables: [],
+          status: 'published',
+        },
+      },
+      modelPolicy: modelPolicyFixture('policy_1', 1),
+      modelPolicyHash: 'f'.repeat(64),
+      generatedAt: now,
+    });
+    const candidateBundle = {
+      primary_subject_type: 'prompt' as const,
+      primary_subject_id: 'release_prompt',
+      primary_subject_version: 1,
+      primary_subject_hash: resourceHash,
+      agent_id: agentPlan.agent_id,
+      agent_version: agentPlan.agent_version,
+      agent_hash: agentPlan.agent_sha256,
+      prompt_id: agentPlan.prompt_id,
+      prompt_version: agentPlan.prompt_version,
+      prompt_hash: agentPlan.prompt_sha256,
+      model_policy_id: agentPlan.model_policy_id,
+      model_policy_version: agentPlan.model_policy_version,
+      model_policy_hash: agentPlan.model_policy_hash,
+      agent_execution_plan_ref: agentPlan.execution_plan_ref,
+      agent_execution_plan_hash: agentPlan.execution_plan_hash,
+      tool_refs: [],
+      tenant_policy_snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
+      tenant_policy_snapshot_hash: '9'.repeat(64),
+    };
+    const bundleHash = hashEvaluationCandidateBundle(candidateBundle);
+    const subjectSnapshot = {
+      subject_snapshot_id: 'snapshot_1',
+      subject_snapshot_ref: 'db://evaluation-subject-snapshot/snapshot_1',
+      primary_subject_type: 'prompt',
+      primary_subject_id: 'release_prompt',
+      primary_subject_version: 1,
+      primary_subject_hash: resourceHash,
+      candidate_bundle_json: candidateBundle,
+      candidate_bundle_hash: bundleHash,
+      created_at: now,
+    };
+    const subjectSnapshotHash = '1'.repeat(64);
+    const evaluationPlanWithoutHash = {
+      evaluation_execution_plan_id: 'plan_1',
+      evaluation_execution_plan_ref: 'db://evaluation-execution-plan/plan_1',
+      subject_snapshot_ref: subjectSnapshot.subject_snapshot_ref,
+      subject_snapshot_hash: subjectSnapshotHash,
+      tenant_id: 'tenant_1',
+      dataset_id: 'runtime-agent-core-v1',
+      dataset_version: 1,
+      dataset_hash: 'a'.repeat(64),
+      candidate_bundle_hash: bundleHash,
+      agent_execution_plan_ref: agentPlan.execution_plan_ref,
+      agent_execution_plan_hash: agentPlan.execution_plan_hash,
+      resolved_agent_plan: agentPlan.plan,
+      tools: [],
+      tenant_policy_snapshot_ref: 'db://tenant-runtime-policy-snapshot/snapshot_1',
+      tenant_policy_snapshot_hash: '9'.repeat(64),
+      budget: agentPlan.budget,
+      evaluation_mode: 'model_gateway' as const,
+      created_at: now,
+    };
+    const evaluationPlan = {
+      ...evaluationPlanWithoutHash,
+      plan_hash: hashJson(evaluationPlanWithoutHash),
+    };
+    const completedRun = {
+      evaluation_run_id: 'run_1',
+      tenant_id: 'tenant_1',
+      dataset_id: 'runtime-agent-core-v1',
+      dataset_version: 1,
+      dataset_hash: 'a'.repeat(64),
+      subject_snapshot_ref: subjectSnapshot.subject_snapshot_ref,
+      subject_snapshot_hash: subjectSnapshotHash,
+      evaluation_execution_plan_ref: evaluationPlan.evaluation_execution_plan_ref,
+      evaluation_execution_plan_hash: evaluationPlan.plan_hash,
+      workflow_id: 'workflow_1',
+      workflow_run_id: 'workflow_run_1',
+      cancellation_requested_at: null,
+      system_error_cases: 0,
+      execution_started_at: now,
+      evidence_collection_status: 'completed',
+      baseline_run_id: null,
+      trigger_type: 'publish_gate',
+      status: 'completed',
+      total_cases: 1,
+      completed_cases: 1,
+      passed_cases: 1,
+      failed_cases: 0,
+      skipped_cases: 0,
+      aggregate_score: 1,
+      started_at: now,
+      completed_at: now,
+      error_code: null,
+      error_message: null,
+      created_by: 'operator',
+      created_at: now,
+      updated_at: now,
+    };
     const passedDb = new FakeDb({
       evaluation_gate_policy: [
         {
@@ -1267,6 +1556,24 @@ describe('db repositories', () => {
           created_at: now,
         },
       ],
+      evaluation_run: [completedRun],
+      evaluation_execution_plan: [
+        {
+          evaluation_execution_plan_id: evaluationPlan.evaluation_execution_plan_id,
+          evaluation_execution_plan_ref: evaluationPlan.evaluation_execution_plan_ref,
+          subject_snapshot_ref: evaluationPlan.subject_snapshot_ref,
+          subject_snapshot_hash: evaluationPlan.subject_snapshot_hash,
+          tenant_id: evaluationPlan.tenant_id,
+          dataset_id: evaluationPlan.dataset_id,
+          dataset_version: evaluationPlan.dataset_version,
+          dataset_hash: evaluationPlan.dataset_hash,
+          candidate_bundle_hash: evaluationPlan.candidate_bundle_hash,
+          plan_json: evaluationPlan,
+          plan_hash: evaluationPlan.plan_hash,
+          created_at: now,
+        },
+      ],
+      evaluation_subject_snapshot: [subjectSnapshot],
     });
 
     await expect(new EvaluationGateService(passedDb as never).assertPublishAllowed({
@@ -1280,6 +1587,161 @@ describe('db repositories', () => {
       mode: 'required',
     })).resolves.toMatchObject({
       decision: { gate_decision_id: 'gate_decision_passed', decision: 'passed' },
+    });
+
+    const staleDb = new FakeDb({
+      ...passedDb.rowsForTest(),
+      evaluation_run: [{ ...completedRun, status: 'running', completed_at: null }],
+      audit_event: [],
+    });
+    await expect(new EvaluationGateService(staleDb as never).assertPublishAllowed({
+      resourceType: 'prompt',
+      resourceId: 'release_prompt',
+      resourceVersion: 1,
+      resourceHash,
+      candidateBundleHash: bundleHash,
+      operatorId: 'operator',
+      tenantId: 'tenant_1',
+      mode: 'required',
+    })).rejects.toMatchObject({
+      code: 'EVALUATION_GATE_STALE',
+    });
+  });
+
+  it('marks decisions stale for current hash mismatches and rejects permanent overrides', async () => {
+    const now = '2026-01-01T00:00:00.000Z';
+    const decision = {
+      gate_decision_id: 'gate_decision_override',
+      resource_type: 'prompt' as const,
+      resource_id: 'release_prompt',
+      resource_version: 1,
+      resource_hash: 'a'.repeat(64),
+      candidate_bundle_hash: 'b'.repeat(64),
+      gate_policy_id: 'registry-publish-v1',
+      gate_policy_version: 1,
+      gate_policy_hash: 'c'.repeat(64),
+      evaluation_run_ids: ['run_1'],
+      decision: 'failed' as const,
+      reasons: ['regression'],
+      decided_at: now,
+      created_at: now,
+    };
+    const db = new FakeDb({
+      evaluation_gate_policy: [{
+        gate_policy_id: 'registry-publish-v1',
+        version: 1,
+        status: 'published',
+        resource_types_json: ['prompt'],
+        required_dataset_refs_json: [{ dataset_id: 'runtime-agent-core-v1', version: 1, dataset_hash: 'd'.repeat(64) }],
+        thresholds_json: {},
+        regression_rules_json: {},
+        required_case_tags_json: [],
+        allow_override: true,
+        revision: 1,
+        gate_policy_hash: 'c'.repeat(64),
+        created_by: 'operator',
+        updated_by: 'operator',
+        published_by: 'operator',
+        created_at: now,
+        updated_at: now,
+        published_at: now,
+      }],
+      evaluation_gate_decision: [{
+        gate_decision_id: decision.gate_decision_id,
+        resource_type: decision.resource_type,
+        resource_id: decision.resource_id,
+        resource_version: decision.resource_version,
+        resource_hash: decision.resource_hash,
+        candidate_bundle_hash: decision.candidate_bundle_hash,
+        gate_policy_id: decision.gate_policy_id,
+        gate_policy_version: decision.gate_policy_version,
+        gate_policy_hash: decision.gate_policy_hash,
+        evaluation_run_ids_json: decision.evaluation_run_ids,
+        decision: decision.decision,
+        reasons_json: decision.reasons,
+        decided_at: now,
+        created_at: now,
+      }],
+      evaluation_run: [{
+        evaluation_run_id: 'run_1',
+        tenant_id: 'tenant_1',
+        dataset_id: 'runtime-agent-core-v1',
+        dataset_version: 1,
+        dataset_hash: 'd'.repeat(64),
+        subject_snapshot_ref: 'db://evaluation-subject-snapshot/snapshot_1',
+        subject_snapshot_hash: 'e'.repeat(64),
+        evaluation_execution_plan_ref: 'db://evaluation-execution-plan/plan_1',
+        evaluation_execution_plan_hash: 'f'.repeat(64),
+        trigger_type: 'publish_gate',
+        status: 'completed',
+        total_cases: 1,
+        completed_cases: 1,
+        passed_cases: 0,
+        failed_cases: 1,
+        skipped_cases: 0,
+        aggregate_score: 0,
+        workflow_id: null,
+        workflow_run_id: null,
+        cancellation_requested_at: null,
+        system_error_cases: 0,
+        execution_started_at: now,
+        evidence_collection_status: 'completed',
+        baseline_run_id: null,
+        started_at: now,
+        completed_at: now,
+        error_code: null,
+        error_message: null,
+        created_by: 'operator',
+        created_at: now,
+        updated_at: now,
+      }],
+      evaluation_execution_plan: [],
+      evaluation_subject_snapshot: [],
+      evaluation_gate_override: [],
+      audit_event: [],
+    });
+
+    await expect(new EvaluationGateFreshnessService(db as never).check({
+      decision,
+      currentResourceHash: '0'.repeat(64),
+      currentCandidateBundleHash: '1'.repeat(64),
+      currentDatasetHash: '2'.repeat(64),
+      currentGatePolicyHash: '3'.repeat(64),
+    })).resolves.toMatchObject({
+      status: 'stale',
+      reasons: expect.arrayContaining([
+        'RESOURCE_HASH_CHANGED',
+        'CANDIDATE_BUNDLE_CHANGED',
+        'DATASET_HASH_CHANGED',
+        'GATE_POLICY_HASH_CHANGED',
+        'RUN_MISSING',
+        'DECISION_MISMATCH',
+      ]),
+    });
+
+    await expect(createEvaluationOverride(db as never, {
+      decisionId: decision.gate_decision_id,
+      resourceHash: decision.resource_hash,
+      operatorId: 'admin',
+      tenantId: 'tenant_1',
+      reason: 'admin override after verified review',
+      roles: ['platform_admin'],
+    })).rejects.toMatchObject({
+      code: 'EVALUATION_OVERRIDE_NOT_ALLOWED',
+    });
+
+    await expect(new EvaluationGateOverrideRepository(db as never).create({
+      override_id: 'eval_gate_override_permanent',
+      gate_decision_id: decision.gate_decision_id,
+      resource_type: decision.resource_type,
+      resource_id: decision.resource_id,
+      resource_version: decision.resource_version,
+      resource_hash: decision.resource_hash,
+      operator_id: 'admin',
+      reason: 'admin override after verified review',
+      created_at: now,
+    } as never)).rejects.toMatchObject({
+      code: 'EVALUATION_OVERRIDE_NOT_ALLOWED',
     });
   });
 

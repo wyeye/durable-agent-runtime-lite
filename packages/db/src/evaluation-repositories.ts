@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   AgentExecutionPlan,
+  AgentStepRecord,
   AgentSpec,
   EvaluationAggregateResult,
   EvaluationCandidateBundle,
@@ -10,12 +11,15 @@ import type {
   EvaluationComparisonSeverity,
   EvaluationDataset,
   EvaluationGateDecision,
+  EvaluationGateDecisionFreshness,
   EvaluationGateOverride,
   EvaluationGatePolicy,
+  EvaluationGateFreshnessReason,
   EvaluationMetricResult,
   EvaluationRun,
   EvaluationSubjectSnapshot,
   EvaluationSubjectType,
+  ModelCallRecord,
   ModelPolicy,
   PromptDefinition,
   ResolvedAgentPlan,
@@ -188,6 +192,11 @@ export interface EvaluationEvidenceSnapshot {
   };
 }
 
+export interface EvaluationEvidenceCollectorOptions {
+  outputMaxBytes?: number;
+  evidenceMaxBytes?: number;
+}
+
 export interface EvaluationSubjectSnapshotBuildInput {
   tenantId: string;
   primarySubjectType: EvaluationSubjectType;
@@ -328,6 +337,7 @@ export class EvaluationDatasetRepository {
         ...(input.domain !== undefined ? { domain: update.domain ?? null } : {}),
         ...(input.tags !== undefined ? { tags_json: update.tags } : {}),
         ...(input.defaultWeight !== undefined ? { default_weight: update.default_weight } : {}),
+        status: 'draft',
         dataset_hash: datasetHash,
         updated_by: options.operatorId,
         updated_at: new Date(),
@@ -335,7 +345,7 @@ export class EvaluationDatasetRepository {
       })
       .where('dataset_id', '=', datasetId)
       .where('version', '=', version)
-      .where('status', '=', 'draft')
+      .where('status', 'in', ['draft', 'validated'])
       .returningAll()
       .executeTakeFirst();
     if (!row) {
@@ -447,6 +457,7 @@ export class EvaluationDatasetRepository {
     const row = await this.db
       .updateTable('evaluation_dataset')
       .set({
+        status: 'draft',
         dataset_hash: datasetHash,
         ...(options ? { updated_by: options.operatorId } : {}),
         updated_at: new Date(),
@@ -489,7 +500,7 @@ export class EvaluationDatasetRepository {
         version,
       });
     }
-    if (dataset.status !== 'draft') {
+    if (dataset.status !== 'draft' && dataset.status !== 'validated') {
       throw new EvaluationRepositoryError('EVALUATION_DATASET_IMMUTABLE', 'Only draft evaluation datasets can be modified', {
         dataset_id: datasetId,
         version,
@@ -705,13 +716,208 @@ export class EvaluationCaseRepository {
         version,
       });
     }
-    if (dataset.status !== 'draft') {
+    if (dataset.status !== 'draft' && dataset.status !== 'validated') {
       throw new EvaluationRepositoryError('EVALUATION_DATASET_IMMUTABLE', 'Only draft evaluation datasets can be modified', {
         dataset_id: datasetId,
         version,
         status: dataset.status,
       });
     }
+  }
+}
+
+export class EvaluationDatasetService {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  list(options: EvaluationDatasetListOptions = {}): Promise<EvaluationDataset[]> {
+    return new EvaluationDatasetRepository(this.db).list(options);
+  }
+
+  get(datasetId: string, version: number): Promise<EvaluationDataset | undefined> {
+    return new EvaluationDatasetRepository(this.db).get(datasetId, version);
+  }
+
+  listVersions(datasetId: string): Promise<EvaluationDataset[]> {
+    return new EvaluationDatasetRepository(this.db).listVersions(datasetId);
+  }
+
+  async createDraft(dataset: EvaluationDataset, options: EvaluationWriteOptions): Promise<EvaluationDataset> {
+    return withTransaction(this.db, async (trx) => {
+      const saved = await new EvaluationDatasetRepository(trx).createDraft(dataset, options);
+      await appendEvaluationAudit(trx, {
+        tenantId: tenantOf(options),
+        actorId: options.operatorId,
+        action: 'evaluation.dataset.created',
+        targetType: 'evaluation.dataset',
+        targetId: `${saved.dataset_id}@${saved.version}`,
+        result: 'succeeded',
+        eventKey: `evaluation.dataset.created:${saved.dataset_id}:${saved.version}`,
+        payload: {
+          dataset_id: saved.dataset_id,
+          version: saved.version,
+          dataset_hash: saved.dataset_hash,
+        },
+      });
+      return saved;
+    });
+  }
+
+  async updateDraft(
+    datasetId: string,
+    version: number,
+    input: EvaluationDatasetUpdateDraftInput,
+    options: EvaluationWriteOptions,
+  ): Promise<EvaluationDataset> {
+    return new EvaluationDatasetRepository(this.db).updateDraft(datasetId, version, input, options);
+  }
+
+  clone(
+    datasetId: string,
+    version: number,
+    input: { version?: number; datasetId?: string },
+    options: EvaluationWriteOptions,
+  ): Promise<EvaluationDataset> {
+    return new EvaluationDatasetRepository(this.db).clone(datasetId, version, input, options);
+  }
+
+  async validate(datasetId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationDataset> {
+    return withTransaction(this.db, async (trx) => {
+      const saved = await new EvaluationDatasetRepository(trx).validate(datasetId, version, options);
+      await appendEvaluationAudit(trx, {
+        tenantId: tenantOf(options),
+        actorId: options.operatorId,
+        action: 'evaluation.dataset.validated',
+        targetType: 'evaluation.dataset',
+        targetId: `${saved.dataset_id}@${saved.version}`,
+        result: 'succeeded',
+        eventKey: `evaluation.dataset.validated:${saved.dataset_id}:${saved.version}:${saved.dataset_hash}`,
+        payload: {
+          dataset_id: saved.dataset_id,
+          version: saved.version,
+          dataset_hash: saved.dataset_hash,
+        },
+      });
+      return saved;
+    });
+  }
+
+  async publish(datasetId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationDataset> {
+    return withTransaction(this.db, async (trx) => {
+      const saved = await new EvaluationDatasetRepository(trx).publish(datasetId, version, options);
+      await appendEvaluationAudit(trx, {
+        tenantId: tenantOf(options),
+        actorId: options.operatorId,
+        action: 'evaluation.dataset.published',
+        targetType: 'evaluation.dataset',
+        targetId: `${saved.dataset_id}@${saved.version}`,
+        result: 'succeeded',
+        eventKey: `evaluation.dataset.published:${saved.dataset_id}:${saved.version}:${saved.dataset_hash}`,
+        payload: {
+          dataset_id: saved.dataset_id,
+          version: saved.version,
+          dataset_hash: saved.dataset_hash,
+        },
+      });
+      return saved;
+    });
+  }
+
+  deprecate(datasetId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationDataset> {
+    return new EvaluationDatasetRepository(this.db).deprecate(datasetId, version, options);
+  }
+
+  disable(datasetId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationDataset> {
+    return new EvaluationDatasetRepository(this.db).disable(datasetId, version, options);
+  }
+
+  async rollback(datasetId: string, targetVersion: number, options: EvaluationWriteOptions): Promise<EvaluationDataset> {
+    return withTransaction(this.db, async (trx) => {
+      const saved = await new EvaluationDatasetRepository(trx).rollback(datasetId, targetVersion, options);
+      await appendEvaluationAudit(trx, {
+        tenantId: tenantOf(options),
+        actorId: options.operatorId,
+        action: 'evaluation.dataset.rolled_back',
+        targetType: 'evaluation.dataset',
+        targetId: `${saved.dataset_id}@${saved.version}`,
+        result: 'succeeded',
+        eventKey: `evaluation.dataset.rolled_back:${saved.dataset_id}:${saved.version}:${saved.dataset_hash}`,
+        payload: {
+          dataset_id: saved.dataset_id,
+          version: saved.version,
+          dataset_hash: saved.dataset_hash,
+        },
+      });
+      return saved;
+    });
+  }
+}
+
+export class EvaluationCaseService {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  list(datasetId: string, version: number, enabledOnly = false): Promise<EvaluationCase[]> {
+    return new EvaluationCaseRepository(this.db).list(datasetId, version, enabledOnly);
+  }
+
+  get(caseId: string): Promise<EvaluationCase | undefined> {
+    return new EvaluationCaseRepository(this.db).get(caseId);
+  }
+
+  async create(input: EvaluationCase, options: EvaluationWriteOptions): Promise<EvaluationCase> {
+    return this.upsert(input, options);
+  }
+
+  async update(caseId: string, input: EvaluationCase, options: EvaluationWriteOptions): Promise<EvaluationCase> {
+    if (caseId !== input.case_id) {
+      throw new EvaluationRepositoryError('EVALUATION_CASE_ID_MISMATCH', 'Evaluation case route id does not match request body', {
+        case_id: caseId,
+        body_case_id: input.case_id,
+      });
+    }
+    return this.upsert(input, options);
+  }
+
+  async delete(caseId: string, options: EvaluationWriteOptions): Promise<EvaluationCase> {
+    return withTransaction(this.db, async (trx) => {
+      const deleted = await new EvaluationCaseRepository(trx).delete(caseId, options);
+      await appendEvaluationAudit(trx, {
+        tenantId: tenantOf(options),
+        actorId: options.operatorId,
+        action: 'evaluation.case.deleted',
+        targetType: 'evaluation.case',
+        targetId: deleted.case_id,
+        result: 'succeeded',
+        eventKey: `evaluation.case.deleted:${deleted.case_id}:${deleted.dataset_id}:${deleted.dataset_version}`,
+        payload: {
+          case_id: deleted.case_id,
+          dataset_id: deleted.dataset_id,
+          dataset_version: deleted.dataset_version,
+        },
+      });
+      return deleted;
+    });
+  }
+
+  private async upsert(input: EvaluationCase, options: EvaluationWriteOptions): Promise<EvaluationCase> {
+    return withTransaction(this.db, async (trx) => {
+      const saved = await new EvaluationCaseRepository(trx).upsert(input, options);
+      await appendEvaluationAudit(trx, {
+        tenantId: tenantOf(options),
+        actorId: options.operatorId,
+        action: 'evaluation.case.upserted',
+        targetType: 'evaluation.case',
+        targetId: saved.case_id,
+        result: 'succeeded',
+        eventKey: `evaluation.case.upserted:${saved.case_id}:${saved.dataset_id}:${saved.dataset_version}`,
+        payload: {
+          case_id: saved.case_id,
+          dataset_id: saved.dataset_id,
+          dataset_version: saved.dataset_version,
+          enabled: saved.enabled,
+        },
+      });
+      return saved;
+    });
   }
 }
 
@@ -1211,6 +1417,27 @@ export class EvaluationComparisonRepository {
       .executeTakeFirst();
     return row ? mapEvaluationComparison(row) : undefined;
   }
+
+  async findByRuns(candidateRunId: string, baselineRunId: string): Promise<EvaluationComparison | undefined> {
+    const row = await this.db
+      .selectFrom('evaluation_comparison')
+      .selectAll()
+      .where('candidate_run_id', '=', candidateRunId)
+      .where('baseline_run_id', '=', baselineRunId)
+      .executeTakeFirst();
+    return row ? mapEvaluationComparison(row) : undefined;
+  }
+
+  async list(options: { limit?: number; offset?: number } = {}): Promise<EvaluationComparison[]> {
+    const rows = await this.db
+      .selectFrom('evaluation_comparison')
+      .selectAll()
+      .orderBy('created_at', 'desc')
+      .limit(limit(options.limit))
+      .offset(offset(options.offset))
+      .execute();
+    return rows.map(mapEvaluationComparison);
+  }
 }
 
 export class EvaluationGatePolicyRepository {
@@ -1346,6 +1573,111 @@ export class EvaluationGatePolicyRepository {
     return mapEvaluationGatePolicy(row);
   }
 
+  async updateDraft(
+    policyId: string,
+    version: number,
+    input: {
+      policy: Partial<EvaluationGatePolicy>;
+      expectedRevision?: number;
+    },
+    options: EvaluationWriteOptions,
+  ): Promise<EvaluationGatePolicy> {
+    const existing = await this.getMutablePolicy(policyId, version);
+    if (input.expectedRevision !== undefined && existing.revision !== input.expectedRevision) {
+      throw new EvaluationRepositoryError('EVALUATION_GATE_POLICY_REVISION_CONFLICT', 'Evaluation gate policy revision conflict', {
+        gate_policy_id: policyId,
+        version,
+        expected_revision: input.expectedRevision,
+        actual_revision: existing.revision,
+      });
+    }
+    const parsed = evaluationGatePolicySchema.parse({
+      ...existing,
+      ...input.policy,
+      gate_policy_id: policyId,
+      version,
+      status: 'draft',
+      updated_by: options.operatorId,
+    });
+    const policyHash = hashEvaluationGatePolicy(parsed);
+    const row = await this.db
+      .updateTable('evaluation_gate_policy')
+      .set({
+        resource_types_json: parsed.resource_types,
+        required_dataset_refs_json: parsed.required_dataset_refs,
+        thresholds_json: parsed.thresholds,
+        regression_rules_json: parsed.regression_rules,
+        required_case_tags_json: parsed.required_case_tags,
+        allow_override: parsed.allow_override,
+        status: 'draft',
+        gate_policy_hash: policyHash,
+        updated_by: options.operatorId,
+        updated_at: new Date(),
+        revision: sql<number>`revision + 1`,
+      })
+      .where('gate_policy_id', '=', policyId)
+      .where('version', '=', version)
+      .where('status', 'in', ['draft', 'validated'])
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new EvaluationRepositoryError('EVALUATION_GATE_POLICY_NOT_MUTABLE', 'Only draft evaluation gate policies can be modified', {
+        gate_policy_id: policyId,
+        version,
+      });
+    }
+    return mapEvaluationGatePolicy(row);
+  }
+
+  async clone(
+    policyId: string,
+    version: number,
+    input: { version?: number; policyId?: string },
+    options: EvaluationWriteOptions,
+  ): Promise<EvaluationGatePolicy> {
+    return withTransaction(this.db, async (trx) => {
+      const repository = new EvaluationGatePolicyRepository(trx);
+      const source = await repository.get(policyId, version);
+      if (!source) {
+        throw new EvaluationRepositoryError('EVALUATION_GATE_POLICY_NOT_FOUND', 'Evaluation gate policy not found', {
+          gate_policy_id: policyId,
+          version,
+        });
+      }
+      const targetPolicyId = input.policyId ?? source.gate_policy_id;
+      const latestVersion = (await repository.listVersions(targetPolicyId))[0]?.version ?? 0;
+      const targetVersion = input.version ?? latestVersion + 1;
+      return repository.createDraft({
+        ...source,
+        gate_policy_id: targetPolicyId,
+        version: targetVersion,
+        status: 'draft',
+        gate_policy_hash: undefined,
+        published_by: undefined,
+        published_at: undefined,
+      }, options);
+    });
+  }
+
+  async deprecate(policyId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationGatePolicy> {
+    return this.updateTerminalStatus(policyId, version, 'deprecated', options);
+  }
+
+  async disable(policyId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationGatePolicy> {
+    return this.updateTerminalStatus(policyId, version, 'disabled', options);
+  }
+
+  async rollback(policyId: string, targetVersion: number, options: EvaluationWriteOptions): Promise<EvaluationGatePolicy> {
+    const target = await this.get(policyId, targetVersion);
+    if (!target || (target.status !== 'published' && target.status !== 'deprecated')) {
+      throw new EvaluationRepositoryError('EVALUATION_GATE_POLICY_ROLLBACK_TARGET_INVALID', 'Evaluation gate policy rollback target must be a published or deprecated version', {
+        gate_policy_id: policyId,
+        version: targetVersion,
+      });
+    }
+    return this.updateTerminalStatus(policyId, targetVersion, 'published', options);
+  }
+
   private async validateRequiredDatasetRefs(policyId: string, version: number): Promise<void> {
     const policy = await this.get(policyId, version);
     if (!policy) {
@@ -1379,6 +1711,180 @@ export class EvaluationGatePolicyRepository {
         datasetRef.dataset_hash,
       );
     }
+  }
+
+  private async getMutablePolicy(policyId: string, version: number): Promise<EvaluationGatePolicy> {
+    const policy = await this.get(policyId, version);
+    if (!policy) {
+      throw new EvaluationRepositoryError('EVALUATION_GATE_POLICY_NOT_FOUND', 'Evaluation gate policy not found', {
+        gate_policy_id: policyId,
+        version,
+      });
+    }
+    if (policy.status !== 'draft' && policy.status !== 'validated') {
+      throw new EvaluationRepositoryError('EVALUATION_GATE_POLICY_IMMUTABLE', 'Only draft evaluation gate policies can be modified', {
+        gate_policy_id: policyId,
+        version,
+        status: policy.status,
+      });
+    }
+    return policy;
+  }
+
+  private async updateTerminalStatus(
+    policyId: string,
+    version: number,
+    status: 'deprecated' | 'disabled' | 'published',
+    options: EvaluationWriteOptions,
+  ): Promise<EvaluationGatePolicy> {
+    const row = await this.db
+      .updateTable('evaluation_gate_policy')
+      .set({
+        status,
+        updated_by: options.operatorId,
+        updated_at: new Date(),
+        revision: sql<number>`revision + 1`,
+        ...(status === 'published'
+          ? { published_by: options.operatorId, published_at: new Date() }
+          : {}),
+      })
+      .where('gate_policy_id', '=', policyId)
+      .where('version', '=', version)
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new EvaluationRepositoryError('EVALUATION_GATE_POLICY_NOT_FOUND', 'Evaluation gate policy not found', {
+        gate_policy_id: policyId,
+        version,
+      });
+    }
+    return mapEvaluationGatePolicy(row);
+  }
+}
+
+export class EvaluationGatePolicyService {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  list(status?: EvaluationGatePolicy['status']): Promise<EvaluationGatePolicy[]> {
+    return new EvaluationGatePolicyRepository(this.db).list(status);
+  }
+
+  get(policyId: string, version: number): Promise<EvaluationGatePolicy | undefined> {
+    return new EvaluationGatePolicyRepository(this.db).get(policyId, version);
+  }
+
+  listVersions(policyId: string): Promise<EvaluationGatePolicy[]> {
+    return new EvaluationGatePolicyRepository(this.db).listVersions(policyId);
+  }
+
+  async createDraft(policy: EvaluationGatePolicy, options: EvaluationWriteOptions): Promise<EvaluationGatePolicy> {
+    return withTransaction(this.db, async (trx) => {
+      const saved = await new EvaluationGatePolicyRepository(trx).createDraft(policy, options);
+      await appendEvaluationAudit(trx, {
+        tenantId: tenantOf(options),
+        actorId: options.operatorId,
+        action: 'evaluation.gate_policy.created',
+        targetType: 'evaluation.gate_policy',
+        targetId: `${saved.gate_policy_id}@${saved.version}`,
+        result: 'succeeded',
+        eventKey: `evaluation.gate_policy.created:${saved.gate_policy_id}:${saved.version}`,
+        payload: {
+          gate_policy_id: saved.gate_policy_id,
+          version: saved.version,
+          gate_policy_hash: saved.gate_policy_hash,
+        },
+      });
+      return saved;
+    });
+  }
+
+  updateDraft(
+    policyId: string,
+    version: number,
+    input: { policy: Partial<EvaluationGatePolicy>; expectedRevision?: number },
+    options: EvaluationWriteOptions,
+  ): Promise<EvaluationGatePolicy> {
+    return new EvaluationGatePolicyRepository(this.db).updateDraft(policyId, version, input, options);
+  }
+
+  clone(
+    policyId: string,
+    version: number,
+    input: { version?: number; policyId?: string },
+    options: EvaluationWriteOptions,
+  ): Promise<EvaluationGatePolicy> {
+    return new EvaluationGatePolicyRepository(this.db).clone(policyId, version, input, options);
+  }
+
+  async validate(policyId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationGatePolicy> {
+    return withTransaction(this.db, async (trx) => {
+      const saved = await new EvaluationGatePolicyRepository(trx).validate(policyId, version, options);
+      await appendEvaluationAudit(trx, {
+        tenantId: tenantOf(options),
+        actorId: options.operatorId,
+        action: 'evaluation.gate_policy.validated',
+        targetType: 'evaluation.gate_policy',
+        targetId: `${saved.gate_policy_id}@${saved.version}`,
+        result: 'succeeded',
+        eventKey: `evaluation.gate_policy.validated:${saved.gate_policy_id}:${saved.version}:${saved.gate_policy_hash}`,
+        payload: {
+          gate_policy_id: saved.gate_policy_id,
+          version: saved.version,
+          gate_policy_hash: saved.gate_policy_hash,
+        },
+      });
+      return saved;
+    });
+  }
+
+  async publish(policyId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationGatePolicy> {
+    return withTransaction(this.db, async (trx) => {
+      const saved = await new EvaluationGatePolicyRepository(trx).publish(policyId, version, options);
+      await appendEvaluationAudit(trx, {
+        tenantId: tenantOf(options),
+        actorId: options.operatorId,
+        action: 'evaluation.gate_policy.published',
+        targetType: 'evaluation.gate_policy',
+        targetId: `${saved.gate_policy_id}@${saved.version}`,
+        result: 'succeeded',
+        eventKey: `evaluation.gate_policy.published:${saved.gate_policy_id}:${saved.version}:${saved.gate_policy_hash}`,
+        payload: {
+          gate_policy_id: saved.gate_policy_id,
+          version: saved.version,
+          gate_policy_hash: saved.gate_policy_hash,
+        },
+      });
+      return saved;
+    });
+  }
+
+  deprecate(policyId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationGatePolicy> {
+    return new EvaluationGatePolicyRepository(this.db).deprecate(policyId, version, options);
+  }
+
+  disable(policyId: string, version: number, options: EvaluationWriteOptions): Promise<EvaluationGatePolicy> {
+    return new EvaluationGatePolicyRepository(this.db).disable(policyId, version, options);
+  }
+
+  async rollback(policyId: string, targetVersion: number, options: EvaluationWriteOptions): Promise<EvaluationGatePolicy> {
+    return withTransaction(this.db, async (trx) => {
+      const saved = await new EvaluationGatePolicyRepository(trx).rollback(policyId, targetVersion, options);
+      await appendEvaluationAudit(trx, {
+        tenantId: tenantOf(options),
+        actorId: options.operatorId,
+        action: 'evaluation.gate_policy.rolled_back',
+        targetType: 'evaluation.gate_policy',
+        targetId: `${saved.gate_policy_id}@${saved.version}`,
+        result: 'succeeded',
+        eventKey: `evaluation.gate_policy.rolled_back:${saved.gate_policy_id}:${saved.version}:${saved.gate_policy_hash}`,
+        payload: {
+          gate_policy_id: saved.gate_policy_id,
+          version: saved.version,
+          gate_policy_hash: saved.gate_policy_hash,
+        },
+      });
+      return saved;
+    });
   }
 }
 
@@ -1481,12 +1987,40 @@ export class EvaluationGateDecisionRepository {
     const rows = await query.orderBy('decided_at', 'desc').execute();
     return rows.map(mapEvaluationGateDecision);
   }
+
+  async listForResource(input: {
+    resourceType?: EvaluationSubjectType;
+    resourceId?: string;
+    resourceVersion?: number;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<EvaluationGateDecision[]> {
+    let query = this.db.selectFrom('evaluation_gate_decision').selectAll();
+    if (input.resourceType) {
+      query = query.where('resource_type', '=', input.resourceType);
+    }
+    if (input.resourceId) {
+      query = query.where('resource_id', '=', input.resourceId);
+    }
+    if (input.resourceVersion) {
+      query = query.where('resource_version', '=', input.resourceVersion);
+    }
+    const rows = await query
+      .orderBy('decided_at', 'desc')
+      .limit(limit(input.limit))
+      .offset(offset(input.offset))
+      .execute();
+    return rows.map(mapEvaluationGateDecision);
+  }
 }
 
 export class EvaluationGateOverrideRepository {
   constructor(private readonly db: Kysely<Database>) {}
 
   async create(override: EvaluationGateOverride): Promise<EvaluationGateOverride> {
+    if (!override.expires_at) {
+      throw new EvaluationGateError('EVALUATION_OVERRIDE_NOT_ALLOWED', 'Evaluation gate override expires_at is required');
+    }
     const parsed = evaluationGateOverrideSchema.parse(override);
     const row: Insertable<EvaluationGateOverrideTable> = {
       override_id: parsed.override_id,
@@ -1497,7 +2031,7 @@ export class EvaluationGateOverrideRepository {
       resource_hash: parsed.resource_hash,
       operator_id: parsed.operator_id,
       reason: parsed.reason,
-      expires_at: parsed.expires_at ?? null,
+      expires_at: parsed.expires_at,
       created_at: parsed.created_at ?? new Date(),
     };
     const saved = await this.db.insertInto('evaluation_gate_override').values(row).returningAll().executeTakeFirstOrThrow();
@@ -1510,13 +2044,94 @@ export class EvaluationGateOverrideRepository {
       .selectAll()
       .where('gate_decision_id', '=', decision.gate_decision_id)
       .where('resource_hash', '=', decision.resource_hash)
-      .where((eb) => eb.or([
-        eb('expires_at', 'is', null),
-        eb('expires_at', '>', new Date()),
-      ]))
+      .where('expires_at', '>', new Date())
       .orderBy('created_at', 'desc')
       .executeTakeFirst();
     return row ? mapEvaluationGateOverride(row) : undefined;
+  }
+}
+
+export class EvaluationGateFreshnessService {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async check(input: {
+    decision: EvaluationGateDecision;
+    currentResourceHash?: string;
+    currentCandidateBundleHash?: string;
+    currentDatasetHash?: string;
+    currentGatePolicyHash?: string;
+  }): Promise<EvaluationGateDecisionFreshness> {
+    const reasons: EvaluationGateFreshnessReason[] = [];
+    const decision = input.decision;
+    if (input.currentResourceHash && input.currentResourceHash !== decision.resource_hash) {
+      reasons.push('RESOURCE_HASH_CHANGED');
+    }
+    if (input.currentCandidateBundleHash && input.currentCandidateBundleHash !== decision.candidate_bundle_hash) {
+      reasons.push('CANDIDATE_BUNDLE_CHANGED');
+    }
+    if (input.currentGatePolicyHash && input.currentGatePolicyHash !== decision.gate_policy_hash) {
+      reasons.push('GATE_POLICY_HASH_CHANGED');
+    }
+
+    const policy = await new EvaluationGatePolicyRepository(this.db).get(
+      decision.gate_policy_id,
+      decision.gate_policy_version,
+    );
+    if (!policy || policy.gate_policy_hash !== decision.gate_policy_hash) {
+      reasons.push('GATE_POLICY_HASH_CHANGED');
+    }
+
+    const runs = await Promise.all(
+      decision.evaluation_run_ids.map((runId) => new EvaluationRunRepository(this.db).get(runId)),
+    );
+    if (runs.some((run) => !run)) {
+      reasons.push('RUN_MISSING');
+    }
+    if (runs.some((run) => run && run.status !== 'completed')) {
+      reasons.push('RUN_NOT_COMPLETED');
+    }
+    const firstRun = runs.find((run): run is EvaluationRun => Boolean(run));
+    if (firstRun) {
+      if (input.currentDatasetHash && firstRun.dataset_hash !== input.currentDatasetHash) {
+        reasons.push('DATASET_HASH_CHANGED');
+      }
+      const policyDatasetHash = decisionDatasetHash(policy, firstRun.dataset_id, firstRun.dataset_version);
+      if (policyDatasetHash && firstRun.dataset_hash !== policyDatasetHash) {
+        reasons.push('DATASET_HASH_CHANGED');
+      }
+      if (input.currentDatasetHash && policyDatasetHash && input.currentDatasetHash !== policyDatasetHash) {
+        reasons.push('DATASET_HASH_CHANGED');
+      }
+      const plan = await new EvaluationExecutionPlanRepository(this.db).getByRef(firstRun.evaluation_execution_plan_ref);
+      if (!plan) {
+        reasons.push('RUN_MISSING');
+      } else {
+        if (plan.candidate_bundle_hash !== decision.candidate_bundle_hash) {
+          reasons.push('CANDIDATE_BUNDLE_CHANGED');
+        }
+        if (plan.dataset_hash !== firstRun.dataset_hash) {
+          reasons.push('DATASET_HASH_CHANGED');
+        }
+      }
+      const snapshot = await new EvaluationSubjectSnapshotRepository(this.db).getByRef(firstRun.subject_snapshot_ref);
+      if (!snapshot) {
+        reasons.push('DECISION_MISMATCH');
+      } else if (
+        snapshot.primary_subject_type !== decision.resource_type ||
+        snapshot.primary_subject_id !== decision.resource_id ||
+        snapshot.primary_subject_version !== decision.resource_version ||
+        snapshot.primary_subject_hash !== decision.resource_hash ||
+        snapshot.candidate_bundle_hash !== decision.candidate_bundle_hash
+      ) {
+        reasons.push('DECISION_MISMATCH');
+      }
+    }
+
+    return {
+      status: reasons.length > 0 ? 'stale' : 'fresh',
+      reasons: [...new Set(reasons)],
+      checked_at: new Date().toISOString(),
+    };
   }
 }
 
@@ -1964,7 +2579,10 @@ export class EvaluationComparisonService {
 }
 
 export class EvaluationEvidenceCollector {
-  constructor(private readonly db: Kysely<Database>) {}
+  constructor(
+    private readonly db: Kysely<Database>,
+    private readonly options: EvaluationEvidenceCollectorOptions = {},
+  ) {}
 
   async collect(input: {
     tenantId: string;
@@ -2044,19 +2662,22 @@ export class EvaluationEvidenceCollector {
       : input.startedAtMs
         ? Math.max(0, Date.now() - input.startedAtMs)
         : undefined;
-    const finalOutput = agentRun?.error_message ? { error_message: agentRun.error_message } : undefined;
-    const finalOutputRef = finalOutput === undefined ? undefined : `sha256:${hashJson(finalOutput)}`;
+    const finalOutput = selectSafeFinalOutput(agentSteps, modelCalls);
+    const finalOutputRef = selectFinalOutputRef(agentSteps, modelCalls, finalOutput);
+    const finalOutputTooLarge = finalOutput !== undefined && exceedsJsonBytes(finalOutput, this.options.outputMaxBytes);
     const toolOrder = toolCalls.map((call) => call.tool_name);
     const toolResultRefs = toolCalls.flatMap((call) => call.output_hash ? [`sha256:${call.output_hash}`] : []);
     const completenessReasons = [
       ...(taskRun ? [] : ['task_run_missing']),
       ...(taskRun && taskRun.tenant_id !== input.tenantId ? ['task_run_tenant_mismatch'] : []),
       ...(input.agentRunId && !agentRun ? ['agent_run_missing'] : []),
+      ...(finalOutputTooLarge && !finalOutputRef ? ['final_output_size_limit_exceeded'] : []),
     ];
+    const safeFinalOutput = finalOutputTooLarge ? undefined : finalOutput;
     const completenessStatus = completenessReasons.length > 0 ? 'incomplete' : 'complete';
-    return {
+    const evidence = {
       actual_status: agentRun?.status ?? taskRun?.status ?? 'system_error',
-      ...(finalOutput !== undefined ? { final_output_safe: finalOutput } : {}),
+      ...(safeFinalOutput !== undefined ? { final_output_safe: safeFinalOutput } : {}),
       ...(finalOutputRef ? { final_output_ref: finalOutputRef } : {}),
       tool_calls: toolCalls.map((call) => ({
         tool_call_id: call.tool_call_id,
@@ -2092,7 +2713,7 @@ export class EvaluationEvidenceCollector {
       },
       cost: agentRun?.estimated_cost !== undefined ? { estimated: agentRun.estimated_cost } : {},
       ...(agentRun?.status === 'failed' || taskRun?.status === 'failed' || completenessStatus === 'incomplete'
-        ? { system_error: { code: agentRun?.error_code ?? 'EVALUATION_EVIDENCE_INCOMPLETE', class: 'evaluation_evidence_error' } }
+        ? { system_error: { code: evidenceErrorCode(agentRun?.error_code, finalOutputTooLarge, completenessStatus), class: 'evaluation_evidence_error' } }
         : {}),
       completeness_status: completenessStatus,
       completeness_reasons: completenessReasons,
@@ -2108,7 +2729,44 @@ export class EvaluationEvidenceCollector {
         audit_event_ids: auditEvents.map((event) => event.event_id),
         idempotency_record_ids: idempotencyRecordIds,
       },
-    };
+    } satisfies EvaluationEvidenceSnapshot;
+    if (exceedsJsonBytes(evidence, this.options.evidenceMaxBytes)) {
+      return {
+        actual_status: 'system_error',
+        ...(evidence.final_output_ref ? { final_output_ref: evidence.final_output_ref } : {}),
+        tool_calls: evidence.tool_calls,
+        tool_call_order: evidence.tool_call_order,
+        tool_order: evidence.tool_order,
+        tool_arguments: evidence.tool_arguments,
+        tool_results_refs: evidence.tool_results_refs,
+        tool_result_refs: evidence.tool_result_refs,
+        unauthorized_tool_count: evidence.unauthorized_tool_count,
+        forbidden_tool_count: evidence.forbidden_tool_count,
+        side_effect_without_approval_count: evidence.side_effect_without_approval_count,
+        duplicate_tool_call_count: evidence.duplicate_tool_call_count,
+        duplicate_commit_count: evidence.duplicate_commit_count,
+        policy_violation_count: evidence.policy_violation_count,
+        cross_tenant_violation_count: evidence.cross_tenant_violation_count,
+        secret_leak_count: evidence.secret_leak_count,
+        hidden_reasoning_leak_count: evidence.hidden_reasoning_leak_count,
+        model_call_count: evidence.model_call_count,
+        fallback_count: evidence.fallback_count,
+        latency: evidence.latency,
+        tokens: evidence.tokens,
+        cost: evidence.cost,
+        system_error: {
+          code: 'EVALUATION_EVIDENCE_SIZE_LIMIT_EXCEEDED',
+          class: 'evaluation_evidence_error',
+        },
+        completeness_status: 'incomplete',
+        completeness_reasons: [
+          ...new Set([...evidence.completeness_reasons, 'evidence_size_limit_exceeded']),
+        ],
+        error_code: 'EVALUATION_EVIDENCE_INCOMPLETE',
+        refs: evidence.refs,
+      };
+    }
+    return evidence;
   }
 }
 
@@ -2187,6 +2845,31 @@ export class EvaluationGateService {
     });
     if (!decision) {
       return this.blockOrWarn(input, 'EVALUATION_GATE_NOT_FOUND', 'Evaluation gate decision not found for exact candidate hash');
+    }
+    const freshness = await new EvaluationGateFreshnessService(this.db).check({
+      decision,
+      currentResourceHash: input.resourceHash,
+      currentCandidateBundleHash: input.candidateBundleHash,
+      currentGatePolicyHash: requiredHash(policy.gate_policy_hash, 'EVALUATION_GATE_POLICY_HASH_REQUIRED'),
+    });
+    if (freshness.status !== 'fresh') {
+      await appendEvaluationAudit(this.db, {
+        tenantId: input.tenantId,
+        actorId: input.operatorId,
+        action: 'evaluation.gate.stale',
+        targetType: `registry.${input.resourceType}`,
+        targetId: `${input.resourceId}@${input.resourceVersion}`,
+        result: 'denied',
+        reason: freshness.reasons.join(','),
+        eventKey: `evaluation.gate.stale:${decision.gate_decision_id}:${freshness.reasons.join('.')}`,
+        payload: {
+          gate_decision_id: decision.gate_decision_id,
+          resource_hash: input.resourceHash,
+          candidate_bundle_hash: input.candidateBundleHash,
+          freshness,
+        },
+      });
+      return this.blockOrWarn(input, 'EVALUATION_GATE_STALE', 'Evaluation gate decision is stale', decision);
     }
     if (decision.decision === 'passed') {
       return { decision };
@@ -2364,11 +3047,19 @@ export async function createEvaluationOverride(
     reason: string;
     expiresAt?: string;
     roles: string[];
+    tenantId: string;
   },
 ): Promise<EvaluationGateOverride> {
   if (!input.roles.includes('platform_admin')) {
     throw new EvaluationGateError('EVALUATION_OVERRIDE_NOT_ALLOWED', 'Only platform_admin can override evaluation gates');
   }
+  if (!input.expiresAt) {
+    throw new EvaluationGateError('EVALUATION_OVERRIDE_NOT_ALLOWED', 'Evaluation gate override expires_at is required');
+  }
+  if (new Date(input.expiresAt).getTime() <= Date.now()) {
+    throw new EvaluationGateError('EVALUATION_OVERRIDE_EXPIRED', 'Evaluation gate override expiry must be in the future');
+  }
+  const expiresAt = input.expiresAt;
   return withTransaction(db, async (trx) => {
     const decision = await new EvaluationGateDecisionRepository(trx).get(input.decisionId);
     if (!decision) {
@@ -2376,6 +3067,25 @@ export async function createEvaluationOverride(
     }
     if (decision.resource_hash !== input.resourceHash) {
       throw new EvaluationGateError('EVALUATION_SUBJECT_HASH_MISMATCH', 'Override resource hash does not match gate decision');
+    }
+    const policy = await new EvaluationGatePolicyRepository(trx).get(decision.gate_policy_id, decision.gate_policy_version);
+    if (!policy || policy.gate_policy_hash !== decision.gate_policy_hash) {
+      throw new EvaluationGateError('EVALUATION_GATE_POLICY_MISMATCH', 'Evaluation gate policy does not match gate decision');
+    }
+    if (!policy.allow_override) {
+      throw new EvaluationGateError('EVALUATION_OVERRIDE_NOT_ALLOWED', 'Evaluation gate policy does not allow override');
+    }
+    const freshness = await new EvaluationGateFreshnessService(trx).check({
+      decision,
+      currentResourceHash: input.resourceHash,
+      currentCandidateBundleHash: decision.candidate_bundle_hash,
+      currentGatePolicyHash: policy.gate_policy_hash,
+    });
+    if (freshness.status !== 'fresh') {
+      throw new EvaluationGateError('EVALUATION_GATE_STALE', 'Cannot override a stale evaluation gate decision', {
+        gate_decision_id: decision.gate_decision_id,
+        freshness,
+      });
     }
     const override = await new EvaluationGateOverrideRepository(trx).create({
       override_id: `eval_gate_override_${randomUUID()}`,
@@ -2386,11 +3096,11 @@ export async function createEvaluationOverride(
       resource_hash: decision.resource_hash,
       operator_id: input.operatorId,
       reason: input.reason,
-      ...(input.expiresAt ? { expires_at: input.expiresAt } : {}),
+      expires_at: expiresAt,
       created_at: new Date().toISOString(),
     });
     await appendEvaluationAudit(trx, {
-      tenantId: 'default',
+      tenantId: input.tenantId,
       actorId: input.operatorId,
       action: 'evaluation.gate.override',
       targetType: `registry.${decision.resource_type}`,
@@ -2604,6 +3314,9 @@ function mapEvaluationGateDecision(row: Selectable<EvaluationGateDecisionTable>)
 }
 
 function mapEvaluationGateOverride(row: Selectable<EvaluationGateOverrideTable>): EvaluationGateOverride {
+  if (!row.expires_at) {
+    throw new EvaluationGateError('EVALUATION_OVERRIDE_NOT_ALLOWED', 'Evaluation gate override expires_at is required');
+  }
   return evaluationGateOverrideSchema.parse({
     override_id: row.override_id,
     gate_decision_id: row.gate_decision_id,
@@ -2613,7 +3326,7 @@ function mapEvaluationGateOverride(row: Selectable<EvaluationGateOverrideTable>)
     resource_hash: row.resource_hash,
     operator_id: row.operator_id,
     reason: row.reason,
-    ...(row.expires_at ? { expires_at: toIso(row.expires_at) } : {}),
+    expires_at: toIso(row.expires_at),
     created_at: toIso(row.created_at),
   });
 }
@@ -2766,6 +3479,61 @@ function matchArguments(mode: string, actual: Record<string, unknown>, expected:
   return Object.entries(expected).every(([key, value]) => stableStringify(actual[key]) === stableStringify(value));
 }
 
+function selectSafeFinalOutput(
+  agentSteps: AgentStepRecord[],
+  modelCalls: ModelCallRecord[],
+): unknown | undefined {
+  const latestSucceededModelCall = [...modelCalls]
+    .reverse()
+    .find((call) => call.status === 'succeeded' && call.safe_response_json !== undefined);
+  if (latestSucceededModelCall?.safe_response_json !== undefined) {
+    return latestSucceededModelCall.safe_response_json;
+  }
+  const finalStep = [...agentSteps].reverse().find((step) => step.output_ref);
+  if (finalStep?.output_ref) {
+    return { output_ref: finalStep.output_ref };
+  }
+  return undefined;
+}
+
+function selectFinalOutputRef(
+  agentSteps: AgentStepRecord[],
+  modelCalls: ModelCallRecord[],
+  finalOutput: unknown | undefined,
+): string | undefined {
+  const finalStep = [...agentSteps].reverse().find((step) => step.output_ref);
+  if (finalStep?.output_ref) {
+    return finalStep.output_ref;
+  }
+  const latestSucceededModelCall = [...modelCalls]
+    .reverse()
+    .find((call) => call.status === 'succeeded' && call.response_hash);
+  if (latestSucceededModelCall?.response_hash) {
+    return `sha256:${latestSucceededModelCall.response_hash}`;
+  }
+  return finalOutput === undefined ? undefined : `sha256:${hashJson(finalOutput)}`;
+}
+
+function evidenceErrorCode(
+  agentErrorCode: string | undefined,
+  finalOutputTooLarge: boolean,
+  completenessStatus: EvaluationEvidenceSnapshot['completeness_status'],
+): string {
+  if (finalOutputTooLarge) {
+    return 'EVALUATION_EVIDENCE_SIZE_LIMIT_EXCEEDED';
+  }
+  if (agentErrorCode) {
+    return agentErrorCode;
+  }
+  return completenessStatus === 'incomplete'
+    ? 'EVALUATION_EVIDENCE_INCOMPLETE'
+    : 'EVALUATION_CASE_SYSTEM_ERROR';
+}
+
+function exceedsJsonBytes(value: unknown, maxBytes: number | undefined): boolean {
+  return maxBytes !== undefined && Buffer.byteLength(stableStringify(value), 'utf8') > maxBytes;
+}
+
 function safeRegexTest(pattern: string, text: string): boolean {
   if (pattern.length > 512) {
     return false;
@@ -2828,6 +3596,20 @@ function severity(newFailures: number, safetyRegression: boolean): EvaluationCom
     return 'medium';
   }
   return 'none';
+}
+
+function tenantOf(options: EvaluationWriteOptions): string {
+  return options.tenantId ?? 'default';
+}
+
+function decisionDatasetHash(
+  policy: EvaluationGatePolicy | undefined,
+  datasetId: string,
+  datasetVersion: number,
+): string | undefined {
+  return policy?.required_dataset_refs.find((ref) =>
+    ref.dataset_id === datasetId && ref.version === datasetVersion,
+  )?.dataset_hash;
 }
 
 function countDuplicates(values: string[]): number {
