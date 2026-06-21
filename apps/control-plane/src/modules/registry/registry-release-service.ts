@@ -40,6 +40,17 @@ interface PublishGateResult {
   warning?: string;
 }
 
+interface PublishBlockedAuditInput {
+  resourceType: RegistryResourceType;
+  resourceId: string;
+  version: number;
+  resourceHash: string;
+  options: RegistryReleaseServiceOptions;
+  code: string;
+  message: string;
+  gateDecisionId?: string;
+}
+
 export interface SetGrayOptions extends RegistryReleaseServiceOptions {
   tenantAllowlist: string[];
   userAllowlist?: string[];
@@ -67,51 +78,76 @@ export class RegistryReleaseService {
   }
 
   async publish(resourceType: RegistryResourceType, resourceId: string, version: number, options: RegistryReleaseServiceOptions): Promise<CapabilityRelease> {
-    return withTransaction(this.db, async (trx) => {
-      const service = this.scoped(trx);
-      const validation = await service.validate(resourceType, resourceId, version, tenant(options));
-      if (!validation.can_publish) {
-        throw new Error(`Registry validation failed for ${resourceType}:${resourceId}@${version}`);
-      }
-      const repository = service.getRepository(resourceType);
-      const previous = await repository.getLatestPublishedVersion(resourceId, { tenantId: tenant(options) });
-      const current = await repository.getByIdAndVersion(resourceId, version, { tenantId: tenant(options) });
-      if (!current) {
-        throw new Error(`Registry version not found for ${resourceType}:${resourceId}@${version}`);
-      }
-      const gate = await service.assertEvaluationGate(resourceType, resourceId, version, current.sha256, options);
-      if (current?.status === 'draft') {
-        await repository.markValidated(resourceId, version, { tenantId: tenant(options), operatorId: options.operatorId });
-      }
-      await repository.publish(resourceId, version, { tenantId: tenant(options), operatorId: options.operatorId });
-      const executionPlan = resourceType === 'flow'
-        ? await new FlowExecutionPlanRepository(trx).createForFlow({
-            flowId: resourceId,
-            flowVersion: version,
-            tenantId: tenant(options),
-            operatorId: options.operatorId,
-          })
-        : undefined;
-      const release = await service.appendRelease({
-        resourceType,
-        resourceId,
-        version,
-        action: 'publish',
-        targetStatus: 'published',
-        validation,
-        options: withGateMetadata(options, gate),
-        gate,
-        ...(previous ? { previousVersion: previous.version } : {}),
+    let publishBlockedAudit: PublishBlockedAuditInput | undefined;
+    try {
+      return await withTransaction(this.db, async (trx) => {
+        const service = this.scoped(trx);
+        const validation = await service.validate(resourceType, resourceId, version, tenant(options));
+        if (!validation.can_publish) {
+          throw new Error(`Registry validation failed for ${resourceType}:${resourceId}@${version}`);
+        }
+        const repository = service.getRepository(resourceType);
+        const previous = await repository.getLatestPublishedVersion(resourceId, { tenantId: tenant(options) });
+        const current = await repository.getByIdAndVersion(resourceId, version, { tenantId: tenant(options) });
+        if (!current) {
+          throw new Error(`Registry version not found for ${resourceType}:${resourceId}@${version}`);
+        }
+        let gate: PublishGateResult;
+        try {
+          gate = await service.assertEvaluationGate(resourceType, resourceId, version, current.sha256, options);
+        } catch (error) {
+          if (error instanceof EvaluationGateError) {
+            publishBlockedAudit = {
+              resourceType,
+              resourceId,
+              version,
+              resourceHash: current.sha256,
+              options,
+              code: error.code,
+              message: error.message,
+              ...(typeof error.details.gate_decision_id === 'string' ? { gateDecisionId: error.details.gate_decision_id } : {}),
+            };
+          }
+          throw error;
+        }
+        if (current?.status === 'draft') {
+          await repository.markValidated(resourceId, version, { tenantId: tenant(options), operatorId: options.operatorId });
+        }
+        await repository.publish(resourceId, version, { tenantId: tenant(options), operatorId: options.operatorId });
+        const executionPlan = resourceType === 'flow'
+          ? await new FlowExecutionPlanRepository(trx).createForFlow({
+              flowId: resourceId,
+              flowVersion: version,
+              tenantId: tenant(options),
+              operatorId: options.operatorId,
+            })
+          : undefined;
+        const release = await service.appendRelease({
+          resourceType,
+          resourceId,
+          version,
+          action: 'publish',
+          targetStatus: 'published',
+          validation,
+          options: withGateMetadata(options, gate),
+          gate,
+          ...(previous ? { previousVersion: previous.version } : {}),
+        });
+        await service.appendAudit(resourceType, resourceId, version, 'registry.publish', 'succeeded', options, {
+          release_id: release.release_id,
+          ...(gate.decision ? { evaluation_gate_decision_id: gate.decision.gate_decision_id } : {}),
+          ...(gate.override ? { evaluation_gate_override_id: gate.override.override_id } : {}),
+          ...(gate.warning ? { evaluation_gate_warning: gate.warning } : {}),
+          ...(executionPlan ? { execution_plan_ref: executionPlan.execution_plan_ref, execution_plan_hash: executionPlan.execution_plan_hash } : {}),
+        });
+        return release;
       });
-      await service.appendAudit(resourceType, resourceId, version, 'registry.publish', 'succeeded', options, {
-        release_id: release.release_id,
-        ...(gate.decision ? { evaluation_gate_decision_id: gate.decision.gate_decision_id } : {}),
-        ...(gate.override ? { evaluation_gate_override_id: gate.override.override_id } : {}),
-        ...(gate.warning ? { evaluation_gate_warning: gate.warning } : {}),
-        ...(executionPlan ? { execution_plan_ref: executionPlan.execution_plan_ref, execution_plan_hash: executionPlan.execution_plan_hash } : {}),
-      });
-      return release;
-    });
+    } catch (error) {
+      if (publishBlockedAudit && error instanceof EvaluationGateError) {
+        await serviceAuditEvaluationPublishBlocked(this.db, publishBlockedAudit);
+      }
+      throw error;
+    }
   }
 
   async publishFlowWithRoute(
@@ -421,7 +457,13 @@ export class RegistryReleaseService {
       throw new EvaluationGateError(
         'EVALUATION_GATE_DECISION_MISMATCH',
         'Evaluation gate decision id does not match the exact candidate gate decision',
-        { resource_type: resourceType, resource_id: resourceId, resource_version: version },
+        {
+          resource_type: resourceType,
+          resource_id: resourceId,
+          resource_version: version,
+          requested_gate_decision_id: options.evaluationGateDecisionId,
+          ...(result.decision?.gate_decision_id ? { gate_decision_id: result.decision.gate_decision_id } : {}),
+        },
       );
     }
     if (
@@ -431,11 +473,39 @@ export class RegistryReleaseService {
       throw new EvaluationGateError(
         'EVALUATION_GATE_OVERRIDE_MISMATCH',
         'Evaluation gate override id does not match the exact candidate gate override',
-        { resource_type: resourceType, resource_id: resourceId, resource_version: version },
+        {
+          resource_type: resourceType,
+          resource_id: resourceId,
+          resource_version: version,
+          requested_gate_override_id: options.evaluationGateOverrideId,
+          ...(result.decision?.gate_decision_id ? { gate_decision_id: result.decision.gate_decision_id } : {}),
+          ...(result.override?.override_id ? { resolved_gate_override_id: result.override.override_id } : {}),
+        },
       );
     }
     return result;
   }
+}
+
+async function serviceAuditEvaluationPublishBlocked(
+  db: Kysely<Database>,
+  input: PublishBlockedAuditInput,
+): Promise<void> {
+  await new AuditEventRepository(db).append({
+    tenant_id: tenant(input.options),
+    actor_id: input.options.operatorId,
+    action: 'evaluation.publish.blocked',
+    target_type: `registry.${input.resourceType}`,
+    target_id: `${input.resourceId}@${input.version}`,
+    result: input.options.evaluationGateMode === 'advisory' ? 'pending' : 'denied',
+    reason: input.code,
+    event_key: `evaluation.publish.blocked:${input.resourceType}:${input.resourceId}:${input.version}:${input.resourceHash}:${input.code}`,
+    payload: {
+      resource_hash: input.resourceHash,
+      message: input.message,
+      ...(input.gateDecisionId ? { gate_decision_id: input.gateDecisionId } : {}),
+    },
+  });
 }
 
 function tenant(options: { tenantId?: string }): string {

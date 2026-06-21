@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RuntimeConfig } from '@dar/config';
+import { loadConfig, type RuntimeConfig } from '@dar/config';
 import { buildServer } from '../src/index.js';
 import type { TemporalWorkerHandle } from '../src/worker.js';
 
@@ -63,6 +63,53 @@ describe('runtime-worker readiness', () => {
     });
 
     await server.close();
+  });
+
+  it('reports evaluation worker readiness and task queue coverage', async () => {
+    const readyServer = buildServer({
+      mode: 'temporal',
+      taskQueue: 'runtime-worker-main',
+      taskQueues: ['runtime-worker-main', 'evaluation-worker-main'],
+      evaluationTaskQueue: 'evaluation-worker-main',
+      state: { status: 'running', ready: true },
+      evaluationState: { status: 'running', ready: true },
+      shutdown: async () => undefined,
+    }, { ...config(), EVALUATION_WORKER_ENABLED: true });
+
+    const ready = await readyServer.inject({ method: 'GET', url: '/readyz' });
+    expect(ready.statusCode).toBe(200);
+    expect(ready.json()).toMatchObject({
+      status: 'ready',
+      checks: {
+        evaluation_worker_enabled: true,
+        evaluation_task_queue: 'evaluation-worker-main',
+        evaluation_worker_status: 'running',
+        task_queues: ['runtime-worker-main', 'evaluation-worker-main'],
+      },
+    });
+
+    await readyServer.close();
+
+    const notReadyServer = buildServer({
+      mode: 'temporal',
+      taskQueue: 'runtime-worker-main',
+      taskQueues: ['runtime-worker-main'],
+      state: { status: 'running', ready: true },
+      shutdown: async () => undefined,
+    }, { ...config(), EVALUATION_WORKER_ENABLED: true });
+
+    const notReady = await notReadyServer.inject({ method: 'GET', url: '/readyz' });
+    expect(notReady.statusCode).toBe(503);
+    expect(notReady.json()).toMatchObject({
+      status: 'not_ready',
+      checks: {
+        evaluation_worker_enabled: true,
+        evaluation_task_queue: 'evaluation-worker-main',
+        evaluation_worker_status: 'disabled',
+      },
+    });
+
+    await notReadyServer.close();
   });
 
   it('reports not_ready when production Pi mode is deterministic', async () => {
@@ -176,11 +223,12 @@ describe('runtime-worker readiness', () => {
 
 function config(): RuntimeConfig {
   return {
+    ...loadConfig({}),
     NODE_ENV: 'development',
     APP_ENV: 'local',
     APP_VERSION: '0.8.0',
-  BUILD_SHA: 'test-sha',
-  BUILD_TIME: '2026-01-01T00:00:00Z',
+    BUILD_SHA: 'test-sha',
+    BUILD_TIME: '2026-01-01T00:00:00Z',
     HOST: '0.0.0.0',
     DATABASE_URL: 'postgres://user:pass@localhost:5432/db',
     VALKEY_URL: 'redis://localhost:16380',

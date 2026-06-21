@@ -1,4 +1,4 @@
-import { Kysely, PostgresDialect, type ColumnType, type Generated, sql } from 'kysely';
+import { Kysely, PostgresDialect, Transaction, type ColumnType, type Generated, sql } from 'kysely';
 import { Pool } from 'pg';
 
 type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
@@ -453,6 +453,7 @@ export interface EvaluationCaseTable {
   output_token_budget: number | null;
   total_token_budget: number | null;
   cost_budget: number | null;
+  minimum_case_score: number | null;
   weight: number;
   tags_json: Json;
   enabled: boolean;
@@ -712,9 +713,12 @@ export async function closeDb(db: Kysely<Database>): Promise<void> {
 }
 
 export async function withTransaction<T>(
-  db: Kysely<Database>,
+  db: Kysely<Database> | Transaction<Database>,
   callback: (trx: Kysely<Database>) => Promise<T>,
 ): Promise<T> {
+  if (db instanceof Transaction) {
+    return callback(db as Kysely<Database>);
+  }
   return db.transaction().execute(callback);
 }
 

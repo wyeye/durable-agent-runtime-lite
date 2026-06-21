@@ -24,9 +24,15 @@ describe('runtime config', () => {
     expect(getAppPort('tool-gateway', config)).toBe(3003);
   });
 
-  it('parses explicit control-plane static serving flags', () => {
+  it('parses explicit boolean environment flags without truthy string fallback', () => {
     expect(loadConfig({ CONTROL_PLANE_STATIC_ENABLED: 'true' }).CONTROL_PLANE_STATIC_ENABLED).toBe(true);
     expect(loadConfig({ CONTROL_PLANE_STATIC_ENABLED: 'false' }).CONTROL_PLANE_STATIC_ENABLED).toBe(false);
     expect(loadConfig({ CONTROL_PLANE_STATIC_ENABLED: '' }).CONTROL_PLANE_STATIC_ENABLED).toBe(false);
+    expect(loadConfig({ EVALUATION_WORKER_ENABLED: 'true' }).EVALUATION_WORKER_ENABLED).toBe(true);
+    expect(loadConfig({ EVALUATION_WORKER_ENABLED: 'false' }).EVALUATION_WORKER_ENABLED).toBe(false);
+    expect(loadConfig({ EVALUATION_WORKER_ENABLED: '0' }).EVALUATION_WORKER_ENABLED).toBe(false);
+    expect(loadConfig({ TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED: 'off' }).TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED).toBe(false);
+    expect(loadConfig({ MODEL_GATEWAY_ALLOW_INSECURE_HTTP: 'false' }).MODEL_GATEWAY_ALLOW_INSECURE_HTTP).toBe(false);
+    expect(loadConfig({ CONTROL_PLANE_SWAGGER_ENABLED: 'no' }).CONTROL_PLANE_SWAGGER_ENABLED).toBe(false);
   });
 });

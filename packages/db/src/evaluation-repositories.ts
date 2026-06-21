@@ -645,6 +645,7 @@ export class EvaluationCaseRepository {
       output_token_budget: parsed.output_token_budget ?? null,
       total_token_budget: parsed.total_token_budget ?? null,
       cost_budget: parsed.cost_budget ?? null,
+      minimum_case_score: parsed.minimum_case_score ?? null,
       weight: parsed.weight,
       tags_json: toDbJson(parsed.tags),
       enabled: parsed.enabled,
@@ -669,6 +670,7 @@ export class EvaluationCaseRepository {
           output_token_budget: row.output_token_budget,
           total_token_budget: row.total_token_budget,
           cost_budget: row.cost_budget,
+          minimum_case_score: row.minimum_case_score,
           weight: row.weight,
           tags_json: row.tags_json,
           enabled: row.enabled,
@@ -1473,8 +1475,15 @@ export class EvaluationGatePolicyRepository {
   }
 
   async getLatestPublishedForResource(resourceType: EvaluationSubjectType): Promise<EvaluationGatePolicy | undefined> {
-    const rows = await this.list('published');
-    return rows.find((policy) => policy.resource_types.includes(resourceType));
+    const rows = await this.db
+      .selectFrom('evaluation_gate_policy')
+      .selectAll()
+      .where('status', '=', 'published')
+      .orderBy('published_at', 'desc')
+      .orderBy('updated_at', 'desc')
+      .orderBy('gate_policy_id', 'desc')
+      .execute();
+    return rows.map(mapEvaluationGatePolicy).find((policy) => policy.resource_types.includes(resourceType));
   }
 
   async createDraft(policy: EvaluationGatePolicy, options: EvaluationWriteOptions): Promise<EvaluationGatePolicy> {
@@ -2423,9 +2432,10 @@ export class EvaluationScoringEngine {
     const score = hardFailure ? 0 : scored.length > 0
       ? scored.reduce((sum, metric) => sum + (metric.score ?? 0), 0) / scored.length
       : 1;
-    const requiredFailure = metrics.some((metric) => !metric.hard_gate && !metric.passed);
     const minimumCaseScore = input.evaluationCase.minimum_case_score;
     const belowMinimumCaseScore = minimumCaseScore !== undefined && score < minimumCaseScore;
+    const requiredFailure = minimumCaseScore === undefined
+      && metrics.some((metric) => !metric.hard_gate && !metric.passed);
     const systemError = input.systemError === true || input.actualStatus === 'system_error';
     const status: EvaluationCaseResult['status'] = systemError
       ? 'system_error'
@@ -3158,6 +3168,7 @@ function mapEvaluationCase(row: Selectable<EvaluationCaseTable>): EvaluationCase
     ...(row.output_token_budget !== null ? { output_token_budget: row.output_token_budget } : {}),
     ...(row.total_token_budget !== null ? { total_token_budget: row.total_token_budget } : {}),
     ...(row.cost_budget !== null ? { cost_budget: Number(row.cost_budget) } : {}),
+    ...(row.minimum_case_score !== null ? { minimum_case_score: Number(row.minimum_case_score) } : {}),
     weight: Number(row.weight),
     tags: jsonArray(row.tags_json).map(String),
     enabled: row.enabled,

@@ -24,6 +24,8 @@ services:
       APP_ENV: development
       TENANT_RUNTIME_POLICY_MODE: ${TENANT_RUNTIME_POLICY_MODE:-optional}
       PI_AGENT_MODE: ${PI_AGENT_MODE:-deterministic}
+      EVALUATION_WORKER_ENABLED: ${EVALUATION_WORKER_ENABLED:-false}
+      EVALUATION_TASK_QUEUE: ${EVALUATION_TASK_QUEUE:-evaluation-worker-main}
       MODEL_GATEWAY_BASE_URL: http://mock-server:4100
       MODEL_GATEWAY_API_KEY: dev-only-placeholder
       MODEL_GATEWAY_MODEL: dar-local-model

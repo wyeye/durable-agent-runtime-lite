@@ -7,12 +7,54 @@ import {
   EvaluationDatasetRepository,
   EvaluationGatePolicyRepository,
   sql,
+  ToolCallLogRepository,
 } from '../src/index.js';
 
 const runPostgres = process.env.RUN_POSTGRES_TESTS === '1' && Boolean(process.env.DATABASE_URL);
 const describePostgres = runPostgres ? describe : describe.skip;
 
 describePostgres('evaluation repositories with PostgreSQL', () => {
+  it('reuses outer transactions for evaluation tool call reservations', async () => {
+    const db = createDb({ databaseUrl: process.env.DATABASE_URL as string });
+    const tenantId = `eval_reservation_${randomUUID()}`;
+    const runId = `eval_run_${randomUUID()}`;
+    const caseId = `case_${randomUUID()}`;
+    class RollbackProbe extends Error {}
+
+    try {
+      await db.transaction().execute(async (trx) => {
+        const reservation = await new ToolCallLogRepository(trx).reserveEvaluationLogicalCall({
+          tenantId,
+          evaluationRunId: runId,
+          evaluationCaseId: caseId,
+          toolName: 'knowledge.search',
+          toolVersion: '1.0.0',
+          logicalToolCallId: 'logical_1',
+          operation: 'invoke',
+          limit: 1,
+        });
+        expect(reservation.allowed).toBe(true);
+        throw new RollbackProbe();
+      }).catch((error: unknown) => {
+        if (!(error instanceof RollbackProbe)) {
+          throw error;
+        }
+      });
+
+      const count = await sql<{ count: string }>`
+        select count(*)::text as count
+        from evaluation_tool_call_reservation
+        where tenant_id = ${tenantId}
+          and evaluation_run_id = ${runId}
+          and evaluation_case_id = ${caseId}
+      `.execute(db);
+      expect(Number(count.rows[0]?.count ?? 0)).toBe(0);
+    } finally {
+      await sql`delete from evaluation_tool_call_reservation where tenant_id = ${tenantId}`.execute(db);
+      await closeDb(db);
+    }
+  });
+
   it('round-trips evaluation jsonb fields through PostgreSQL', async () => {
     const db = createDb({ databaseUrl: process.env.DATABASE_URL as string });
     const suffix = randomUUID();

@@ -31,11 +31,17 @@ const booleanEnvSchema = (defaultValue: boolean) =>
     if (value === '') {
       return undefined;
     }
-    if (value === 'true') {
-      return true;
-    }
-    if (value === 'false') {
-      return false;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === '') {
+        return undefined;
+      }
+      if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) {
+        return true;
+      }
+      if (['false', '0', 'no', 'n', 'off'].includes(normalized)) {
+        return false;
+      }
     }
     return value;
   }, z.boolean().default(defaultValue));
@@ -76,10 +82,7 @@ export const runtimeConfigSchema = z.object({
   ),
   MODEL_GATEWAY_MAX_RESPONSE_BYTES: positiveIntSchema(1_000_000),
   MODEL_CALL_LEDGER_MAX_RESPONSE_BYTES: positiveIntSchema(1_048_576),
-  MODEL_GATEWAY_ALLOW_INSECURE_HTTP: z.preprocess(
-    emptyToUndefined,
-    z.coerce.boolean().default(true),
-  ),
+  MODEL_GATEWAY_ALLOW_INSECURE_HTTP: booleanEnvSchema(true),
   MODEL_GATEWAY_IDEMPOTENCY_HEADER: stringSchema('Idempotency-Key'),
   MODEL_GATEWAY_USER_AGENT: stringSchema('durable-agent-runtime-lite/runtime-worker'),
   PI_AGENT_MODE: z.preprocess(
@@ -132,13 +135,10 @@ export const runtimeConfigSchema = z.object({
     emptyToUndefined,
     z.coerce.number().int().nonnegative().default(5_000),
   ),
-  TENANT_ADMISSION_RECONCILE_ENABLED: z.preprocess(
-    emptyToUndefined,
-    z.coerce.boolean().default(false),
-  ),
+  TENANT_ADMISSION_RECONCILE_ENABLED: booleanEnvSchema(false),
   TENANT_ADMISSION_STALE_AFTER_MS: positiveIntSchema(300_000),
   TENANT_ADMISSION_MAX_RECONCILE_BATCH: positiveIntSchema(50),
-  EVALUATION_WORKER_ENABLED: z.preprocess(emptyToUndefined, z.coerce.boolean().default(false)),
+  EVALUATION_WORKER_ENABLED: booleanEnvSchema(false),
   EVALUATION_TASK_QUEUE: stringSchema('evaluation-worker-main'),
   EVALUATION_MAX_CONCURRENT_RUNS: positiveIntSchema(1),
   EVALUATION_MAX_CONCURRENT_CASES: positiveIntSchema(2),
@@ -150,11 +150,8 @@ export const runtimeConfigSchema = z.object({
   EVALUATION_OUTPUT_MAX_BYTES: positiveIntSchema(1_000_000),
   EVALUATION_EVIDENCE_MAX_BYTES: positiveIntSchema(2_000_000),
   EVALUATION_REGEX_TIMEOUT_MS: positiveIntSchema(250),
-  SEED_EVALUATION_DATASETS: z.preprocess(emptyToUndefined, z.coerce.boolean().default(false)),
-  TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED: z.preprocess(
-    emptyToUndefined,
-    z.coerce.boolean().default(false),
-  ),
+  SEED_EVALUATION_DATASETS: booleanEnvSchema(false),
+  TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED: booleanEnvSchema(false),
   TOOL_GATEWAY_RUNTIME_WORKER_TOKEN: optionalStringSchema,
   TOOL_GATEWAY_CONTROL_PLANE_TOKEN: optionalStringSchema,
   RUNTIME_WORKER_TOOL_GATEWAY_TOKEN: optionalStringSchema,
@@ -163,7 +160,7 @@ export const runtimeConfigSchema = z.object({
     emptyToUndefined,
     z.enum(['header', 'disabled']).default('header'),
   ),
-  CONTROL_PLANE_SWAGGER_ENABLED: z.preprocess(emptyToUndefined, z.coerce.boolean().default(true)),
+  CONTROL_PLANE_SWAGGER_ENABLED: booleanEnvSchema(true),
   CONTROL_PLANE_STATIC_ENABLED: booleanEnvSchema(false),
 });
 

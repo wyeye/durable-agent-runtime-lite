@@ -59,6 +59,7 @@ class FakeQuery {
   private rows: unknown[];
   private first: unknown;
   private shouldReturnAll = false;
+  orderByCalls: Array<{ column: string; direction?: string }> = [];
 
   constructor(rows: unknown[] = [], first?: unknown) {
     this.rows = rows;
@@ -77,7 +78,10 @@ class FakeQuery {
     return this;
   }
 
-  orderBy() {
+  orderBy(column?: string, direction?: string) {
+    if (column) {
+      this.orderByCalls.push({ column, direction });
+    }
     return this;
   }
 
@@ -138,20 +142,50 @@ class FakeQuery {
   }
 
   async execute() {
-    return this.rows;
+    return this.orderedRows();
   }
 
   async executeTakeFirst() {
-    return this.first ?? this.rows[0];
+    return this.first ?? this.orderedRows()[0];
   }
 
   async executeTakeFirstOrThrow() {
-    const value = this.shouldReturnAll && this.first ? this.first : (this.first ?? this.rows[0]);
+    const value = this.shouldReturnAll && this.first ? this.first : (this.first ?? this.orderedRows()[0]);
     if (!value) {
       throw new Error('missing fake row');
     }
     return value;
   }
+
+  private orderedRows() {
+    if (this.orderByCalls.length === 0) {
+      return this.rows;
+    }
+    return [...this.rows].sort((a, b) => {
+      const left = a as Record<string, unknown>;
+      const right = b as Record<string, unknown>;
+      for (const order of this.orderByCalls) {
+        const comparison = compareValues(left[order.column], right[order.column]);
+        if (comparison !== 0) {
+          return order.direction === 'desc' ? -comparison : comparison;
+        }
+      }
+      return 0;
+    });
+  }
+}
+
+function compareValues(left: unknown, right: unknown): number {
+  if (left === right) {
+    return 0;
+  }
+  if (left === undefined || left === null) {
+    return 1;
+  }
+  if (right === undefined || right === null) {
+    return -1;
+  }
+  return String(left).localeCompare(String(right));
 }
 
 class FakeDb {
@@ -222,6 +256,41 @@ const toolManifest: ToolManifest = {
   input_schema: { type: 'object', required: ['query'], properties: { query: { type: 'string' } } },
   required_permissions: [],
 };
+
+function gatePolicyRow(input: {
+  gatePolicyId: string;
+  thresholds: Record<string, unknown>;
+  publishedAt: string;
+  updatedAt: string;
+}) {
+  return {
+    gate_policy_id: input.gatePolicyId,
+    version: 1,
+    status: 'published',
+    resource_types_json: ['prompt'],
+    required_dataset_refs_json: [{
+      dataset_id: 'runtime-agent-core-v1',
+      version: 1,
+      dataset_hash: 'a'.repeat(64),
+    }],
+    thresholds_json: input.thresholds,
+    regression_rules_json: {},
+    required_case_tags_json: [],
+    allow_override: false,
+    revision: 1,
+    gate_policy_hash: hashJson({
+      gate_policy_id: input.gatePolicyId,
+      thresholds: input.thresholds,
+      published_at: input.publishedAt,
+    }),
+    created_by: 'operator',
+    updated_by: 'operator',
+    published_by: 'operator',
+    created_at: input.publishedAt,
+    updated_at: input.updatedAt,
+    published_at: input.publishedAt,
+  };
+}
 
 function modelPolicyFixture(modelPolicyId: string, version: number) {
   return {
@@ -685,6 +754,31 @@ describe('db repositories', () => {
     });
   });
 
+  it('selects the newest published gate policy for a resource type', async () => {
+    const db = new FakeDb({
+      evaluation_gate_policy: [
+        gatePolicyRow({
+          gatePolicyId: '000_old_prompt_policy',
+          thresholds: { minimum_pass_rate: 0 },
+          publishedAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        }),
+        gatePolicyRow({
+          gatePolicyId: '999_new_prompt_policy',
+          thresholds: { minimum_pass_rate: 0.8 },
+          publishedAt: '2026-01-02T00:00:00.000Z',
+          updatedAt: '2026-01-02T00:00:00.000Z',
+        }),
+      ],
+    });
+
+    await expect(new EvaluationGatePolicyRepository(db as never).getLatestPublishedForResource('prompt'))
+      .resolves.toMatchObject({
+        gate_policy_id: '999_new_prompt_policy',
+        thresholds: { minimum_pass_rate: 0.8 },
+      });
+  });
+
   it('builds prompt candidate execution plans with candidate prompt content, not agent current prompt', () => {
     const agentHash = 'a'.repeat(64);
     const oldPromptHash = 'b'.repeat(64);
@@ -972,6 +1066,35 @@ describe('db repositories', () => {
     });
     expect(partial.score).toBeLessThan(1);
     expect(partial.status).toBe('passed');
+
+    const allowedAssertionMiss = new EvaluationScoringEngine().scoreCase({
+      evaluationCase: {
+        ...baseCase,
+        final_assertions: [{ type: 'contains', value: 'expected missing text' }],
+        minimum_case_score: 0.5,
+      },
+      actualStatus: 'completed',
+      finalOutput: 'done',
+      toolCalls: [
+        { tool_name: 'knowledge.search', arguments: {} },
+        { tool_name: 'knowledge.search', arguments: {} },
+      ],
+    });
+    expect(allowedAssertionMiss.score).toBeGreaterThanOrEqual(0.5);
+    expect(allowedAssertionMiss.status).toBe('passed');
+
+    const requiredAssertionMiss = new EvaluationScoringEngine().scoreCase({
+      evaluationCase: {
+        ...baseCase,
+        final_assertions: [{ type: 'contains', value: 'expected missing text' }],
+      },
+      actualStatus: 'completed',
+      finalOutput: 'done',
+      toolCalls: [
+        { tool_name: 'knowledge.search', arguments: {} },
+      ],
+    });
+    expect(requiredAssertionMiss.status).toBe('failed');
 
     const requiredMinimum = new EvaluationScoringEngine().scoreCase({
       evaluationCase: { ...baseCase, minimum_case_score: 0.9 },

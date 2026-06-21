@@ -3,13 +3,18 @@ import Fastify from 'fastify';
 
 interface GenerateRequest {
   model?: string;
-  messages?: Array<{ role: string; content: string }>;
+  messages?: MockRequestMessage[];
 }
 
 interface OpenAiChatRequest {
   model?: string;
-  messages?: Array<{ role: string; content?: string | null }>;
+  messages?: MockRequestMessage[];
   tools?: Array<{ function?: { name?: string } }>;
+}
+
+interface MockRequestMessage {
+  role: string;
+  content?: string | null | Array<{ type?: string; text?: string }>;
 }
 
 type MockContentBlock =
@@ -58,7 +63,10 @@ export function buildServer() {
 
   server.post('/v1/chat/completions', async (request, reply) => {
     const body = request.body as OpenAiChatRequest;
-    const messages = (body.messages ?? []).map((message) => ({ role: message.role, content: message.content ?? '' }));
+    const messages = (body.messages ?? []).map((message) => ({
+      role: message.role,
+      content: messageContentToText(message.content),
+    }));
     const scenario = scenarioFromMessages(messages);
     if (scenario === 'timeout') {
       await new Promise((resolve) => setTimeout(resolve, 60_000));
@@ -101,6 +109,8 @@ function responseForScenario(scenario: string, request: GenerateRequest): MockGe
     return finalResponse(model, `Mock final after ${scenario} boundary.`);
   }
   switch (scenario) {
+    case 'regression_b_degraded':
+      return finalResponse(model, 'Mock degraded regression answer.');
     case 'readonly_tool':
     case 'repeated_tool':
     case 'rate_limit_then_success':
@@ -259,21 +269,38 @@ function usage() {
   return { input_tokens: 10, output_tokens: 5, total_tokens: 15 };
 }
 
-function scenarioFromMessages(messages: Array<{ role: string; content: string }>): string {
-  const joined = messages.map((message) => message.content).join('\n').toLowerCase();
-  for (const scenario of [
-    'readonly_tool',
-    'repeated_tool',
-    'l3_tool',
-    'user_input',
-    'handoff',
-    'final_only',
-    'malformed_tool_call',
-    'rate_limit_then_success',
-    'upstream_500_then_success',
-    'timeout',
-    'excessive_tokens',
-  ]) {
+const supportedScenarios = [
+  'regression_b_degraded',
+  'repeated_tool',
+  'readonly_tool',
+  'malformed_tool_call',
+  'rate_limit_then_success',
+  'upstream_500_then_success',
+  'excessive_tokens',
+  'l3_tool',
+  'user_input',
+  'handoff',
+  'final_only',
+  'timeout',
+] as const;
+
+function scenarioFromMessages(messages: MockRequestMessage[]): string {
+  const joined = messages.map((message) => messageContentToText(message.content)).join('\n').toLowerCase();
+  if (joined.includes('regression_b_degraded')) {
+    return 'regression_b_degraded';
+  }
+  for (const message of messages) {
+    const content = messageContentToText(message.content).trim().toLowerCase();
+    if (message.role === 'user') {
+      const explicit = supportedScenarios.find((scenario) =>
+        content === scenario || content.startsWith(`${scenario} `) || content.startsWith(`${scenario}\n`),
+      );
+      if (explicit) {
+        return explicit;
+      }
+    }
+  }
+  for (const scenario of supportedScenarios) {
     if (joined.includes(scenario)) {
       return scenario;
     }
@@ -281,8 +308,20 @@ function scenarioFromMessages(messages: Array<{ role: string; content: string }>
   return 'readonly_tool';
 }
 
-function hasToolResult(messages: Array<{ role: string; content: string }>): boolean {
+function hasToolResult(messages: MockRequestMessage[]): boolean {
   return messages.some((message) => message.role === 'tool');
+}
+
+function messageContentToText(content: MockRequestMessage['content']): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return '';
+  }
+  return content
+    .flatMap((block) => block.type === 'text' && typeof block.text === 'string' ? [block.text] : [])
+    .join('\n');
 }
 
 async function start() {

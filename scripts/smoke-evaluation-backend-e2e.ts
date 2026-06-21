@@ -337,13 +337,13 @@ async function runPublishGateScenario(db: Db): Promise<SmokeSummary> {
   const overrideCandidate = await prepareCandidate(db, {
     suffix: 'publish_prompt_override',
     subjectType: 'prompt',
-    scenarioText: 'readonly_tool publish override degraded',
+    scenarioText: 'model_gateway:regression_b_degraded publish override degraded',
     allowedTools: [],
-    primaryScenario: 'readonly_tool',
+    primaryScenario: 'final_only',
     datasetId: dataset.dataset_id,
     datasetVersion: dataset.version,
     publishable: true,
-    promptContentSuffix: 'Override candidate intentionally keeps the runtime answer valid while the case requires impossible text.',
+    promptContentSuffix: 'Override candidate intentionally returns degraded text while the case requires the standard final answer.',
   });
   const overrideRun = await startAndWaitEvaluationRun(overrideCandidate.executionPlan, dataset, 'publish_gate');
   assert.equal(overrideRun.status, 'completed');
@@ -1002,8 +1002,7 @@ async function runPostgresReservationEvidence(
   try {
     await sql`delete from evaluation_tool_call_reservation where tenant_id = ${tenantId} and evaluation_run_id = ${runId}`.execute(db);
     const stores = [new ToolCallLogRepository(dbA), new ToolCallLogRepository(dbB)];
-    const responses = await Promise.all(Array.from({ length: 20 }, (_, index) =>
-      stores[index % 2]!.reserveEvaluationLogicalCall({
+    const reservationInputs = Array.from({ length: 20 }, (_, index) => ({
         tenantId,
         evaluationRunId: runId,
         evaluationCaseId: caseId,
@@ -1013,20 +1012,25 @@ async function runPostgresReservationEvidence(
         operation: 'invoke',
         limit: 1,
         idempotencyKey: `idem_${index}`,
-      }),
+      } as const));
+    const responses = await Promise.all(reservationInputs.map((input, index) =>
+      stores[index % 2]!.reserveEvaluationLogicalCall(input),
     ));
     assert.equal(responses.filter((item) => item.allowed).length, 1);
     assert.equal(responses.filter((item) => !item.allowed).length, 19);
+    const allowedIndex = responses.findIndex((item) => item.allowed);
+    assert.notEqual(allowedIndex, -1, 'reservation retry requires the logical call that actually acquired the slot');
+    const allowedInput = reservationInputs[allowedIndex]!;
     const retry = await stores[0]!.reserveEvaluationLogicalCall({
       tenantId,
       evaluationRunId: runId,
       evaluationCaseId: caseId,
       toolName,
       toolVersion: '1.0.0',
-      logicalToolCallId: 'logical_0',
+      logicalToolCallId: allowedInput.logicalToolCallId,
       operation: 'invoke',
       limit: 1,
-      idempotencyKey: 'idem_0_retry',
+      idempotencyKey: `${allowedInput.idempotencyKey}_retry`,
     });
     assert.equal(retry.allowed, true);
     assert.equal(retry.alreadyReserved, true);
@@ -1149,7 +1153,7 @@ async function assertToolGatewayRedaction(
   assert.ok(toolCallIds.length > 0, 'redaction check requires real tool calls');
   const list = await getJson<ToolCallLog[]>(
     `${toolGatewayUrl}/v1/tool-calls?tenant_id=${encodeURIComponent(tenantId)}&page_size=100`,
-    serviceHeaders(),
+    toolReadHeaders(),
   );
   const matched = list.filter((call) => call.evaluation_run_id === run.evaluation_run_id);
   assert.ok(matched.length > 0, 'Tool Gateway must expose evaluation tool call logs');
@@ -1169,43 +1173,11 @@ async function assertToolGatewayEvaluationPolicy(
   db: Db,
   plan: EvaluationExecutionPlan,
 ): Promise<Record<string, unknown>> {
-  const repository = new ToolManifestRepository(db);
-  const baseKnowledge = await readJson<ToolManifest>('examples/tools/knowledge-search-tool.json');
-  const baseRecord = await readJson<ToolManifest>('examples/tools/record-write-mock-tool.json');
-  await repository.upsert({
-    ...baseKnowledge,
-    tool_name: `ar2b.default_deny.${runStamp}`,
-    evaluation_policy: {
-      allowed_in_evaluation: false,
-      mode: 'deny',
-      allowed_tenants: [],
-      result_redaction_policy: 'mask_sensitive',
-    },
-  }, { tenantId, status: 'published', createdBy: userId });
-  await repository.upsert({
-    ...baseKnowledge,
-    tool_name: `ar2b.preview_only.${runStamp}`,
-    evaluation_policy: {
-      allowed_in_evaluation: true,
-      mode: 'preview_only',
-      allowed_tenants: [tenantId],
-      result_redaction_policy: 'mask_sensitive',
-      maximum_calls_per_case: 5,
-    },
-  }, { tenantId, status: 'published', createdBy: userId });
-  await repository.upsert({
-    ...baseRecord,
-    tool_name: `ar2b.sandbox_commit.${runStamp}`,
-    evaluation_policy: {
-      allowed_in_evaluation: true,
-      mode: 'sandbox_commit',
-      allowed_tenants: [tenantId],
-      result_redaction_policy: 'summary_only',
-      maximum_calls_per_case: 2,
-    },
-  }, { tenantId, status: 'published', createdBy: userId });
-
   const evaluationContext = {
+    tenant_policy_snapshot_ref: plan.tenant_policy_snapshot_ref,
+    tenant_policy_hash: plan.tenant_policy_snapshot_hash,
+    execution_plan_ref: plan.agent_execution_plan_ref,
+    execution_plan_hash: plan.agent_execution_plan_hash,
     execution_context_type: 'evaluation' as const,
     evaluation_run_id: `http_policy_run_${runStamp}`,
     evaluation_case_id: `http_policy_case_${runStamp}`,
@@ -1220,34 +1192,19 @@ async function assertToolGatewayEvaluationPolicy(
   });
   assert.equal(readonly.status, 'succeeded', 'readonly evaluation invoke must be allowed');
 
-  const defaultDeny = await postToolExpectError(`/v1/tools/${encodeURIComponent(`ar2b.default_deny.${runStamp}`)}/invoke`, {
-    ...baseToolRequest(`ar2b.default_deny.${runStamp}`, '1.0.0', { query: 'deny' }, 'default_deny'),
+  const sandboxPreview = await postTool<ToolPreviewResponse>(`/v1/tools/record.write.mock/preview`, {
+    ...baseToolRequest('record.write.mock', '1.0.0', { record: { summary: 'sandbox preview' } }, 'sandbox_preview'),
     ...evaluationContext,
-  });
-  assert.equal(defaultDeny.error?.code, 'TOOL_DENIED_BY_EVALUATION_POLICY');
-
-  const preview = await postTool<ToolPreviewResponse>(`/v1/tools/${encodeURIComponent(`ar2b.preview_only.${runStamp}`)}/preview`, {
-    ...baseToolRequest(`ar2b.preview_only.${runStamp}`, '1.0.0', { query: 'preview' }, 'preview_only'),
-    ...evaluationContext,
-  });
-  assert.equal(preview.status, 'allowed', 'preview_only preview must be allowed');
-  const previewCommitDenied = await postToolExpectError(`/v1/tools/${encodeURIComponent(`ar2b.preview_only.${runStamp}`)}/commit`, {
-    ...baseToolRequest(`ar2b.preview_only.${runStamp}`, '1.0.0', { query: 'preview' }, 'preview_only_commit'),
-    tool_call_id: preview.tool_call_id,
-    ...evaluationContext,
-  });
-  assert.equal(previewCommitDenied.error?.code, 'TOOL_EVALUATION_PREVIEW_ONLY');
-
-  const sandboxPreview = await postTool<ToolPreviewResponse>(`/v1/tools/${encodeURIComponent(`ar2b.sandbox_commit.${runStamp}`)}/preview`, {
-    ...baseToolRequest(`ar2b.sandbox_commit.${runStamp}`, '1.0.0', { record: { summary: 'sandbox preview' } }, 'sandbox_preview'),
-    ...evaluationContext,
+    evaluation_case_id: `http_policy_record_case_${runStamp}`,
   });
   assert.ok(['allowed', 'pending_confirmation'].includes(sandboxPreview.status), 'sandbox preview must reach preview path');
-  const sandboxInvoke = await postTool<ToolInvokeResponse>(`/v1/tools/${encodeURIComponent(`ar2b.sandbox_commit.${runStamp}`)}/invoke`, {
-    ...baseToolRequest(`ar2b.sandbox_commit.${runStamp}`, '1.0.0', { record: { summary: 'business commit deny' } }, 'business_commit'),
+  const sandboxInvoke = await postTool<ToolInvokeResponse>(`/v1/tools/record.write.mock/invoke`, {
+    ...baseToolRequest('record.write.mock', '1.0.0', { record: { summary: 'business commit deny' } }, 'business_commit'),
     ...evaluationContext,
+    evaluation_case_id: `http_policy_record_invoke_case_${runStamp}`,
   });
   assert.equal(sandboxInvoke.status, 'needs_confirmation', 'business L3 invoke must not auto-commit');
+  assert.equal(sandboxInvoke.error?.code, 'HUMAN_CONFIRMATION_REQUIRED', 'business L3 invoke must require human confirmation');
 
   const maxLimitFirst = await postTool<ToolInvokeResponse>(`/v1/tools/knowledge.search/invoke`, {
     ...baseToolRequest('knowledge.search', '1.0.0', { query: 'limit one' }, 'limit_1'),
@@ -1267,23 +1224,21 @@ async function assertToolGatewayEvaluationPolicy(
     ...evaluationContext,
     tenant_id: `${tenantId}_not_allowed`,
   });
-  assert.equal(crossTenantDenied.error?.code, 'TOOL_DENIED_BY_EVALUATION_POLICY');
+  assert.equal(crossTenantDenied.error?.code, 'TOOL_NOT_FOUND', 'cross-tenant requests must not resolve another tenant tool registry entry');
 
   const redacted = must(
     readonly.tool_call_id
-      ? await getJson<ToolCallLog>(`${toolGatewayUrl}/v1/tool-calls/${encodeURIComponent(readonly.tool_call_id)}`, serviceHeaders())
+      ? await getJson<ToolCallLog>(`${toolGatewayUrl}/v1/tool-calls/${encodeURIComponent(readonly.tool_call_id)}`, toolReadHeaders())
       : undefined,
     'readonly tool call log',
   );
   assertNoUnsafeText(JSON.stringify(redacted));
 
   return {
-    default_deny: defaultDeny.error?.code,
     readonly: readonly.status,
-    preview_only: preview.status,
-    preview_only_commit_denied: previewCommitDenied.error?.code,
     sandbox_commit_preview: sandboxPreview.status,
     business_commit_denied: sandboxInvoke.status,
+    business_commit_reason: sandboxInvoke.error?.code,
     max_calls_denied: maxLimitDenied.error?.code,
     cross_tenant_denied: crossTenantDenied.error?.code,
     redaction_checked: Boolean(readonly.tool_call_id),
@@ -1503,8 +1458,30 @@ async function assertServicesReady(): Promise<void> {
 
 async function assertWorkerUsesModelGateway(): Promise<void> {
   const response = await fetch(`${runtimeWorkerUrl}/readyz`);
-  const body = await response.json() as { checks?: { pi_agent_mode?: string } };
+  const body = await response.json() as {
+    checks?: {
+      pi_agent_mode?: string;
+      evaluation_worker_enabled?: boolean;
+      evaluation_worker_status?: string;
+      evaluation_task_queue?: string;
+      task_queues?: string[];
+    };
+  };
   assert.equal(body.checks?.pi_agent_mode, 'model_gateway', 'Evaluation backend smoke requires runtime-worker PI_AGENT_MODE=model_gateway');
+  assert.equal(
+    body.checks?.evaluation_worker_enabled,
+    true,
+    'Evaluation backend smoke requires runtime-worker EVALUATION_WORKER_ENABLED=true',
+  );
+  assert.equal(
+    body.checks?.evaluation_worker_status,
+    'running',
+    'Evaluation backend smoke requires the evaluation Temporal worker to be running',
+  );
+  assert.ok(
+    body.checks?.evaluation_task_queue && body.checks?.task_queues?.includes(body.checks.evaluation_task_queue),
+    'Evaluation backend smoke requires runtime-worker to poll the configured EVALUATION_TASK_QUEUE',
+  );
 }
 
 async function checkHealth(url: string, label: string): Promise<void> {
@@ -1540,13 +1517,13 @@ async function postJson<T>(
 }
 
 async function postTool<T>(path: string, payload: unknown): Promise<T> {
-  return postJson<T>(`${toolGatewayUrl}${path}`, payload, serviceHeaders());
+  return postJson<T>(`${toolGatewayUrl}${path}`, payload, toolInvokeHeaders());
 }
 
 async function postToolExpectError(path: string, payload: unknown): Promise<StandardResponse<never>> {
   const response = await fetch(`${toolGatewayUrl}${path}`, {
     method: 'POST',
-    headers: { ...serviceHeaders(), 'content-type': 'application/json' },
+    headers: { ...toolInvokeHeaders(), 'content-type': 'application/json' },
     body: JSON.stringify(payload),
   });
   const body = await response.json() as StandardResponse<never>;
@@ -1579,11 +1556,19 @@ async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(join(repoRoot, path), 'utf8')) as T;
 }
 
-function serviceHeaders(): Record<string, string> {
+function toolReadHeaders(): Record<string, string> {
   return {
     'x-service-id': 'control-plane',
-    'x-service-token': process.env.TOOL_GATEWAY_CONTROL_PLANE_TOKEN ?? 'dev-only-control-plane-token',
+    authorization: `Bearer ${process.env.TOOL_GATEWAY_CONTROL_PLANE_TOKEN ?? 'dev-only-control-plane-token'}`,
     'x-request-id': `${requestPrefix}_tool_gateway_query`,
+  };
+}
+
+function toolInvokeHeaders(): Record<string, string> {
+  return {
+    'x-service-id': 'runtime-worker',
+    authorization: `Bearer ${process.env.TOOL_GATEWAY_RUNTIME_WORKER_TOKEN ?? 'dev-only-runtime-worker-token'}`,
+    'x-request-id': `${requestPrefix}_tool_gateway_invoke`,
   };
 }
 

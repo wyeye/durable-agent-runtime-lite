@@ -58,4 +58,62 @@ describe('mock OpenAI-compatible endpoint', () => {
       name: 'knowledge.search',
     });
   });
+
+  it('prefers the explicit user scenario over later matching case text', async () => {
+    const server = buildServer();
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'dar-local-model',
+        messages: [
+          { role: 'system', content: 'Use readonly_tool as a fallback example only.' },
+          {
+            role: 'user',
+            content: 'repeated_tool AR-2B evaluation smoke framework_tool_policy_deny',
+          },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'tool_knowledge_search_f2405c6159c9',
+              parameters: { type: 'object' },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.choices[0].message.tool_calls).toHaveLength(2);
+    expect(body.choices[0].message.tool_calls.map((call: { id: string }) => call.id)).toEqual([
+      'call_readonly_1',
+      'call_readonly_2',
+    ]);
+  });
+
+  it('lets the regression degraded prompt marker override passing case input', async () => {
+    const server = buildServer();
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'dar-local-model',
+        messages: [
+          { role: 'system', content: 'AR-2B evaluation smoke. model_gateway:regression_b_degraded.' },
+          { role: 'user', content: 'final_only AR-2B evaluation smoke regression_final_1' },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.choices[0].message.content).toBe('Mock degraded regression answer.');
+  });
 });

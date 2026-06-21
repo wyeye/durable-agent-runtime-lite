@@ -157,4 +157,89 @@ describe('ToolGatewayClient', () => {
       await server.close();
     }
   });
+
+  it('returns standard denied invoke responses instead of throwing', async () => {
+    const server = await startTestServer((request, response) => {
+      request.resume();
+      request.on('end', () => {
+        response.statusCode = 400;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+          success: false,
+          data: null,
+          error: {
+            code: 'TOOL_EVALUATION_CALL_LIMIT_EXCEEDED',
+            message: 'Evaluation tool call limit exceeded for this case',
+            details: {
+              audit_event_id: 'audit_denied',
+              idempotency_key: 'task_1:knowledge.search:second',
+              tool_name: 'knowledge.search',
+              tool_version: '1.0.0',
+            },
+          },
+        }));
+      });
+    });
+
+    try {
+      const client = new ToolGatewayClient({ baseUrl: server.baseUrl });
+      const result = await client.invoke({
+        tool_name: 'knowledge.search',
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_1' },
+        arguments: { query: 'second' },
+        idempotency_key: 'task_1:knowledge.search:second',
+        request_id: 'req_1',
+      });
+
+      expect(result).toMatchObject({
+        tool_name: 'knowledge.search',
+        tool_version: '1.0.0',
+        status: 'denied',
+        audit_event_id: 'audit_denied',
+        idempotency_key: 'task_1:knowledge.search:second',
+        error: {
+          code: 'TOOL_EVALUATION_CALL_LIMIT_EXCEEDED',
+        },
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('throws standard non-policy failures instead of converting them to denied tool results', async () => {
+    const server = await startTestServer((request, response) => {
+      request.resume();
+      request.on('end', () => {
+        response.statusCode = 500;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+          success: false,
+          data: null,
+          error: {
+            code: 'INTERNAL_ERROR',
+            message: '服务处理失败',
+          },
+        }));
+      });
+    });
+
+    try {
+      const client = new ToolGatewayClient({ baseUrl: server.baseUrl });
+      await expect(client.invoke({
+        tool_name: 'knowledge.search',
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_1' },
+        arguments: { query: 'second' },
+        idempotency_key: 'task_1:knowledge.search:second',
+        request_id: 'req_1',
+      })).rejects.toThrow('INTERNAL_ERROR: 服务处理失败');
+    } finally {
+      await server.close();
+    }
+  });
 });

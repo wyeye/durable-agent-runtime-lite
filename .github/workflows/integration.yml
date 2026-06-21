@@ -151,10 +151,11 @@ jobs:
 
       - name: Switch worker to model gateway smoke mode
         run: |
+          EVALUATION_WORKER_ENABLED=true \
           PI_AGENT_MODE=model_gateway \
             docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d runtime-worker
 
-      - name: Wait for model-gateway worker readiness
+      - name: Wait for model-gateway evaluation worker readiness
         run: |
           node - <<'NODE'
           const deadline = Date.now() + 60_000;
@@ -162,7 +163,15 @@ jobs:
             try {
               const response = await fetch('http://localhost:3300/readyz');
               const body = await response.json().catch(() => ({}));
-              if (response.ok && body?.checks?.pi_agent_mode === 'model_gateway') {
+              const checks = body?.checks ?? {};
+              if (
+                response.ok &&
+                checks.pi_agent_mode === 'model_gateway' &&
+                checks.evaluation_worker_enabled === true &&
+                checks.evaluation_worker_status === 'running' &&
+                Array.isArray(checks.task_queues) &&
+                checks.task_queues.includes(checks.evaluation_task_queue)
+              ) {
                 console.log(JSON.stringify(body.checks));
                 process.exit(0);
               }
@@ -172,7 +181,7 @@ jobs:
             }
             await new Promise((resolve) => setTimeout(resolve, 2000));
           }
-          throw new Error('runtime-worker did not enter model_gateway mode');
+          throw new Error('runtime-worker did not enter model_gateway mode with evaluation worker running');
           NODE
 
       - name: Pi model gateway smoke test
@@ -219,7 +228,9 @@ jobs:
         run: pnpm test:temporal-replay
 
       - name: Switch worker back to deterministic smoke mode
-        run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d runtime-worker
+        run: |
+          EVALUATION_WORKER_ENABLED=false \
+            docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d runtime-worker
 
       - name: Wait for deterministic worker readiness
         run: |
@@ -230,7 +241,11 @@ jobs:
               const response = await fetch('http://localhost:3300/readyz');
               if (response.ok) {
                 const body = await response.json();
-                if (body?.checks?.pi_agent_mode === 'deterministic') {
+                if (
+                  body?.checks?.pi_agent_mode === 'deterministic' &&
+                  body?.checks?.evaluation_worker_enabled === false &&
+                  body?.checks?.evaluation_worker_status === 'disabled'
+                ) {
                   console.log(JSON.stringify(body.checks));
                   process.exit(0);
                 }
