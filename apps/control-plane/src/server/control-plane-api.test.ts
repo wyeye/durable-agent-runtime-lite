@@ -18,6 +18,7 @@ import type {
   HumanTaskDecisionResponse,
   HumanTaskGetResponse,
   HumanTaskListResponse,
+  ModelPolicy,
   PaginatedResponse,
   RegistryResourceType,
   SpecStatus,
@@ -33,7 +34,7 @@ import { loadConfig } from '@dar/config';
 import { ControlPlaneHttpError } from './utils/http.js';
 import { createApp, shouldServeStaticFiles } from './app.js';
 import type { EvaluationApi } from './services/evaluation-api-service.js';
-import type { RegistryApi, ActorOptions } from './services/registry-api-service.js';
+import { RegistryApiService, type RegistryApi, type ActorOptions } from './services/registry-api-service.js';
 import { EvaluationGateError, type RegistryResourceRecord } from '@dar/db';
 
 const authHeaders = {
@@ -269,6 +270,47 @@ describe('control-plane API', () => {
       message: 'Evaluation candidate bundle hash is required',
     });
     await close();
+  });
+
+  it('publishes model policies through the model policy repository path', async () => {
+    const policy = modelPolicySpec();
+    const calls: string[] = [];
+    const service = new RegistryApiService({} as never, { evaluationGateMode: 'advisory' });
+    service.modelPolicies.getByIdAndVersion = async (modelPolicyId: string, version: number) => {
+      calls.push(`get:${modelPolicyId}:${version}`);
+      return policy;
+    };
+    service.modelPolicies.publish = async (modelPolicyId: string, version: number, options) => {
+      calls.push(`publish:${modelPolicyId}:${version}`);
+      expect(options.metadataJson).toMatchObject({
+        evaluation_gate_warning: 'EVALUATION_CANDIDATE_BUNDLE_HASH_REQUIRED: Evaluation candidate bundle hash is required',
+        request_id: 'req_model_policy_publish',
+      });
+      return { ...policy, status: 'published', published_by: options.operatorId };
+    };
+    service.modelPolicies.listReleaseHistory = async (modelPolicyId: string) => {
+      calls.push(`history:${modelPolicyId}`);
+      return [release('publish', 'model_policy')];
+    };
+    service.release.publish = async () => {
+      throw new Error('generic registry release path should not publish model policies');
+    };
+
+    await expect(service.publish(
+      'model_policy',
+      policy.model_policy_id,
+      policy.version,
+      { release_note: 'publish model policy smoke', metadata_json: {} },
+      { tenantId: 'tenant_1', operatorId: 'operator_1', requestId: 'req_model_policy_publish' },
+    )).resolves.toMatchObject({
+      action: 'publish',
+      resource_type: 'model_policy',
+    });
+    expect(calls).toEqual([
+      `get:${policy.model_policy_id}:1`,
+      `publish:${policy.model_policy_id}:1`,
+      `history:${policy.model_policy_id}`,
+    ]);
   });
 
   it('exposes evaluation backend operations through service APIs', async () => {
@@ -957,6 +999,50 @@ function tenantPolicyRecord(overrides: Partial<TestTenantPolicyRecord> = {}): Te
   };
 }
 
+function modelPolicySpec(overrides: Partial<ModelPolicy> = {}): ModelPolicy {
+  return {
+    model_policy_id: 'model_policy_api',
+    version: 1,
+    status: 'draft',
+    protocol: 'dar_generate',
+    targets: [{
+      target_id: 'primary',
+      gateway_profile: 'local-smoke',
+      model_id: 'mock',
+      priority: 0,
+      enabled: true,
+      capabilities: ['text', 'tools', 'usage'],
+    }],
+    retry_policy: {
+      max_attempts_per_target: 1,
+      retryable_status_codes: [429, 500],
+      retry_on_timeout: true,
+      retry_on_network_error: true,
+      backoff_ms: 0,
+      max_backoff_ms: 0,
+    },
+    fallback_policy: {
+      enabled: false,
+      ordered_target_ids: [],
+      eligible_error_classes: ['rate_limit', 'timeout', 'network'],
+      stop_on_auth_error: true,
+      stop_on_validation_error: true,
+      stop_on_policy_denial: true,
+    },
+    request_policy: {
+      temperature: 0,
+      top_p: 1,
+      max_output_tokens: 1000,
+      initial_tool_choice_mode: 'auto',
+      after_tool_result_tool_choice_mode: 'auto',
+      response_format: 'text',
+      allow_parallel_tool_calls: false,
+    },
+    revision: 1,
+    ...overrides,
+  };
+}
+
 function snapshot(overrides: Partial<TenantRuntimePolicySnapshot> = {}): TenantRuntimePolicySnapshot {
   return {
     snapshot_id: 'snapshot_1',
@@ -1186,7 +1272,11 @@ function release(action: CapabilityRelease['action'], resourceType: CapabilityRe
     release_id: `release_${action}_${resourceType}`,
     tenant_id: 'tenant_1',
     resource_type: resourceType,
-    resource_id: resourceType === 'route' ? 'route_api' : 'flow_api',
+    resource_id: resourceType === 'route'
+      ? 'route_api'
+      : resourceType === 'model_policy'
+        ? 'model_policy_api'
+        : 'flow_api',
     resource_version: 1,
     action,
     target_status: action === 'gray' ? 'gray' : 'published',

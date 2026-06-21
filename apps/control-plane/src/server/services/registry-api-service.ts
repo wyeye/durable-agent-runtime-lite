@@ -35,6 +35,8 @@ import {
 import {
   AgentSpecRepository,
   CapabilityReleaseRepository,
+  EvaluationGateError,
+  EvaluationGateService,
   FlowDefinitionRepository,
   hashModelPolicy,
   hashTenantRuntimePolicy,
@@ -366,6 +368,37 @@ export class RegistryApiService implements RegistryApi {
       });
       return this.latestTenantPolicyRelease(actor.tenantId);
     }
+    if (resourceType === 'model_policy') {
+      const policy = await this.modelPolicies.getByIdAndVersion(resourceId, version, { tenantId: actor.tenantId });
+      if (!policy) {
+        throw new ControlPlaneHttpError(404, 'REGISTRY_VERSION_NOT_FOUND', 'Registry resource version not found', {
+          resource_type: 'model_policy',
+          resource_id: resourceId,
+          version,
+        });
+      }
+      const validation = validateModelPolicy(policy);
+      if (!validation.can_publish) {
+        throw new Error('Registry validation failed');
+      }
+      const gate = await this.assertModelPolicyEvaluationGate(policy, input, actor);
+      await this.modelPolicies.publish(resourceId, version, {
+        tenantId: actor.tenantId,
+        operatorId: actor.operatorId,
+        releaseNote: input.release_note,
+        ...(gate.decision ? { evaluationGateDecisionId: gate.decision.gate_decision_id } : {}),
+        ...(gate.override ? { evaluationGateOverrideId: gate.override.override_id } : {}),
+        metadataJson: {
+          ...input.metadata_json,
+          ...(input.evaluation_candidate_bundle_hash ? { evaluation_candidate_bundle_hash: input.evaluation_candidate_bundle_hash } : {}),
+          ...(gate.decision ? { evaluation_gate_decision_id: gate.decision.gate_decision_id } : {}),
+          ...(gate.override ? { evaluation_gate_override_id: gate.override.override_id } : {}),
+          ...(gate.warning ? { evaluation_gate_warning: gate.warning } : {}),
+          ...(actor.requestId ? { request_id: actor.requestId } : {}),
+        },
+      });
+      return this.latestModelPolicyRelease(actor.tenantId, resourceId);
+    }
     return this.release.publish(
       resourceType,
       resourceId,
@@ -658,6 +691,60 @@ export class RegistryApiService implements RegistryApi {
       throw new ControlPlaneHttpError(500, 'MODEL_POLICY_RELEASE_NOT_FOUND', 'ModelPolicy release record was not created');
     }
     return release;
+  }
+
+  private async assertModelPolicyEvaluationGate(
+    policy: ModelPolicy,
+    input: PublishResourceRequest,
+    actor: ActorOptions,
+  ): Promise<{ decision?: { gate_decision_id: string; candidate_bundle_hash: string }; override?: { override_id: string }; warning?: string }> {
+    const mode = this.options.evaluationGateMode ?? 'advisory';
+    if (mode === 'disabled') {
+      return { warning: 'evaluation gate disabled' };
+    }
+    if (!input.evaluation_candidate_bundle_hash) {
+      if (mode === 'advisory') {
+        return {
+          warning: 'EVALUATION_CANDIDATE_BUNDLE_HASH_REQUIRED: Evaluation candidate bundle hash is required',
+        };
+      }
+      throw new EvaluationGateError(
+        'EVALUATION_CANDIDATE_BUNDLE_HASH_REQUIRED',
+        'Evaluation candidate bundle hash is required',
+        { resource_type: 'model_policy', resource_id: policy.model_policy_id, resource_version: policy.version },
+      );
+    }
+    const result = await new EvaluationGateService(this.db).assertPublishAllowed({
+      resourceType: 'model_policy',
+      resourceId: policy.model_policy_id,
+      resourceVersion: policy.version,
+      resourceHash: hashModelPolicy(policy),
+      candidateBundleHash: input.evaluation_candidate_bundle_hash,
+      operatorId: actor.operatorId,
+      tenantId: actor.tenantId,
+      mode,
+    });
+    if (
+      input.evaluation_gate_decision_id &&
+      result.decision?.gate_decision_id !== input.evaluation_gate_decision_id
+    ) {
+      throw new EvaluationGateError(
+        'EVALUATION_GATE_DECISION_MISMATCH',
+        'Evaluation gate decision id does not match the exact candidate gate decision',
+        { resource_type: 'model_policy', resource_id: policy.model_policy_id, resource_version: policy.version },
+      );
+    }
+    if (
+      input.evaluation_gate_override_id &&
+      result.override?.override_id !== input.evaluation_gate_override_id
+    ) {
+      throw new EvaluationGateError(
+        'EVALUATION_GATE_OVERRIDE_MISMATCH',
+        'Evaluation gate override id does not match the exact candidate gate override',
+        { resource_type: 'model_policy', resource_id: policy.model_policy_id, resource_version: policy.version },
+      );
+    }
+    return result;
   }
 }
 
