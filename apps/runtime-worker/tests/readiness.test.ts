@@ -12,7 +12,7 @@ describe('runtime-worker readiness', () => {
 
     const response = await server.inject({ method: 'GET', url: '/version' });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({
+    expect(response.json()).toMatchObject({
       service: 'runtime-worker',
       version: '9.9.9-test',
       build_sha: 'abc123',
@@ -21,6 +21,7 @@ describe('runtime-worker readiness', () => {
       message: '服务版本信息可用。',
       locale: 'zh-CN',
     });
+    expect(Date.parse(response.json().process_started_at)).not.toBeNaN();
     expect(response.headers['content-language']).toBe('zh-CN');
     expect(response.headers.vary).toContain('Accept-Language');
     expect(response.body).not.toContain('dev-only-placeholder');
@@ -137,7 +138,7 @@ describe('runtime-worker readiness', () => {
     await server.close();
   });
 
-  it('reports not_ready when production Model Gateway mode is not openai-compatible', async () => {
+  it('reports not_ready when production Model Gateway uses an invalid credential master key', async () => {
     const server = buildServer({
       mode: 'temporal',
       state: { status: 'running', ready: true },
@@ -146,10 +147,7 @@ describe('runtime-worker readiness', () => {
       NODE_ENV: 'production',
       APP_ENV: 'production',
       PI_AGENT_MODE: 'model_gateway',
-      MODEL_GATEWAY_MODE: 'mock',
-      MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions',
-      MODEL_GATEWAY_BASE_URL: 'https://model-gateway.example.test',
-      MODEL_GATEWAY_API_KEY: 'live-secret-for-test',
+      MODEL_CREDENTIAL_MASTER_KEY: 'not-base64',
       MODEL_GATEWAY_ALLOW_INSECURE_HTTP: false,
     });
 
@@ -160,14 +158,14 @@ describe('runtime-worker readiness', () => {
       checks: {
         pi_agent_mode: 'model_gateway',
         pi_agent: 'not_ready',
-        pi_error: 'MODEL_GATEWAY_MODE=openai_compatible is required in production',
+        pi_error: 'MODEL_CREDENTIAL_MASTER_KEY must be a base64 encoded 32-byte key',
       },
     });
 
     await server.close();
   });
 
-  it('reports not_ready when production Model Gateway uses placeholder credentials', async () => {
+  it('reports not_ready when production Model Gateway allows insecure HTTP', async () => {
     const server = buildServer({
       mode: 'temporal',
       state: { status: 'running', ready: true },
@@ -176,39 +174,6 @@ describe('runtime-worker readiness', () => {
       NODE_ENV: 'production',
       APP_ENV: 'production',
       PI_AGENT_MODE: 'model_gateway',
-      MODEL_GATEWAY_MODE: 'openai_compatible',
-      MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions',
-      MODEL_GATEWAY_BASE_URL: 'https://model-gateway.example.test',
-      MODEL_GATEWAY_API_KEY: 'dev-only-placeholder',
-      MODEL_GATEWAY_ALLOW_INSECURE_HTTP: false,
-    });
-
-    const response = await server.inject({ method: 'GET', url: '/readyz' });
-    expect(response.statusCode).toBe(503);
-    expect(response.json()).toMatchObject({
-      status: 'not_ready',
-      checks: {
-        pi_error: 'Production Model Gateway API key must be provided by secret management',
-      },
-    });
-
-    await server.close();
-  });
-
-  it('reports not_ready when production Model Gateway uses local Ollama profile', async () => {
-    const server = buildServer({
-      mode: 'temporal',
-      state: { status: 'running', ready: true },
-    }, {
-      ...config(),
-      NODE_ENV: 'production',
-      APP_ENV: 'production',
-      PI_AGENT_MODE: 'model_gateway',
-      MODEL_GATEWAY_MODE: 'openai_compatible',
-      MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions',
-      MODEL_GATEWAY_PROFILE_ID: 'local-ollama',
-      MODEL_GATEWAY_BASE_URL: 'http://localhost:11434/v1',
-      MODEL_GATEWAY_API_KEY: 'ollama',
       MODEL_GATEWAY_ALLOW_INSECURE_HTTP: true,
     });
 
@@ -217,8 +182,7 @@ describe('runtime-worker readiness', () => {
     expect(response.json()).toMatchObject({
       status: 'not_ready',
       checks: {
-        model_gateway_profile: 'local-ollama',
-        pi_error: 'local-ollama Model Gateway profile is development/test only',
+        pi_error: 'Production Model Gateway must not allow insecure HTTP',
       },
     });
 

@@ -18,6 +18,9 @@ import type {
   HumanTaskDecisionResponse,
   HumanTaskGetResponse,
   HumanTaskListResponse,
+  ModelDefinition,
+  ModelGatewayConnectionTestResponse,
+  ModelGatewayProfile,
   ModelPolicy,
   PaginatedResponse,
   RegistryResourceType,
@@ -34,6 +37,7 @@ import { loadConfig } from '@dar/config';
 import { ControlPlaneHttpError } from './utils/http.js';
 import { createApp, shouldServeStaticFiles } from './app.js';
 import type { EvaluationApi } from './services/evaluation-api-service.js';
+import type { ModelCatalogActor, ModelCatalogApi } from './services/model-catalog-service.js';
 import { RegistryApiService, type RegistryApi, type ActorOptions } from './services/registry-api-service.js';
 import { EvaluationGateError, type RegistryResourceRecord } from '@dar/db';
 
@@ -198,6 +202,60 @@ describe('control-plane API', () => {
     });
     expect(rollback.statusCode).toBe(200);
     expect(rollback.json().data.action).toBe('rollback');
+
+    await close();
+  });
+
+  it('keeps model gateway credentials write-only and restricts credential rotation to platform_admin', async () => {
+    const modelCatalog = new FakeModelCatalogApi();
+    const { app, close } = await testApp({ modelCatalogService: modelCatalog });
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/model-gateways',
+      headers: adminHeaders,
+      payload: {
+        profile_id: 'mock-gateway-a',
+        display_name: 'Mock Gateway A',
+        protocol: 'openai_chat_completions',
+        base_url: 'http://mock-server:4100/gateway-a',
+        auth_type: 'bearer',
+        api_key: 'gateway-a-secret',
+      },
+    });
+    expect(created.statusCode).toBe(200);
+    const createdBody = created.json<StandardSuccessResponse<ModelGatewayProfile>>();
+    expect(createdBody.data).toMatchObject({
+      profile_id: 'mock-gateway-a',
+      credential_configured: true,
+      credential_fingerprint: 'a1b2c3d4e5f6',
+      credential_revision: 1,
+    });
+    expect(created.body).not.toContain('gateway-a-secret');
+    expect(created.body).not.toContain('api_key');
+    expect(created.body).not.toContain('credential_ciphertext');
+    expect(created.body).not.toContain('credential_iv');
+    expect(created.body).not.toContain('credential_auth_tag');
+    expect(modelCatalog.lastGatewayActor).toMatchObject({ tenantId: 'tenant_1', operatorId: 'operator_1' });
+
+    const operatorRotate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/model-gateways/mock-gateway-a/rotate-credential',
+      headers: authHeaders,
+      payload: { api_key: 'gateway-a-secret-v2', expected_credential_revision: 1 },
+    });
+    expect(operatorRotate.statusCode).toBe(403);
+    expect(operatorRotate.json().error.code).toBe('FORBIDDEN');
+    expect(modelCatalog.rotateCalls).toBe(0);
+
+    const auditorList = await app.inject({
+      method: 'GET',
+      url: '/api/v1/model-gateways',
+      headers: auditorHeaders,
+    });
+    expect(auditorList.statusCode).toBe(200);
+    expect(auditorList.body).not.toContain('gateway-a-secret');
+    expect(auditorList.body).not.toContain('credential_ciphertext');
 
     await close();
   });
@@ -572,6 +630,7 @@ async function testApp(options: {
   configEnv?: NodeJS.ProcessEnv;
   registryService?: RegistryApi;
   evaluationService?: EvaluationApi;
+  modelCatalogService?: ModelCatalogApi;
   runtimeApiClient?: FakeRuntimeApiClient;
   toolGatewayClient?: FakeToolGatewayClient;
   staticRoot?: string;
@@ -588,6 +647,7 @@ async function testApp(options: {
     }),
     registryService: options.registryService ?? new FakeRegistryApi(),
     evaluationService: options.evaluationService ?? new FakeEvaluationApi(),
+    modelCatalogService: options.modelCatalogService ?? new FakeModelCatalogApi(),
     runtimeApiClient: options.runtimeApiClient ?? new FakeRuntimeApiClient(),
     toolGatewayClient: options.toolGatewayClient ?? new FakeToolGatewayClient(),
     readyCheck: async () => undefined,
@@ -722,6 +782,89 @@ class FakeRegistryApi implements RegistryApi {
 
   async getTenantAgentAdmission() {
     return admission();
+  }
+}
+
+class FakeModelCatalogApi implements ModelCatalogApi {
+  lastGatewayActor?: ModelCatalogActor;
+  rotateCalls = 0;
+
+  async listGateways(): Promise<ModelGatewayProfile[]> {
+    return [modelGatewayProfile()];
+  }
+
+  async getGateway(): Promise<ModelGatewayProfile> {
+    return modelGatewayProfile();
+  }
+
+  async createGateway(_input: unknown, actor: ModelCatalogActor): Promise<ModelGatewayProfile> {
+    this.lastGatewayActor = actor;
+    return modelGatewayProfile({ status: 'draft' });
+  }
+
+  async updateGateway(_profileId: string, _input: unknown, actor: ModelCatalogActor): Promise<ModelGatewayProfile> {
+    this.lastGatewayActor = actor;
+    return modelGatewayProfile({ revision: 2 });
+  }
+
+  async publishGateway(): Promise<ModelGatewayProfile> {
+    return modelGatewayProfile({ status: 'published', published_at: new Date('2025-01-01T00:00:00.000Z').toISOString() });
+  }
+
+  async disableGateway(): Promise<ModelGatewayProfile> {
+    return modelGatewayProfile({ status: 'disabled', disabled_at: new Date('2025-01-01T00:00:00.000Z').toISOString() });
+  }
+
+  async rotateGatewayCredential(): Promise<ModelGatewayProfile> {
+    this.rotateCalls += 1;
+    return modelGatewayProfile({ credential_fingerprint: 'b1b2b3b4b5b6', credential_revision: 2 });
+  }
+
+  async testGateway(): Promise<ModelGatewayConnectionTestResponse> {
+    return {
+      reachable: true,
+      latency_ms: 5,
+      protocol: 'openai_chat_completions',
+      upstream_model_id: 'upstream-a',
+      response_model: 'upstream-a',
+      supports_text: true,
+    };
+  }
+
+  async listModels(): Promise<ModelDefinition[]> {
+    return [modelDefinition()];
+  }
+
+  async listModelVersions(): Promise<ModelDefinition[]> {
+    return [modelDefinition()];
+  }
+
+  async getModel(): Promise<ModelDefinition> {
+    return modelDefinition();
+  }
+
+  async createModel(): Promise<ModelDefinition> {
+    return modelDefinition({ status: 'draft' });
+  }
+
+  async updateModel(): Promise<ModelDefinition> {
+    return modelDefinition({ revision: 2 });
+  }
+
+  async validateModel(): Promise<{ valid: boolean; can_publish: boolean; errors: unknown[]; warnings: unknown[] }> {
+    return { valid: true, can_publish: true, errors: [], warnings: [] };
+  }
+
+  async publishModel(): Promise<ModelDefinition> {
+    return modelDefinition({ status: 'published', published_at: new Date('2025-01-01T00:00:00.000Z').toISOString() });
+  }
+
+  async disableModel(): Promise<ModelDefinition> {
+    return modelDefinition({ status: 'disabled', disabled_at: new Date('2025-01-01T00:00:00.000Z').toISOString() });
+  }
+
+  async cloneModel(): Promise<ModelDefinition> {
+    return modelDefinition({ version: 2 });
   }
 }
 
@@ -1011,14 +1154,16 @@ function modelPolicySpec(overrides: Partial<ModelPolicy> = {}): ModelPolicy {
     model_policy_id: 'model_policy_api',
     version: 1,
     status: 'draft',
-    protocol: 'dar_generate',
+    protocol: 'openai_chat_completions',
     targets: [{
       target_id: 'primary',
-      gateway_profile: 'local-smoke',
-      model_id: 'mock',
+      model_ref: {
+        model_id: 'mock',
+        version: 1,
+        model_hash: 'a'.repeat(64),
+      },
       priority: 0,
       enabled: true,
-      capabilities: ['text', 'tools', 'usage'],
     }],
     retry_policy: {
       max_attempts_per_target: 1,
@@ -1182,6 +1327,57 @@ function evaluationGatePolicy(overrides: Partial<EvaluationGatePolicy> = {}): Ev
     gate_policy_hash: 'b'.repeat(64),
     created_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
     updated_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    ...overrides,
+  };
+}
+
+function modelGatewayProfile(overrides: Partial<ModelGatewayProfile> = {}): ModelGatewayProfile {
+  return {
+    profile_id: 'mock-gateway-a',
+    display_name: 'Mock Gateway A',
+    protocol: 'openai_chat_completions',
+    base_url: 'http://mock-server:4100/gateway-a',
+    auth_type: 'bearer',
+    status: 'published',
+    config_hash: 'a'.repeat(64),
+    revision: 1,
+    credential_configured: true,
+    credential_fingerprint: 'a1b2c3d4e5f6',
+    credential_revision: 1,
+    created_by: 'operator_1',
+    updated_by: 'operator_1',
+    created_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    updated_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    published_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    ...overrides,
+  };
+}
+
+function modelDefinition(overrides: Partial<ModelDefinition> = {}): ModelDefinition {
+  return {
+    model_id: 'model-a',
+    version: 1,
+    display_name: 'Model A',
+    gateway_profile_id: 'mock-gateway-a',
+    gateway_profile_config_hash: 'a'.repeat(64),
+    upstream_model_id: 'upstream-a',
+    provider: 'mock-provider-a',
+    capabilities: ['text'],
+    context_window: 8192,
+    max_output_tokens: 1024,
+    input_cost_per_million: 0,
+    output_cost_per_million: 0,
+    currency: 'USD',
+    tags: ['smoke'],
+    status: 'published',
+    revision: 1,
+    model_hash: 'b'.repeat(64),
+    created_by: 'operator_1',
+    updated_by: 'operator_1',
+    published_by: 'operator_1',
+    created_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    updated_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
+    published_at: new Date('2025-01-01T00:00:00.000Z').toISOString(),
     ...overrides,
   };
 }

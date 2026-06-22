@@ -18,12 +18,15 @@ import {
   RouteConfigRepository,
   TenantRuntimePolicyReleaseService,
   TenantRuntimePolicyRepository,
+  hashModelDefinition,
+  hashModelGatewayProfileConfig,
   hashModelPolicy,
   hashTenantRuntimePolicy,
   ToolManifestRepository,
   upsertAgentSpec,
   upsertPromptDefinition,
 } from '@dar/db';
+import { ensureModelCatalogEntry } from './model-catalog-seed.js';
 
 const repoRootUrl = new URL('..', import.meta.url);
 const tenantId = process.env.SEED_TENANT_ID ?? 'default';
@@ -70,8 +73,10 @@ export async function seedExamples(databaseUrl = process.env.DATABASE_URL ?? def
       status: 'published',
       createdBy: 'seed-examples',
     });
+    await seedSampleModelCatalog(db, tenantId);
     await seedModelPolicy(db, tenantId, modelPolicy);
     if (shouldSeedLocalOllamaModelPolicy) {
+      await seedLocalOllamaModelCatalog(db);
       await seedModelPolicy(db, tenantId, localOllamaModelPolicy());
     }
     await upsertAgentSpec(db, agent, { tenantId, status: 'published', createdBy: 'seed-examples' });
@@ -126,6 +131,7 @@ async function seedModelPolicy(db: ReturnType<typeof createDb>, tenantIdValue: s
 }
 
 function localOllamaModelPolicy() {
+  const modelHash = localOllamaModelHash();
   return modelPolicySchema.parse({
     model_policy_id: 'local_ollama_qwen25_7b_instruct_q4_k_m',
     version: 1,
@@ -134,11 +140,13 @@ function localOllamaModelPolicy() {
     targets: [
       {
         target_id: 'local_ollama_qwen25_7b_instruct_q4_k_m_primary',
-        gateway_profile: 'local-ollama',
-        model_id: localOllamaModelId,
+        model_ref: {
+          model_id: localOllamaModelId,
+          version: 1,
+          model_hash: modelHash,
+        },
         priority: 0,
         enabled: true,
-        capabilities: ['text', 'tools', 'usage'],
       },
     ],
     retry_policy: {
@@ -167,6 +175,68 @@ function localOllamaModelPolicy() {
       allow_parallel_tool_calls: false,
     },
     revision: 1,
+  });
+}
+
+async function seedSampleModelCatalog(db: ReturnType<typeof createDb>, tenantIdValue: string) {
+  void tenantIdValue;
+  return ensureModelCatalogEntry(db, {
+    profileId: 'local-deterministic',
+    displayName: 'Local deterministic development model gateway',
+    baseUrl: process.env.SEED_DETERMINISTIC_MODEL_GATEWAY_BASE_URL ?? 'http://mock-server:4100',
+    authType: 'none',
+    modelId: 'deterministic-final-only',
+    upstreamModelId: 'deterministic:final_only',
+    provider: 'local-mock',
+    capabilities: ['text', 'tools', 'usage'],
+    contextWindow: 32768,
+    maxOutputTokens: 4096,
+    tags: ['sample'],
+    operatorId: 'seed-examples',
+  });
+}
+
+async function seedLocalOllamaModelCatalog(db: ReturnType<typeof createDb>) {
+  return ensureModelCatalogEntry(db, {
+    profileId: 'local-ollama',
+    displayName: 'Local Ollama qwen2.5 7B instruct',
+    baseUrl: process.env.MODEL_GATEWAY_BASE_URL ?? 'http://host.docker.internal:11434/v1',
+    authType: 'none',
+    modelId: localOllamaModelId,
+    upstreamModelId: localOllamaModelId,
+    provider: 'local-ollama',
+    capabilities: ['text', 'tools', 'usage'],
+    contextWindow: 32768,
+    maxOutputTokens: 4096,
+    tags: ['ollama', 'local'],
+    operatorId: 'seed-examples',
+  });
+}
+
+function localOllamaModelHash(): string {
+  const baseUrl = process.env.MODEL_GATEWAY_BASE_URL ?? 'http://host.docker.internal:11434/v1';
+  const profileConfigHash = hashModelGatewayProfileConfig({
+    profile_id: 'local-ollama',
+    display_name: 'Local Ollama qwen2.5 7B instruct',
+    protocol: 'openai_chat_completions',
+    base_url: baseUrl,
+    auth_type: 'none',
+  });
+  return hashModelDefinition({
+    model_id: localOllamaModelId,
+    version: 1,
+    display_name: 'Local Ollama qwen2.5 7B instruct',
+    gateway_profile_id: 'local-ollama',
+    gateway_profile_config_hash: profileConfigHash,
+    upstream_model_id: localOllamaModelId,
+    provider: 'local-ollama',
+    capabilities: ['text', 'tools', 'usage'],
+    context_window: 32768,
+    max_output_tokens: 4096,
+    input_cost_per_million: 0,
+    output_cost_per_million: 0,
+    currency: 'USD',
+    tags: ['ollama', 'local'],
   });
 }
 

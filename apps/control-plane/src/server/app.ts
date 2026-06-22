@@ -17,7 +17,9 @@ import { healthRoutes } from './routes/health.js';
 import { evaluationRoutes } from './routes/evaluation.js';
 import { operationsRoutes } from './routes/operations.js';
 import { registryRoutes } from './routes/registry.js';
+import { modelCatalogRoutes } from './routes/model-catalog.js';
 import { EvaluationApiService, type EvaluationApi } from './services/evaluation-api-service.js';
+import { ModelCatalogService, type ModelCatalogApi } from './services/model-catalog-service.js';
 import { RegistryApiService, type RegistryApi } from './services/registry-api-service.js';
 
 export interface ControlPlaneAppOptions {
@@ -27,6 +29,7 @@ export interface ControlPlaneAppOptions {
   toolGatewayClient?: ToolGatewayOperationsClient;
   registryService?: RegistryApi;
   evaluationService?: EvaluationApi;
+  modelCatalogService?: ModelCatalogApi;
   readyCheck?: () => Promise<void>;
   staticRoot?: string;
 }
@@ -42,7 +45,7 @@ const logger = createLogger(appName);
 export async function createApp(options: ControlPlaneAppOptions = {}): Promise<ControlPlaneAppHandle> {
   const config = options.config ?? loadConfig();
   validateControlPlaneConfig(config);
-  const needsDb = !options.db && (!options.registryService || !options.evaluationService || !options.readyCheck);
+  const needsDb = !options.db && (!options.registryService || !options.evaluationService || !options.modelCatalogService || !options.readyCheck);
   const createdDb = needsDb ? createDb({ databaseUrl: config.DATABASE_URL }) : undefined;
   const db = options.db ?? createdDb;
   const app = Fastify({ logger: false });
@@ -51,6 +54,10 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
     { evaluationGateMode: config.EVALUATION_GATE_MODE },
   );
   const evaluationService: EvaluationApi = options.evaluationService ?? new EvaluationApiService(requireDb(db));
+  const modelCatalogService: ModelCatalogApi = options.modelCatalogService ?? new ModelCatalogService(
+    requireDb(db),
+    config.MODEL_CREDENTIAL_MASTER_KEY,
+  );
   const runtimeApiClient = options.runtimeApiClient ?? new RuntimeApiClient(getRuntimeApiUrl(config));
   const toolGatewayClient = options.toolGatewayClient ?? new ToolGatewayClient(
     getToolGatewayUrl(config),
@@ -73,6 +80,7 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
     readyCheck: options.readyCheck ?? (async () => { await sql`select 1`.execute(requireDb(db)); }),
   });
   await registryRoutes(app, { service: registryService });
+  await modelCatalogRoutes(app, { service: modelCatalogService });
   await evaluationRoutes(app, { service: evaluationService });
   await operationsRoutes(app, { registryService, runtimeApiClient, toolGatewayClient });
 
@@ -127,6 +135,9 @@ function validateControlPlaneConfig(config: RuntimeConfig): void {
   }
   if (isProduction && config.EVALUATION_GATE_MODE !== 'required') {
     throw new Error('EVALUATION_GATE_MODE=required is required in production');
+  }
+  if (isProduction && !config.MODEL_CREDENTIAL_MASTER_KEY) {
+    throw new Error('MODEL_CREDENTIAL_MASTER_KEY is required in production');
   }
 }
 

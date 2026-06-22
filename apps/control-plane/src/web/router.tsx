@@ -6,6 +6,8 @@ import { RoutesPage } from './pages/routes/RoutesPage.js';
 import { ToolsPage } from './pages/tools/ToolsPage.js';
 import { AgentsPage } from './pages/agents/AgentsPage.js';
 import { ModelPoliciesPage } from './pages/model-policies/ModelPoliciesPage.js';
+import { ModelGatewaysPage } from './pages/model-gateways/ModelGatewaysPage.js';
+import { ModelsPage } from './pages/models/ModelsPage.js';
 import { PromptsPage } from './pages/prompts/PromptsPage.js';
 import { ReleasesPage } from './pages/releases/ReleasesPage.js';
 import { HumanTasksPage } from './pages/human-tasks/HumanTasksPage.js';
@@ -35,6 +37,9 @@ export const router = createBrowserRouter([
       { path: 'registry/tools', element: <ToolsPage /> },
       { path: 'registry/agents', element: <AgentsPage /> },
       { path: 'registry/model-policies', element: <ModelPoliciesPage /> },
+      { path: 'model-policies', element: <ModelPoliciesPage /> },
+      { path: 'model-gateways', element: <ModelGatewaysPage /> },
+      { path: 'models', element: <ModelsPage /> },
       { path: 'registry/prompts', element: <PromptsPage /> },
       { path: 'releases', element: <ReleasesPage /> },
       { path: 'human-tasks', element: <HumanTasksPage /> },

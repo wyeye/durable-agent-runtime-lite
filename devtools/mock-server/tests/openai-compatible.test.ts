@@ -116,4 +116,32 @@ describe('mock OpenAI-compatible endpoint', () => {
     const body = response.json();
     expect(body.choices[0].message.content).toBe('Mock degraded regression answer.');
   });
+
+  it('returns deterministic 503 for gateway A force_503 models only', async () => {
+    const server = buildServer();
+    servers.push(server);
+
+    const failed = await server.inject({
+      method: 'POST',
+      url: '/gateway-a/v1/chat/completions',
+      headers: { authorization: 'Bearer gateway-a-secret' },
+      payload: {
+        model: 'catalog_force_503_model',
+        messages: [{ role: 'user', content: 'final_only' }],
+      },
+    });
+    expect(failed.statusCode).toBe(503);
+
+    const recovered = await server.inject({
+      method: 'POST',
+      url: '/gateway-b/v1/chat/completions',
+      headers: { authorization: 'Bearer gateway-b-secret' },
+      payload: {
+        model: 'catalog_force_503_model',
+        messages: [{ role: 'user', content: 'final_only' }],
+      },
+    });
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json().id).toMatch(/^gateway-b_/u);
+  });
 });

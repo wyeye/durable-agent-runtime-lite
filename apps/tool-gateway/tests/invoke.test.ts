@@ -457,6 +457,76 @@ describe('tool-gateway invoke', () => {
     await server.close();
   });
 
+  it('commits dynamically registered mock tools after L3 approval', async () => {
+    const toolCallLogStore = new InMemoryToolCallLogStore();
+    const humanTaskStore = new InMemoryHumanTaskLookupStore();
+    const server = buildServer(new ToolService({
+      toolCallLogStore,
+      humanTaskStore,
+      registry: new MutableRegistry([{
+        tool_name: 'dynamic.ui-smoke.tool',
+        version: '1.0.0',
+        description: 'Dynamic UI smoke mock tool',
+        risk_level: 'L3',
+        side_effect: true,
+        adapter: { type: 'mock', endpoint_ref: 'mock/dynamic-ui-smoke' },
+        input_schema: { type: 'object', properties: { query: { type: 'string' } } },
+        output_schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } },
+        required_permissions: [],
+        status: 'published',
+      }]),
+    }));
+
+    const preview = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/dynamic.ui-smoke.tool/preview',
+      payload: {
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_dynamic_l3_commit', workflow_id: 'wf_1' },
+        arguments: { query: 'dynamic' },
+        idempotency_key: 'task_dynamic_l3_commit:dynamic.ui-smoke.tool:preview',
+      },
+    });
+    expect(preview.statusCode).toBe(200);
+    const toolCallId = preview.json().data.tool_call_id as string;
+    humanTaskStore.add({
+      human_task_id: 'human_dynamic_1',
+      tenant_id: 'tenant_1',
+      task_run_id: 'task_dynamic_l3_commit',
+      workflow_id: 'wf_1',
+      status: 'approved',
+      candidate_groups: [],
+      payload: { tool_call_id: toolCallId },
+      decision: { status: 'approved' },
+      decided_by: 'approver_1',
+      decided_at: '2025-01-01T00:00:00.000Z',
+      created_at: '2025-01-01T00:00:00.000Z',
+    } satisfies HumanTask);
+
+    const committed = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/dynamic.ui-smoke.tool/commit',
+      payload: {
+        tool_call_id: toolCallId,
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_dynamic_l3_commit', workflow_id: 'wf_1' },
+        arguments: { query: 'dynamic' },
+        idempotency_key: 'task_dynamic_l3_commit:dynamic.ui-smoke.tool:commit',
+      },
+    });
+    expect(committed.statusCode).toBe(200);
+    expect(committed.json().data).toMatchObject({
+      status: 'committed',
+      result: { ok: true, tool_name: 'dynamic.ui-smoke.tool' },
+    });
+
+    await server.close();
+  });
+
   it('replays and conflicts L3 commit idempotency after approval', async () => {
     const toolCallLogStore = new InMemoryToolCallLogStore();
     const humanTaskStore = new InMemoryHumanTaskLookupStore();

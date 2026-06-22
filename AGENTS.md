@@ -79,6 +79,7 @@ Responsibilities:
 - ToolManifest management.
 - AgentSpec management.
 - Prompt management.
+- Model Gateway Profile and Model Definition management.
 - Policy configuration.
 - Publish, gray release, rollback and disable operations.
 - Route examples and negative examples management.
@@ -99,8 +100,10 @@ Rules:
 
 - Do not implement runtime execution logic here.
 - Do not call tools directly from the frontend.
+- Do not expose, echo, log, or render model API keys or encrypted credential fields; model gateway API keys are write-only inputs.
 - Do not duplicate schemas in the frontend; import or generate from shared contracts.
 - Writable Registry and Evaluation configuration uses visual forms; JSON views are read-only only.
+- ModelPolicy editing uses exact published ModelDefinition selection and must not reintroduce raw `gateway_profile` / `model_id` manual target entry.
 - Flow editing uses the visual sequence builder for the existing ordered `steps` array semantics; do not introduce arbitrary DAG semantics unless explicitly requested.
 - Tenant Policy Snapshot and Tenant Agent Admission are runtime operations resources, not editable Registry resources; control-plane may read them but must not create, update or delete them.
 
@@ -163,6 +166,7 @@ Responsibilities:
 - Tool invocation through Tool Gateway client.
 - Pi Runner wrapper.
 - Model Gateway adapter placeholder.
+- DB-backed Model Gateway Profile / Model Definition resolution and credential decryption outside deterministic Workflow code.
 - Workflow tests.
 
 Default stack:
@@ -195,6 +199,8 @@ Pi rules:
 - In mediated mode, Pi returns proposed tool calls; Workflow and Tool Gateway decide whether to execute them.
 - Pi output statuses should be limited to known states such as `final`, `need_tool`, `need_user`, `handoff_to_workflow` and `failed`.
 - `PI_AGENT_MODE=deterministic` is development/test only; production must use `PI_AGENT_MODE=model_gateway`.
+- In `model_gateway` mode, runtime-worker must use ModelDefinition and ModelGatewayProfile data as the model-call source of truth; production model calls must not fall back to deployment-level `MODEL_GATEWAY_BASE_URL`, `MODEL_GATEWAY_API_KEY`, `MODEL_GATEWAY_MODEL`, or default/latest models.
+- Model gateway credentials must never be exposed to Pi, Workflow code, runtime-api, tool-gateway, frontend, logs, audit payloads, traces, or Temporal history.
 - `handoff_to_workflow` may only start an allowed exact `FlowExecutionPlan` child workflow.
 
 ---

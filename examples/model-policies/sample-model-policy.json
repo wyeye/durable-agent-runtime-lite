@@ -2,15 +2,17 @@
   "model_policy_id": "sample_deterministic_final_only",
   "version": 1,
   "status": "published",
-  "protocol": "dar_generate",
+  "protocol": "openai_chat_completions",
   "targets": [
     {
       "target_id": "sample_deterministic_final_only_primary",
-      "gateway_profile": "local-deterministic",
-      "model_id": "deterministic:final_only",
+      "model_ref": {
+        "model_id": "deterministic-final-only",
+        "version": 1,
+        "model_hash": "13aba824e1a01aa739331d3f5ff684f00f6dd0e305a055ec2432550a8dacf95b"
+      },
       "priority": 0,
-      "enabled": true,
-      "capabilities": ["text", "tools", "usage"]
+      "enabled": true
     }
   ],
   "retry_policy": {

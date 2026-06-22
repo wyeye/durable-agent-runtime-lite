@@ -141,11 +141,13 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
       targets: [
         {
           target_id: 'primary',
-          gateway_profile: 'openai-compatible',
-          model_id: 'gpt-4.1-mini',
+          model_ref: {
+            model_id: 'gpt-4.1-mini',
+            version: 1,
+            model_hash: '0'.repeat(64),
+          },
           priority: 0,
           enabled: true,
-          capabilities: ['text', 'tools', 'usage'],
         },
       ],
       retry_policy: {
@@ -427,16 +429,14 @@ function renderModelPolicySummary(record: RegistryRecord) {
       render: (value: unknown) => readString(value) ?? '-',
     },
     {
-      title: 'profile',
-      dataIndex: 'gateway_profile',
-      key: 'gateway_profile',
-      render: (value: unknown) => readString(value) ?? '-',
-    },
-    {
-      title: 'model_id',
-      dataIndex: 'model_id',
-      key: 'model_id',
-      render: (value: unknown) => readString(value) ?? '-',
+      title: 'model_ref',
+      key: 'model_ref',
+      render: (_: unknown, row) => {
+        const modelRef = asRecord(row.model_ref);
+        const modelId = readString(modelRef.model_id);
+        const version = readNumber(modelRef.version);
+        return modelId && version ? `${modelId}@${version}` : '-';
+      },
     },
     {
       title: 'priority',

@@ -7,14 +7,16 @@ import {
   type ModelGatewayMessage,
   type ModelGatewayResponse,
   type ModelRequestPolicy,
-  type ModelTarget,
+  type ResolvedModelTarget,
 } from '@dar/contracts';
 import {
+  ModelGatewayProfileRepository,
   ModelCallAttemptRepository,
   ModelCallLogRepository,
   type Database,
   type ModelCallCreateOrGetResult,
 } from '@dar/db';
+import { ModelCredentialCipher } from '@dar/security';
 import {
   ModelGatewayClient,
   ModelGatewayError,
@@ -34,8 +36,8 @@ import type { Kysely } from 'kysely';
 
 export interface ModelGatewayPiStreamOptions {
   db: Kysely<Database>;
-  baseUrl: string;
-  apiKey?: string;
+  credentialMasterKey: string;
+  clientCacheTtlMs: number;
   executionPlan: AgentExecutionPlan;
   agentRun: AgentRunRecord;
   segmentIndex: number;
@@ -50,28 +52,33 @@ export interface ModelGatewayPiStreamOptions {
 }
 
 export function createModelGatewayModel(
-  target: Pick<ModelTarget, 'model_id' | 'gateway_profile'>,
+  target: Pick<ResolvedModelTarget, 'model_id' | 'provider' | 'context_window' | 'max_output_tokens' | 'input_cost_per_million' | 'output_cost_per_million'>,
 ): Model<string> {
   return {
     id: target.model_id,
     name: target.model_id,
     api: 'dar-model-gateway',
-    provider: target.gateway_profile,
+    provider: target.provider,
     baseUrl: '',
     reasoning: false,
     input: ['text'],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 16_000,
+    cost: {
+      input: target.input_cost_per_million ?? 0,
+      output: target.output_cost_per_million ?? 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: target.context_window,
+    maxTokens: target.max_output_tokens,
   };
 }
 
 export function createModelGatewayPiStream(options: ModelGatewayPiStreamOptions): StreamFn {
   const targets = resolveAllowedTargets(options);
-  const client = new ModelGatewayClient({
-    baseUrl: options.baseUrl,
-    ...(options.apiKey ? { apiKey: options.apiKey } : {}),
-    protocol: options.executionPlan.resolved_model_policy.protocol,
+  const clientResolver = new ModelGatewayClientResolver({
+    db: options.db,
+    credentialMasterKey: options.credentialMasterKey,
+    ttlMs: options.clientCacheTtlMs,
     timeoutMs: options.timeoutMs,
     maxRetries: options.maxRetries,
     maxResponseBytes: options.maxResponseBytes,
@@ -87,7 +94,7 @@ export function createModelGatewayPiStream(options: ModelGatewayPiStreamOptions)
     turnIndex += 1;
     void callModelWithLedger({
       ...options,
-      client,
+      clientResolver,
       targets,
       context,
       ...(streamOptions?.maxTokens !== undefined ? { maxTokens: streamOptions.maxTokens } : {}),
@@ -120,14 +127,14 @@ export function createModelGatewayPiStream(options: ModelGatewayPiStreamOptions)
 
 async function callModelWithLedger(
   input: ModelGatewayPiStreamOptions & {
-    client: ModelGatewayClient;
-    targets: ModelTarget[];
+    clientResolver: ModelGatewayClientResolver;
+    targets: ResolvedModelTarget[];
     context: Context;
     maxTokens?: number;
     signal?: AbortSignal;
     modelTurnIndex: number;
   },
-): Promise<{ response: ModelGatewayResponse; target: ModelTarget }> {
+): Promise<{ response: ModelGatewayResponse; target: ResolvedModelTarget }> {
   const logRepository = new ModelCallLogRepository(input.db);
   const attemptRepository = new ModelCallAttemptRepository(input.db);
   const requestBase = {
@@ -168,7 +175,7 @@ async function callModelWithLedger(
     const request = modelGatewayRequestSchema.parse({
       ...requestBase,
       model_request_key: logicalRequestKey,
-      model: target.model_id,
+      model: target.upstream_model_id,
       tool_choice: toolChoiceForTurn(
         input.executionPlan.resolved_model_policy.request_policy,
         requestBase.messages,
@@ -207,15 +214,19 @@ async function callModelWithLedger(
 
     const attempts = new Map<number, string>();
     try {
+      const resolvedClient = await input.clientResolver.resolve(target);
+      const identity = targetIdentity(target, resolvedClient);
       await logRepository.markRunning(createResult.record.model_call_id, {
-        targetId: target.target_id,
-        provider: target.gateway_profile,
-        modelId: target.model_id,
+        ...identity,
         fallbackIndex,
       });
-      const response = await input.client.call(request, {
+      const response = await resolvedClient.client.call(request, {
         protocol: input.executionPlan.resolved_model_policy.protocol,
-        target,
+        target: {
+          target_id: target.target_id,
+          gateway_profile: target.provider,
+          model_id: target.upstream_model_id,
+        },
         toolNameCodec,
         maxRetries: maxRetriesForTarget(
           target,
@@ -238,7 +249,16 @@ async function callModelWithLedger(
             fallback_index: fallbackIndex,
             target_id: event.targetId,
             provider: event.provider,
-            model_id: event.modelId,
+            model_id: target.model_id,
+            model_version: target.model_version,
+            model_hash: target.model_hash,
+            gateway_profile_id: target.gateway_profile_id,
+            gateway_profile_config_hash: target.gateway_profile_config_hash,
+            credential_revision: resolvedClient.credentialRevision,
+            upstream_model_id: event.modelId,
+            ...(resolvedClient.credentialFingerprint
+              ? { credential_fingerprint: resolvedClient.credentialFingerprint }
+              : {}),
           });
           attempts.set(event.attemptIndex, attempt.attempt_id);
         },
@@ -247,9 +267,7 @@ async function callModelWithLedger(
         },
       });
       await logRepository.markSucceeded(createResult.record.model_call_id, {
-        targetId: target.target_id,
-        provider: target.gateway_profile,
-        modelId: response.model ?? target.model_id,
+        ...identity,
         attemptCount: globalAttemptIndex,
         fallbackIndex,
         finishReason: response.finish_reason,
@@ -286,17 +304,30 @@ async function callModelWithLedger(
   throw lastError instanceof Error ? lastError : new Error('Model Gateway call failed');
 }
 
-function maxRetriesForTarget(target: ModelTarget, maxAttemptsPerTarget: number): number {
+function maxRetriesForTarget(target: ResolvedModelTarget, maxAttemptsPerTarget: number): number {
   const policyMaxRetries = Math.max(maxAttemptsPerTarget - 1, 0);
   return Math.min(Math.max(target.max_retries ?? policyMaxRetries, 0), policyMaxRetries);
 }
 
-function resolveAllowedTargets(options: ModelGatewayPiStreamOptions): ModelTarget[] {
+function resolveAllowedTargets(options: ModelGatewayPiStreamOptions): ResolvedModelTarget[] {
+  const explicitOrder = options.executionPlan.resolved_model_policy.fallback_policy.enabled
+    ? new Map(
+        options.executionPlan.resolved_model_policy.fallback_policy.ordered_target_ids.map(
+          (targetId, index) => [targetId, index] as const,
+        ),
+      )
+    : new Map<string, number>();
   const targets = [...options.executionPlan.resolved_model_policy.resolved_targets].sort(
-    (left, right) =>
-      left.priority === right.priority
+    (left, right) => {
+      const leftOrder = explicitOrder.get(left.target_id);
+      const rightOrder = explicitOrder.get(right.target_id);
+      if (leftOrder !== undefined || rightOrder !== undefined) {
+        return (leftOrder ?? Number.MAX_SAFE_INTEGER) - (rightOrder ?? Number.MAX_SAFE_INTEGER);
+      }
+      return left.priority === right.priority
         ? left.target_id.localeCompare(right.target_id)
-        : left.priority - right.priority,
+        : left.priority - right.priority;
+    },
   );
   const filtered =
     options.allowedModelIds && options.allowedModelIds.size > 0
@@ -314,12 +345,121 @@ function resolveAllowedTargets(options: ModelGatewayPiStreamOptions): ModelTarge
   return filtered;
 }
 
-function firstTarget(targets: ModelTarget[]): ModelTarget {
+function firstTarget(targets: ResolvedModelTarget[]): ResolvedModelTarget {
   const target = targets[0];
   if (!target) {
     throw new Error('AGENT_MODEL_DENIED_BY_TENANT_POLICY: no ModelPolicy target is available');
   }
   return target;
+}
+
+interface ResolvedGatewayClient {
+  client: ModelGatewayClient;
+  credentialFingerprint?: string;
+  credentialRevision: number;
+}
+
+class ModelGatewayClientResolver {
+  private readonly profileRepository: ModelGatewayProfileRepository;
+  private readonly cipher: ModelCredentialCipher;
+  private readonly cache = new Map<string, { expiresAt: number; value: ResolvedGatewayClient }>();
+
+  constructor(
+    private readonly options: {
+      db: Kysely<Database>;
+      credentialMasterKey: string;
+      ttlMs: number;
+      timeoutMs: number;
+      maxRetries: number;
+      maxResponseBytes: number;
+      allowInsecureHttp: boolean;
+      idempotencyHeader: string;
+      userAgent: string;
+    },
+  ) {
+    this.profileRepository = new ModelGatewayProfileRepository(options.db);
+    this.cipher = new ModelCredentialCipher(options.credentialMasterKey);
+  }
+
+  async resolve(target: ResolvedModelTarget): Promise<ResolvedGatewayClient> {
+    const row = await this.profileRepository.getCredential(target.gateway_profile_id);
+    if (!row) {
+      throw new Error(`MODEL_GATEWAY_PROFILE_NOT_FOUND: ${target.gateway_profile_id}`);
+    }
+    if (row.status !== 'published') {
+      throw new Error(`MODEL_GATEWAY_PROFILE_NOT_PUBLISHED: ${target.gateway_profile_id}`);
+    }
+    if (row.config_hash !== target.gateway_profile_config_hash) {
+      throw new Error(`MODEL_GATEWAY_PROFILE_HASH_MISMATCH: ${target.gateway_profile_id}`);
+    }
+    const cacheKey = [
+      row.profile_id,
+      row.config_hash,
+      row.credential_revision,
+    ].join(':');
+    const cached = this.cache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
+    const apiKey = row.auth_type === 'bearer'
+      ? this.cipher.decrypt({
+          profile_id: row.profile_id,
+          credential_revision: row.credential_revision,
+          ciphertext: requiredCredential(row.credential_ciphertext, 'credential_ciphertext'),
+          iv: requiredCredential(row.credential_iv, 'credential_iv'),
+          auth_tag: requiredCredential(row.credential_auth_tag, 'credential_auth_tag'),
+        })
+      : undefined;
+    const value: ResolvedGatewayClient = {
+      client: new ModelGatewayClient({
+        baseUrl: row.base_url,
+        ...(apiKey ? { apiKey } : {}),
+        protocol: 'openai_chat_completions',
+        timeoutMs: this.options.timeoutMs,
+        maxRetries: this.options.maxRetries,
+        maxResponseBytes: this.options.maxResponseBytes,
+        allowInsecureHttp: this.options.allowInsecureHttp,
+        idempotencyHeader: this.options.idempotencyHeader,
+        userAgent: this.options.userAgent,
+      }),
+      credentialRevision: row.credential_revision,
+    };
+    if (row.credential_fingerprint) {
+      value.credentialFingerprint = row.credential_fingerprint;
+    }
+    this.cache.set(cacheKey, {
+      expiresAt: Date.now() + this.options.ttlMs,
+      value,
+    });
+    return value;
+  }
+}
+
+function requiredCredential(value: string | null, field: string): string {
+  if (!value) {
+    throw new Error(`MODEL_GATEWAY_CREDENTIAL_FIELD_MISSING: ${field}`);
+  }
+  return value;
+}
+
+function targetIdentity(
+  target: ResolvedModelTarget,
+  client: Pick<ResolvedGatewayClient, 'credentialFingerprint' | 'credentialRevision'>,
+) {
+  return {
+    targetId: target.target_id,
+    provider: target.provider,
+    modelId: target.model_id,
+    modelVersion: target.model_version,
+    modelHash: target.model_hash,
+    gatewayProfileId: target.gateway_profile_id,
+    gatewayProfileConfigHash: target.gateway_profile_config_hash,
+    credentialRevision: client.credentialRevision,
+    upstreamModelId: target.upstream_model_id,
+    ...(client.credentialFingerprint
+      ? { credentialFingerprint: client.credentialFingerprint }
+      : {}),
+  };
 }
 
 async function completeAttempt(
@@ -457,19 +597,19 @@ function pushFinal(
 
 function withGatewayModel(
   message: AssistantMessage,
-  target: Pick<ModelTarget, 'model_id' | 'gateway_profile'>,
+  target: Pick<ResolvedModelTarget, 'model_id' | 'provider'>,
 ): AssistantMessage {
   return {
     ...message,
     api: 'dar-model-gateway',
-    provider: target.gateway_profile,
+    provider: target.provider,
     model: target.model_id,
   };
 }
 
 function assistantMessageFromGatewayResponse(
   response: ModelGatewayResponse,
-  target: Pick<ModelTarget, 'model_id' | 'gateway_profile'>,
+  target: Pick<ResolvedModelTarget, 'model_id' | 'provider'>,
 ): AssistantMessage {
   const content = response.message.content.map((block) => {
     if (block.type === 'text') {
@@ -487,7 +627,7 @@ function assistantMessageFromGatewayResponse(
     ...fauxAssistantMessage(content, {
       stopReason: stopReasonFromFinishReason(response.finish_reason),
     }),
-    model: response.model ?? target.model_id,
+    model: target.model_id,
     usage: usageFromGateway(usage),
   };
 }

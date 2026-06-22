@@ -37,6 +37,7 @@ import {
   upsertAgentSpec,
   upsertPromptDefinition,
 } from '@dar/db';
+import { ensureModelCatalogEntry } from './model-catalog-seed.js';
 
 type Db = ReturnType<typeof createDb>;
 type ScenarioName = 'final' | 'readonly' | 'l3';
@@ -531,6 +532,17 @@ async function seedModelPolicy(
   scenario: ScenarioConfig,
 ): Promise<ModelPolicy> {
   const repository = new ModelPolicyRepository(db);
+  const catalog = await ensureModelCatalogEntry(db, {
+    profileId: provider,
+    displayName: `${provider} ${model}`,
+    baseUrl: process.env.MODEL_GATEWAY_BASE_URL ?? 'http://host.docker.internal:11434/v1',
+    authType: 'none',
+    modelId: model,
+    upstreamModelId: model,
+    provider,
+    capabilities: ['text', 'tools', 'usage', 'tool_choice'],
+    operatorId: userId,
+  });
   const existing = await repository.getByIdAndVersion(modelPolicyId, 1, { tenantId });
   if (existing?.status === 'published') {
     return existing;
@@ -542,11 +554,9 @@ async function seedModelPolicy(
     protocol: 'openai_chat_completions',
     targets: [{
       target_id: `${modelPolicyId}_primary`,
-      gateway_profile: provider,
-      model_id: model,
+      model_ref: catalog.model_ref,
       priority: 0,
       enabled: true,
-      capabilities: ['text', 'tools', 'usage', 'tool_choice'],
     }],
     retry_policy: {
       max_attempts_per_target: 1,

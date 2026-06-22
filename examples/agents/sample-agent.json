@@ -6,7 +6,7 @@
   "model_policy_ref": {
     "model_policy_id": "sample_deterministic_final_only",
     "model_policy_version": 1,
-    "model_policy_hash": "16047e1a5157442358dc99deedf8123dd502ff906e62deb1aff4fbf42b1d3437"
+    "model_policy_hash": "3706124a337390fc704e3ad804847a589dab51ba377b8bd336e551e02f0fa391"
   },
   "allowed_tools": ["knowledge.search@1.0.0", "record.write.mock@1.0.0"],
   "max_steps": 4,

@@ -80,11 +80,23 @@ function resolvedModelPolicyFixture(hash: string, policyId = 'test-model-policy'
     resolved_targets: [
       {
         target_id: 'primary',
-        gateway_profile: 'openai-compatible',
+        model_ref: {
+          model_id: 'gpt-test-2026-06-19',
+          version: 1,
+          model_hash: 'd'.repeat(64),
+        },
         model_id: 'gpt-test-2026-06-19',
+        model_version: 1,
+        model_hash: 'd'.repeat(64),
+        gateway_profile_id: 'live-openai-compatible',
+        gateway_profile_config_hash: 'e'.repeat(64),
+        upstream_model_id: 'gpt-test-2026-06-19',
+        provider: 'openai-compatible',
         priority: 0,
         enabled: true,
         capabilities: ['text', 'tools', 'usage'],
+        context_window: 32768,
+        max_output_tokens: 4096,
       },
     ],
     retry_policy: {
@@ -967,15 +979,14 @@ describe('contracts schemas', () => {
       targets: [
         {
           target_id: 'primary',
-          gateway_profile: 'live-openai-compatible',
-          provider_hint: 'openai-compatible',
-          model_id: 'gpt-test-2026-06-19',
+          model_ref: {
+            model_id: 'gpt-test-2026-06-19',
+            version: 1,
+            model_hash: hash,
+          },
           priority: 1,
           enabled: true,
-          capabilities: ['text', 'tools', 'usage', 'tool_choice'],
           timeout_ms: 15000,
-          input_cost_per_million: 1.25,
-          output_cost_per_million: 5,
         },
       ],
       retry_policy: {
@@ -1004,7 +1015,23 @@ describe('contracts schemas', () => {
         allow_parallel_tool_calls: false,
       },
     });
-    expect(policy.targets[0]?.capabilities).toContain('tools');
+    expect(policy.targets[0]?.model_ref.model_id).toBe('gpt-test-2026-06-19');
+    const resolvedTargets = policy.targets.map((target) => ({
+      ...target,
+      model_id: target.model_ref.model_id,
+      model_version: target.model_ref.version,
+      model_hash: target.model_ref.model_hash,
+      gateway_profile_id: 'live-openai-compatible',
+      gateway_profile_config_hash: 'e'.repeat(64),
+      upstream_model_id: 'gpt-test-2026-06-19',
+      provider: 'openai-compatible',
+      capabilities: ['text', 'tools', 'usage', 'tool_choice'],
+      context_window: 32768,
+      max_output_tokens: 4096,
+      input_cost_per_million: 1.25,
+      output_cost_per_million: 5,
+      currency: 'USD',
+    }));
     expect(() =>
       modelPolicySchema.parse({
         ...policy,
@@ -1027,7 +1054,7 @@ describe('contracts schemas', () => {
     expect(() =>
       modelPolicySchema.parse({
         ...policy,
-        targets: [{ ...policy.targets[0], model_id: 'api_key:secret-value' }],
+        targets: [{ ...policy.targets[0], model_ref: { ...policy.targets[0]!.model_ref, model_id: 'api_key:secret-value' } }],
       }),
     ).toThrow();
 
@@ -1125,7 +1152,7 @@ describe('contracts schemas', () => {
         model_policy_version: 1,
         model_policy_hash: hash,
         protocol: 'openai_chat_completions',
-        resolved_targets: policy.targets,
+        resolved_targets: resolvedTargets,
         retry_policy: policy.retry_policy,
         fallback_policy: policy.fallback_policy,
         request_policy: policy.request_policy,
@@ -1150,7 +1177,7 @@ describe('contracts schemas', () => {
           model_policy_version: 1,
           model_policy_hash: hash,
           protocol: 'openai_chat_completions',
-          resolved_targets: policy.targets,
+          resolved_targets: resolvedTargets,
           retry_policy: policy.retry_policy,
           fallback_policy: policy.fallback_policy,
           request_policy: policy.request_policy,

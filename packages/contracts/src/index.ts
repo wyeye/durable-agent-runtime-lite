@@ -58,6 +58,17 @@ export const capabilityReleaseActionSchema = z.enum([
 ]);
 export const modelPolicyStatusSchema = specStatusSchema;
 export const modelGatewayProtocolSchema = z.enum(['dar_generate', 'openai_chat_completions']);
+export const legacyModelGatewayProtocolSchema = modelGatewayProtocolSchema;
+export const modelGatewayProfileProtocolSchema = modelGatewayProtocolSchema;
+export const modelGatewayAuthTypeSchema = z.enum(['none', 'bearer']);
+export const modelGatewayProfileStatusSchema = z.enum(['draft', 'published', 'disabled']);
+export const modelDefinitionStatusSchema = z.enum([
+  'draft',
+  'validated',
+  'published',
+  'disabled',
+  'deprecated',
+]);
 export const modelCapabilitySchema = z.enum([
   'text',
   'tools',
@@ -292,18 +303,180 @@ const safeModelStringSchema = z
     return !/^[a-z][a-z0-9+.-]*:\/\//iu.test(value);
   }, 'Model policy fields must not contain credentials or gateway URLs');
 
+const safeBaseUrlSchema = z.string().url().refine((value) => {
+  return !/api[_-]?key|authorization|bearer\s+|secret|password|token|cookie/iu.test(value);
+}, 'Base URL must not contain credentials');
+
+export const modelGatewayProfileSchema = z.object({
+  profile_id: safeModelStringSchema,
+  display_name: z.string().min(1),
+  protocol: z.literal('openai_chat_completions'),
+  base_url: safeBaseUrlSchema,
+  auth_type: modelGatewayAuthTypeSchema,
+  status: modelGatewayProfileStatusSchema,
+  config_hash: z.string().regex(/^[a-f0-9]{64}$/u),
+  revision: z.number().int().positive().default(1),
+  credential_configured: z.boolean().default(false),
+  credential_fingerprint: z.string().regex(/^[a-f0-9]{12}$/u).optional(),
+  credential_revision: z.number().int().nonnegative().default(0),
+  created_by: z.string().min(1).optional(),
+  updated_by: z.string().min(1).optional(),
+  created_at: z.string().datetime().optional(),
+  updated_at: z.string().datetime().optional(),
+  published_at: z.string().datetime().optional(),
+  disabled_at: z.string().datetime().optional(),
+});
+
+export const modelGatewayProfileCreateRequestSchema = z.object({
+  profile_id: safeModelStringSchema,
+  display_name: z.string().min(1),
+  protocol: z.literal('openai_chat_completions').default('openai_chat_completions'),
+  base_url: safeBaseUrlSchema,
+  auth_type: modelGatewayAuthTypeSchema,
+  api_key: z.string().min(1).optional(),
+});
+
+export const modelGatewayProfileUpdateDraftRequestSchema = z.object({
+  display_name: z.string().min(1).optional(),
+  protocol: z.literal('openai_chat_completions').optional(),
+  base_url: safeBaseUrlSchema.optional(),
+  auth_type: modelGatewayAuthTypeSchema.optional(),
+  api_key: z.string().min(1).optional(),
+  expected_revision: z.number().int().positive(),
+});
+
+export const modelGatewayProfilePublishRequestSchema = z.object({
+  expected_revision: z.number().int().positive().optional(),
+  release_note: z.string().min(1).optional(),
+});
+
+export const modelGatewayCredentialRotateRequestSchema = z.object({
+  api_key: z.string().min(1),
+  expected_credential_revision: z.number().int().nonnegative().optional(),
+});
+
+export const modelGatewayConnectionTestRequestSchema = z.object({
+  probe_model_id: z.string().min(1),
+  request_id: z.string().min(1).optional(),
+});
+
+export const modelGatewayConnectionTestResponseSchema = z.object({
+  reachable: z.boolean(),
+  latency_ms: z.number().int().nonnegative().optional(),
+  protocol: z.literal('openai_chat_completions'),
+  upstream_model_id: z.string().min(1),
+  response_model: z.string().min(1).optional(),
+  supports_text: z.boolean().default(false),
+  supports_tools: z.boolean().optional(),
+  supports_json_schema: z.boolean().optional(),
+  safe_error_code: z.string().min(1).optional(),
+});
+
+const modelCatalogPaginationRequestSchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  page_size: z.coerce.number().int().positive().max(100).default(20),
+  cursor: z.string().min(1).optional(),
+  sort_by: z.string().min(1).optional(),
+  sort_order: z.enum(['asc', 'desc']).default('desc'),
+});
+
+export const modelGatewayProfileQuerySchema = modelCatalogPaginationRequestSchema.extend({
+  profile_id: z.string().min(1).optional(),
+  status: modelGatewayProfileStatusSchema.optional(),
+});
+
+export const modelDefinitionRefSchema = z.object({
+  model_id: safeModelStringSchema,
+  version: z.number().int().positive(),
+  model_hash: z.string().regex(/^[a-f0-9]{64}$/u),
+});
+
+export const modelDefinitionSchema = z.object({
+  model_id: safeModelStringSchema,
+  version: z.number().int().positive(),
+  display_name: z.string().min(1),
+  gateway_profile_id: safeModelStringSchema,
+  gateway_profile_config_hash: z.string().regex(/^[a-f0-9]{64}$/u),
+  upstream_model_id: safeModelStringSchema,
+  provider: safeModelStringSchema,
+  capabilities: z.array(modelCapabilitySchema).min(1),
+  context_window: z.number().int().positive(),
+  max_output_tokens: z.number().int().positive(),
+  input_cost_per_million: z.number().nonnegative().default(0),
+  output_cost_per_million: z.number().nonnegative().default(0),
+  currency: z.string().min(1).default('USD'),
+  tags: z.array(z.string().min(1)).default([]),
+  status: modelDefinitionStatusSchema,
+  revision: z.number().int().positive().default(1),
+  model_hash: z.string().regex(/^[a-f0-9]{64}$/u),
+  created_by: z.string().min(1).optional(),
+  updated_by: z.string().min(1).optional(),
+  published_by: z.string().min(1).optional(),
+  created_at: z.string().datetime().optional(),
+  updated_at: z.string().datetime().optional(),
+  published_at: z.string().datetime().optional(),
+  disabled_at: z.string().datetime().optional(),
+});
+
+export const modelDefinitionCreateDraftRequestSchema = z.object({
+  model_id: safeModelStringSchema,
+  version: z.number().int().positive().default(1),
+  display_name: z.string().min(1),
+  gateway_profile_id: safeModelStringSchema,
+  upstream_model_id: safeModelStringSchema,
+  provider: safeModelStringSchema,
+  capabilities: z.array(modelCapabilitySchema).min(1),
+  context_window: z.number().int().positive(),
+  max_output_tokens: z.number().int().positive(),
+  input_cost_per_million: z.number().nonnegative().default(0),
+  output_cost_per_million: z.number().nonnegative().default(0),
+  currency: z.string().min(1).default('USD'),
+  tags: z.array(z.string().min(1)).default([]),
+});
+
+export const modelDefinitionUpdateDraftRequestSchema = modelDefinitionCreateDraftRequestSchema
+  .omit({ model_id: true, version: true })
+  .partial()
+  .extend({ expected_revision: z.number().int().positive() });
+
+export const modelDefinitionValidateResponseSchema = z.object({
+  validation: registryValidationResultSchema,
+});
+
+export const modelDefinitionPublishRequestSchema = z.object({
+  expected_revision: z.number().int().positive().optional(),
+  release_note: z.string().min(1).optional(),
+});
+
+export const modelDefinitionQuerySchema = modelCatalogPaginationRequestSchema.extend({
+  model_id: z.string().min(1).optional(),
+  gateway_profile_id: z.string().min(1).optional(),
+  status: modelDefinitionStatusSchema.optional(),
+});
+
 export const modelTargetSchema = z.object({
   target_id: safeModelStringSchema,
-  gateway_profile: safeModelStringSchema,
-  provider_hint: safeModelStringSchema.optional(),
-  model_id: safeModelStringSchema,
+  model_ref: modelDefinitionRefSchema,
   priority: z.number().int().nonnegative(),
   enabled: z.boolean().default(true),
-  capabilities: z.array(modelCapabilitySchema).min(1),
   timeout_ms: z.number().int().positive().optional(),
   max_retries: z.number().int().nonnegative().max(10).optional(),
+}).strict();
+
+export const resolvedModelTargetSchema = modelTargetSchema.extend({
+  model_id: safeModelStringSchema,
+  model_version: z.number().int().positive(),
+  model_hash: z.string().regex(/^[a-f0-9]{64}$/u),
+  gateway_profile_id: safeModelStringSchema,
+  gateway_profile_config_hash: z.string().regex(/^[a-f0-9]{64}$/u),
+  upstream_model_id: safeModelStringSchema,
+  provider: safeModelStringSchema,
+  capabilities: z.array(modelCapabilitySchema).min(1),
+  context_window: z.number().int().positive(),
+  max_output_tokens: z.number().int().positive(),
   input_cost_per_million: z.number().nonnegative().optional(),
   output_cost_per_million: z.number().nonnegative().optional(),
+  currency: z.string().min(1).optional(),
 });
 
 export const modelRetryPolicySchema = z.object({
@@ -344,7 +517,7 @@ export const modelPolicySchema = z.object({
   model_policy_id: z.string().min(1),
   version: z.number().int().positive(),
   status: modelPolicyStatusSchema,
-  protocol: modelGatewayProtocolSchema,
+  protocol: z.literal('openai_chat_completions'),
   targets: z.array(modelTargetSchema).min(1),
   retry_policy: modelRetryPolicySchema.default(() => modelRetryPolicySchema.parse({})),
   fallback_policy: modelFallbackPolicySchema.default(() => modelFallbackPolicySchema.parse({})),
@@ -356,14 +529,14 @@ export const modelPolicySchema = z.object({
   created_at: z.string().datetime().optional(),
   updated_at: z.string().datetime().optional(),
   published_at: z.string().datetime().optional(),
-});
+}).strict();
 
 export const resolvedModelPolicySchema = z.object({
   model_policy_id: z.string().min(1),
   model_policy_version: z.number().int().positive(),
   model_policy_hash: z.string().regex(/^[a-f0-9]{64}$/u),
-  protocol: modelGatewayProtocolSchema,
-  resolved_targets: z.array(modelTargetSchema).min(1),
+  protocol: z.literal('openai_chat_completions'),
+  resolved_targets: z.array(resolvedModelTargetSchema).min(1),
   retry_policy: modelRetryPolicySchema,
   fallback_policy: modelFallbackPolicySchema,
   request_policy: modelRequestPolicySchema,
@@ -458,6 +631,13 @@ export const modelCallRecordSchema = z.object({
   target_id: z.string().min(1).optional(),
   provider: z.string().min(1).optional(),
   model_id: z.string().min(1).optional(),
+  model_version: z.number().int().positive().optional(),
+  model_hash: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  gateway_profile_id: z.string().min(1).optional(),
+  gateway_profile_config_hash: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  credential_fingerprint: z.string().regex(/^[a-f0-9]{12}$/u).optional(),
+  credential_revision: z.number().int().nonnegative().optional(),
+  upstream_model_id: z.string().min(1).optional(),
   protocol: modelGatewayProtocolSchema,
   attempt_count: z.number().int().nonnegative().default(0),
   fallback_index: z.number().int().nonnegative().default(0),
@@ -493,6 +673,13 @@ export const modelCallAttemptSchema = z.object({
   target_id: z.string().min(1),
   provider: z.string().min(1).optional(),
   model_id: z.string().min(1),
+  model_version: z.number().int().positive().optional(),
+  model_hash: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  gateway_profile_id: z.string().min(1).optional(),
+  gateway_profile_config_hash: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  credential_fingerprint: z.string().regex(/^[a-f0-9]{12}$/u).optional(),
+  credential_revision: z.number().int().nonnegative().optional(),
+  upstream_model_id: z.string().min(1).optional(),
   status: modelCallAttemptStatusSchema,
   http_status: z.number().int().min(100).max(599).optional(),
   error_class: z.string().optional(),
@@ -1824,8 +2011,29 @@ export type ToolPolicyDecision = z.infer<typeof toolPolicyDecisionSchema>;
 export type TenantRuntimePolicyStatus = z.infer<typeof tenantRuntimePolicyStatusSchema>;
 export type ModelPolicyStatus = z.infer<typeof modelPolicyStatusSchema>;
 export type ModelGatewayProtocol = z.infer<typeof modelGatewayProtocolSchema>;
+export type LegacyModelGatewayProtocol = z.infer<typeof legacyModelGatewayProtocolSchema>;
+export type ModelGatewayProfileProtocol = z.infer<typeof modelGatewayProfileProtocolSchema>;
+export type ModelGatewayAuthType = z.infer<typeof modelGatewayAuthTypeSchema>;
+export type ModelGatewayProfileStatus = z.infer<typeof modelGatewayProfileStatusSchema>;
+export type ModelDefinitionStatus = z.infer<typeof modelDefinitionStatusSchema>;
 export type ModelCapability = z.infer<typeof modelCapabilitySchema>;
+export type ModelGatewayProfile = z.infer<typeof modelGatewayProfileSchema>;
+export type ModelGatewayProfileCreateRequest = z.infer<typeof modelGatewayProfileCreateRequestSchema>;
+export type ModelGatewayProfileUpdateDraftRequest = z.infer<typeof modelGatewayProfileUpdateDraftRequestSchema>;
+export type ModelGatewayProfilePublishRequest = z.infer<typeof modelGatewayProfilePublishRequestSchema>;
+export type ModelGatewayCredentialRotateRequest = z.infer<typeof modelGatewayCredentialRotateRequestSchema>;
+export type ModelGatewayConnectionTestRequest = z.infer<typeof modelGatewayConnectionTestRequestSchema>;
+export type ModelGatewayConnectionTestResponse = z.infer<typeof modelGatewayConnectionTestResponseSchema>;
+export type ModelGatewayProfileQuery = z.infer<typeof modelGatewayProfileQuerySchema>;
+export type ModelDefinition = z.infer<typeof modelDefinitionSchema>;
+export type ModelDefinitionRef = z.infer<typeof modelDefinitionRefSchema>;
+export type ModelDefinitionCreateDraftRequest = z.infer<typeof modelDefinitionCreateDraftRequestSchema>;
+export type ModelDefinitionUpdateDraftRequest = z.infer<typeof modelDefinitionUpdateDraftRequestSchema>;
+export type ModelDefinitionValidateResponse = z.infer<typeof modelDefinitionValidateResponseSchema>;
+export type ModelDefinitionPublishRequest = z.infer<typeof modelDefinitionPublishRequestSchema>;
+export type ModelDefinitionQuery = z.infer<typeof modelDefinitionQuerySchema>;
 export type ModelTarget = z.infer<typeof modelTargetSchema>;
+export type ResolvedModelTarget = z.infer<typeof resolvedModelTargetSchema>;
 export type ModelRetryPolicy = z.infer<typeof modelRetryPolicySchema>;
 export type ModelFallbackPolicy = z.infer<typeof modelFallbackPolicySchema>;
 export type ModelRequestPolicy = z.infer<typeof modelRequestPolicySchema>;

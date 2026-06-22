@@ -67,6 +67,15 @@ export const runtimeConfigSchema = z.object({
   MODEL_GATEWAY_API_KEY: stringSchema('dev-only-placeholder'),
   MODEL_GATEWAY_MODEL: stringSchema('dar-local-model'),
   MODEL_GATEWAY_PROFILE_ID: stringSchema('local-dev'),
+  MODEL_GATEWAY_CONFIG_SOURCE: z.preprocess(
+    emptyToUndefined,
+    z.enum(['db']).default('db'),
+  ),
+  MODEL_CREDENTIAL_MASTER_KEY: stringSchema('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='),
+  MODEL_GATEWAY_CLIENT_CACHE_TTL_MS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().nonnegative().default(60_000),
+  ),
   MODEL_GATEWAY_MODE: z.preprocess(
     emptyToUndefined,
     z.enum(['disabled', 'mock', 'openai_compatible']).default('disabled'),

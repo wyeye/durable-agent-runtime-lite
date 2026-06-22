@@ -52,6 +52,8 @@ LOG_LOCALE=zh-CN
 
 Control-plane 可写配置使用可视化表单作为唯一编辑入口，JSON 仅保留只读查看、复制和下载。Registry、Evaluation Dataset、Case 和 Gate Policy 表单最终仍生成现有 Contract 对象并通过服务端校验；精确版本引用不使用 `latest` 或默认资源兜底。详见 `docs/56_visual_configuration.md`。
 
+Model Catalog MVP 将 OpenAI-compatible 模型网关从单一部署级环境变量迁移为 DB-backed Registry 数据：`control-plane` 管理 `ModelGatewayProfile` 和 `ModelDefinition`，API Key 使用 `MODEL_CREDENTIAL_MASTER_KEY` 做 AES-256-GCM 加密后存 PostgreSQL；`ModelPolicy` 只能选择已发布模型的精确 `model_ref`；`runtime-worker` 在 AgentRun 时从 DB 动态解析网关、模型和当前凭据。新增网关、切换模型、跨网关 fallback 和凭据轮换均不需要重启 worker。详见 `docs/58_model_gateway_mvp.md` 和 `docs/59_model_catalog.md`。
+
 DB-backed registry 模式：
 
 ```bash
@@ -157,6 +159,7 @@ corepack pnpm smoke:pi-handoff-e2e
 corepack pnpm smoke:pi-restart-resume-e2e
 corepack pnpm smoke:pi-worker-crash-resume-e2e
 corepack pnpm smoke:pi-model-gateway-e2e
+corepack pnpm smoke:model-catalog-multi-gateway-e2e
 ```
 
 这些 smoke 通过 `/v1/agent-tasks` 使用真实 Pi Agent Core。deterministic 模式只替换模型流，不替换 Pi 内循环；model-gateway smoke 使用 `devtools/mock-server` 的 OpenAI-compatible `/v1/chat/completions` 返回结构化 tool call。

@@ -76,15 +76,17 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
         model_policy_id: modelPolicyId,
         version: 1,
         status: 'published',
-        protocol: 'dar_generate',
+        protocol: 'openai_chat_completions',
         targets: [
           {
             target_id: `${modelPolicyId}_primary`,
-            gateway_profile: 'local-test',
-            model_id: 'mock',
+            model_ref: {
+              model_id: 'mock',
+              version: 1,
+              model_hash: 'a'.repeat(64),
+            },
             priority: 0,
             enabled: true,
-            capabilities: ['text', 'tools', 'usage'],
           },
         ],
         retry_policy: {

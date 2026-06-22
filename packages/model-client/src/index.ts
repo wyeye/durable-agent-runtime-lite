@@ -7,7 +7,6 @@ import {
   type ModelGatewayRequest,
   type ModelGatewayResponse,
   type ModelGatewayToolDefinition,
-  type ModelTarget,
 } from '@dar/contracts';
 import { request } from 'undici';
 import { z } from 'zod';
@@ -119,9 +118,15 @@ export interface ModelGatewayAttemptCompleteEvent extends ModelGatewayAttemptEve
   responseId?: string;
 }
 
+export interface ModelGatewayClientTarget {
+  target_id: string;
+  gateway_profile: string;
+  model_id: string;
+}
+
 export interface ModelGatewayCallOptions {
   protocol?: ModelGatewayProtocol;
-  target?: Pick<ModelTarget, 'target_id' | 'gateway_profile' | 'model_id'>;
+  target?: ModelGatewayClientTarget;
   toolNameCodec?: ModelToolNameCodec;
   maxRetries?: number;
   retryableStatusCodes?: number[];
@@ -271,7 +276,7 @@ export class ModelGatewayClient {
   private async requestModel(
     protocol: ModelGatewayProtocol,
     payload: ModelGatewayRequest,
-    target: Pick<ModelTarget, 'target_id' | 'gateway_profile' | 'model_id'>,
+    target: ModelGatewayClientTarget,
     options: ModelGatewayCallOptions,
     signal?: AbortSignal,
   ): Promise<ModelGatewayResponse> {
@@ -285,7 +290,7 @@ export class ModelGatewayClient {
 
   private async requestDarGenerate(
     payload: ModelGatewayRequest,
-    target: Pick<ModelTarget, 'target_id' | 'gateway_profile' | 'model_id'>,
+    target: ModelGatewayClientTarget,
     signal?: AbortSignal,
   ): Promise<ModelGatewayResponse> {
     const raw = await this.postJson(
@@ -319,7 +324,7 @@ export class ModelGatewayClient {
 
   private async requestOpenAiChatCompletions(
     payload: ModelGatewayRequest,
-    target: Pick<ModelTarget, 'target_id' | 'gateway_profile' | 'model_id'>,
+    target: ModelGatewayClientTarget,
     options: ModelGatewayCallOptions,
     signal?: AbortSignal,
   ): Promise<ModelGatewayResponse> {
@@ -359,7 +364,7 @@ export class ModelGatewayClient {
     modelRequestKey: string,
     signal?: AbortSignal,
   ): Promise<{ body: unknown; statusCode: number }> {
-    const url = new URL(path, this.baseUrl);
+    const url = endpointUrl(this.baseUrl, path);
     const timeout = AbortSignal.timeout(this.timeoutMs);
     const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
     try {
@@ -485,7 +490,7 @@ export class ModelToolNameCodec {
 
 function openAiResponseToGatewayResponse(
   value: unknown,
-  target: Pick<ModelTarget, 'gateway_profile' | 'model_id'>,
+  target: Pick<ModelGatewayClientTarget, 'gateway_profile' | 'model_id'>,
   toolNameCodec: ModelToolNameCodec,
 ): ModelGatewayResponse {
   const parsed = openAiChatCompletionResponseSchema.parse(value);
@@ -872,6 +877,18 @@ function assertTransportAllowed(url: URL, allowInsecureHttp: boolean): void {
 
 function isLocalHttp(url: URL): boolean {
   return url.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+}
+
+function endpointUrl(baseUrl: URL, path: string): URL {
+  const normalizedBasePath = baseUrl.pathname.endsWith('/')
+    ? baseUrl.pathname
+    : `${baseUrl.pathname}/`;
+  const normalizedPath = path.replace(/^\/+/u, '');
+  const url = new URL(baseUrl.toString());
+  url.pathname = `${normalizedBasePath}${normalizedPath}`.replace(/\/{2,}/gu, '/');
+  url.search = '';
+  url.hash = '';
+  return url;
 }
 
 async function sleep(ms: number, signal?: AbortSignal): Promise<void> {

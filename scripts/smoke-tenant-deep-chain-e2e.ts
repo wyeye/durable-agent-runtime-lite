@@ -29,6 +29,7 @@ import {
   upsertAgentSpec,
   upsertPromptDefinition,
 } from '@dar/db';
+import { ensureModelCatalogEntry } from './model-catalog-seed.js';
 
 type Db = ReturnType<typeof createDb>;
 
@@ -408,6 +409,17 @@ async function seedHandoffAgentPlan(db: Db): Promise<string> {
 
 async function seedModelPolicy(db: Db, modelPolicyId: string, displayPolicy: string) {
   const repository = new ModelPolicyRepository(db);
+  const catalog = await ensureModelCatalogEntry(db, {
+    profileId: 'local-deterministic',
+    displayName: `Deterministic ${displayPolicy}`,
+    baseUrl: 'http://mock-server:4100',
+    authType: 'none',
+    modelId: displayPolicy,
+    upstreamModelId: displayPolicy,
+    provider: 'local-mock',
+    capabilities: ['text', 'tools', 'usage'],
+    operatorId: 'tenant-deep-smoke',
+  });
   const existing = await repository.getByIdAndVersion(modelPolicyId, 1, { tenantId });
   if (existing?.status === 'published' || existing?.status === 'gray') {
     return existing;
@@ -422,15 +434,13 @@ async function seedModelPolicy(db: Db, modelPolicyId: string, displayPolicy: str
       model_policy_id: modelPolicyId,
       version: 1,
       status: 'draft',
-      protocol: 'dar_generate',
+      protocol: 'openai_chat_completions',
       targets: [
         {
           target_id: `${modelPolicyId}_primary`,
-          gateway_profile: 'local-mock',
-          model_id: displayPolicy,
+          model_ref: catalog.model_ref,
           priority: 0,
           enabled: true,
-          capabilities: ['text', 'tools', 'usage'],
         },
       ],
       retry_policy: {

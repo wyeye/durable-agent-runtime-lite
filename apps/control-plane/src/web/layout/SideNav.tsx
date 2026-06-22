@@ -5,6 +5,15 @@ import { navLabel } from '../utils/i18n-labels.js';
 const items = [
   { key: '/dashboard', label: <Link to="/dashboard">{navLabel('dashboard')}</Link> },
   {
+    key: 'ability',
+    label: '能力管理',
+    children: [
+      { key: '/model-gateways', label: <Link to="/model-gateways">模型网关</Link> },
+      { key: '/models', label: <Link to="/models">模型</Link> },
+      { key: '/model-policies', label: <Link to="/model-policies">{navLabel('modelPolicies')}</Link> },
+    ],
+  },
+  {
     key: 'registry',
     label: navLabel('registry'),
     children: [
@@ -12,7 +21,6 @@ const items = [
       { key: '/registry/routes', label: <Link to="/registry/routes">{navLabel('routes')}</Link> },
       { key: '/registry/tools', label: <Link to="/registry/tools">{navLabel('tools')}</Link> },
       { key: '/registry/agents', label: <Link to="/registry/agents">{navLabel('agents')}</Link> },
-      { key: '/registry/model-policies', label: <Link to="/registry/model-policies">{navLabel('modelPolicies')}</Link> },
       { key: '/registry/prompts', label: <Link to="/registry/prompts">{navLabel('prompts')}</Link> },
     ],
   },
@@ -38,7 +46,8 @@ const items = [
 export function SideNav() {
   const location = useLocation();
   const selected = leafKeys.find((key) => location.pathname.startsWith(key)) ?? '/dashboard';
-  const openKeys = selected.startsWith('/registry') ? ['registry']
+  const openKeys = selected === '/model-gateways' || selected === '/models' || selected === '/model-policies' ? ['ability']
+    : selected.startsWith('/registry') ? ['registry']
     : selected.startsWith('/evaluation') ? ['evaluation']
       : [];
   return <Menu mode="inline" selectedKeys={[selected]} defaultOpenKeys={openKeys} items={items} />;
@@ -51,6 +60,9 @@ const leafKeys = [
   '/registry/tools',
   '/registry/agents',
   '/registry/model-policies',
+  '/model-policies',
+  '/model-gateways',
+  '/models',
   '/registry/prompts',
   '/evaluation/datasets',
   '/evaluation/runs',

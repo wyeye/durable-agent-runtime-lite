@@ -1702,8 +1702,8 @@ function createPiRuntime(input: {
       model: createModelGatewayModel(target),
       streamFn: createModelGatewayPiStream({
         db: input.db,
-        baseUrl: config.MODEL_GATEWAY_BASE_URL,
-        apiKey: config.MODEL_GATEWAY_API_KEY,
+        credentialMasterKey: config.MODEL_CREDENTIAL_MASTER_KEY,
+        clientCacheTtlMs: config.MODEL_GATEWAY_CLIENT_CACHE_TTL_MS,
         executionPlan: input.executionPlan,
         agentRun: input.agentRun,
         segmentIndex: input.segmentIndex,

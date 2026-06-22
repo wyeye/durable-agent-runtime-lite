@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentExecutionPlan, AgentRunRecord, ResolvedModelPolicy } from '@dar/contracts';
 import type { Database } from '@dar/db';
+import { hashModelGatewayProfileConfig } from '@dar/db';
+import { ModelCredentialCipher } from '@dar/security';
 import type { Kysely } from 'kysely';
 import { createDeterministicPiStream } from '../src/agent/deterministic-pi-stream.js';
 import {
@@ -235,17 +237,18 @@ describe('PiAgentAdapter', () => {
     if (!address || typeof address === 'string') {
       throw new Error('server did not bind to a TCP port');
     }
-    const executionPlan = plan('model_gateway:readonly_tool');
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const executionPlan = withModelGatewayBaseUrl(plan('model_gateway:readonly_tool'), baseUrl);
     const target = firstModelTarget(executionPlan);
-    const ledger = createModelCallLedgerDb();
+    const ledger = createModelCallLedgerDb(baseUrl);
     try {
       const result = await runPiAgentSegment({
         executionPlan,
         model: createModelGatewayModel(target),
         streamFn: createModelGatewayPiStream({
           db: ledger.db,
-          baseUrl: `http://127.0.0.1:${address.port}`,
-          apiKey: 'test-key',
+          credentialMasterKey: modelCredentialMasterKey,
+          clientCacheTtlMs: 60_000,
           executionPlan,
           agentRun: agentRunFor(executionPlan),
           segmentIndex: 0,
@@ -374,7 +377,8 @@ describe('PiAgentAdapter', () => {
     if (!address || typeof address === 'string') {
       throw new Error('server did not bind to a TCP port');
     }
-    const executionPlan = {
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const executionPlan = withModelGatewayBaseUrl({
       ...plan('model_gateway:readonly_tool'),
       resolved_model_policy: {
         ...plan('model_gateway:readonly_tool').resolved_model_policy,
@@ -384,13 +388,13 @@ describe('PiAgentAdapter', () => {
           after_tool_result_tool_choice_mode: 'none',
         },
       },
-    };
+    }, baseUrl);
     const target = firstModelTarget(executionPlan);
-    const ledger = createModelCallLedgerDb();
+    const ledger = createModelCallLedgerDb(baseUrl);
     const streamFn = createModelGatewayPiStream({
       db: ledger.db,
-      baseUrl: `http://127.0.0.1:${address.port}`,
-      apiKey: 'test-key',
+      credentialMasterKey: modelCredentialMasterKey,
+      clientCacheTtlMs: 60_000,
       executionPlan,
       agentRun: agentRunFor(executionPlan),
       segmentIndex: 0,
@@ -525,13 +529,14 @@ describe('PiAgentAdapter', () => {
     if (!address || typeof address === 'string') {
       throw new Error('server did not bind to a TCP port');
     }
-    const executionPlan = plan('model_gateway:readonly_tool');
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const executionPlan = withModelGatewayBaseUrl(plan('model_gateway:readonly_tool'), baseUrl);
     const target = firstModelTarget(executionPlan);
-    const ledger = createModelCallLedgerDb();
+    const ledger = createModelCallLedgerDb(baseUrl);
     const streamOptions = {
       db: ledger.db,
-      baseUrl: `http://127.0.0.1:${address.port}`,
-      apiKey: 'test-key',
+      credentialMasterKey: modelCredentialMasterKey,
+      clientCacheTtlMs: 60_000,
       executionPlan,
       agentRun: agentRunFor(executionPlan),
       segmentIndex: 0,
@@ -636,7 +641,8 @@ describe('PiAgentAdapter', () => {
     if (!address || typeof address === 'string') {
       throw new Error('server did not bind to a TCP port');
     }
-    const basePlan = plan('model_gateway:readonly_tool');
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const basePlan = withModelGatewayBaseUrl(plan('model_gateway:readonly_tool'), baseUrl);
     const executionPlan = {
       ...basePlan,
       resolved_model_policy: {
@@ -649,15 +655,15 @@ describe('PiAgentAdapter', () => {
     };
     const target = firstModelTarget(executionPlan);
     expect(target.max_retries).toBeUndefined();
-    const ledger = createModelCallLedgerDb();
+    const ledger = createModelCallLedgerDb(baseUrl);
     try {
       const result = await runPiAgentSegment({
         executionPlan,
         model: createModelGatewayModel(target),
         streamFn: createModelGatewayPiStream({
           db: ledger.db,
-          baseUrl: `http://127.0.0.1:${address.port}`,
-          apiKey: 'test-key',
+          credentialMasterKey: modelCredentialMasterKey,
+          clientCacheTtlMs: 60_000,
           executionPlan,
           agentRun: agentRunFor(executionPlan),
           segmentIndex: 0,
@@ -684,6 +690,155 @@ describe('PiAgentAdapter', () => {
       });
       expect(ledger.attempts.map((attempt) => attempt.target_attempt_index)).toEqual([0, 1]);
       expect(ledger.attempts.map((attempt) => attempt.status)).toEqual(['failed', 'succeeded']);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it('falls back to the ordered secondary ModelPolicy target after an upstream 5xx', async () => {
+    const observedModels: string[] = [];
+    const server = await import('node:http').then(({ createServer }) =>
+      createServer((request, response) => {
+        if (request.url !== '/v1/chat/completions') {
+          response.statusCode = 404;
+          response.end();
+          return;
+        }
+        let body = '';
+        request.on('data', (chunk: Buffer) => {
+          body += chunk.toString('utf8');
+        });
+        request.on('end', () => {
+          const parsed = JSON.parse(body) as { model?: string };
+          observedModels.push(parsed.model ?? '');
+          response.setHeader('content-type', 'application/json');
+          if (parsed.model === 'dar-failing-model') {
+            response.statusCode = 503;
+            response.end(JSON.stringify({ error: { message: 'temporary unavailable' } }));
+            return;
+          }
+          response.end(
+            JSON.stringify({
+              id: 'chatcmpl_fallback_success',
+              model: parsed.model,
+              choices: [
+                {
+                  finish_reason: 'tool_calls',
+                  message: {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: 'call_fallback_1',
+                        type: 'function',
+                        function: {
+                          name: 'tool_knowledge_search_f2405c6159c9',
+                          arguments: JSON.stringify({ query: 'after fallback' }),
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+              usage: { prompt_tokens: 5, completion_tokens: 6, total_tokens: 11 },
+            }),
+          );
+        });
+      }),
+    );
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('server did not bind to a TCP port');
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const basePlan = withModelGatewayBaseUrl(plan('model_gateway:readonly_tool'), baseUrl);
+    const primary = {
+      ...basePlan.resolved_model_policy.resolved_targets[0]!,
+      target_id: 'primary_failure',
+      model_ref: {
+        model_id: 'dar-failing-model',
+        version: 1,
+        model_hash: 'e'.repeat(64),
+      },
+      model_id: 'dar-failing-model',
+      model_hash: 'e'.repeat(64),
+      upstream_model_id: 'dar-failing-model',
+      priority: 10,
+    };
+    const secondary = {
+      ...basePlan.resolved_model_policy.resolved_targets[0]!,
+      target_id: 'secondary_success',
+      model_ref: {
+        model_id: 'dar-secondary-model',
+        version: 1,
+        model_hash: 'd'.repeat(64),
+      },
+      model_id: 'dar-secondary-model',
+      model_hash: 'd'.repeat(64),
+      upstream_model_id: 'dar-secondary-model',
+      priority: 0,
+    };
+    const executionPlan = {
+      ...basePlan,
+      model_policy_hash: '9'.repeat(64),
+      resolved_model_policy: {
+        ...basePlan.resolved_model_policy,
+        model_policy_hash: '9'.repeat(64),
+        resolved_targets: [secondary, primary],
+        fallback_policy: {
+          ...basePlan.resolved_model_policy.fallback_policy,
+          enabled: true,
+          ordered_target_ids: ['primary_failure', 'secondary_success'],
+        },
+      },
+    };
+    const ledger = createModelCallLedgerDb(baseUrl);
+    try {
+      const result = await runPiAgentSegment({
+        executionPlan,
+        model: createModelGatewayModel(primary),
+        streamFn: createModelGatewayPiStream({
+          db: ledger.db,
+          credentialMasterKey: modelCredentialMasterKey,
+          clientCacheTtlMs: 60_000,
+          executionPlan,
+          agentRun: agentRunFor(executionPlan),
+          segmentIndex: 0,
+          timeoutMs: 5_000,
+          maxRetries: 0,
+          maxResponseBytes: 1_000_000,
+          maxLedgerResponseBytes: 1_048_576,
+          allowInsecureHttp: true,
+          idempotencyHeader: 'Idempotency-Key',
+          userAgent: 'durable-agent-runtime-lite/runtime-worker-test',
+          allowedModelIds: new Set(['dar-failing-model', 'dar-secondary-model']),
+        }),
+        initialUserInput: 'readonly_tool',
+        segmentIndex: 0,
+        budgetRemaining: executionPlan.budget,
+        maxContextBytes: 262_144,
+      });
+
+      expect(result.segmentResult.status).toBe('tool_requested');
+      expect(observedModels).toEqual(['dar-failing-model', 'dar-secondary-model']);
+      expect(ledger.modelCalls).toHaveLength(1);
+      expect(ledger.modelCalls[0]).toMatchObject({
+        status: 'succeeded',
+        target_id: 'secondary_success',
+        model_id: 'dar-secondary-model',
+        fallback_index: 1,
+        attempt_count: 2,
+      });
+      expect(ledger.attempts.map((attempt) => attempt.status)).toEqual(['failed', 'succeeded']);
+      expect(ledger.attempts.map((attempt) => attempt.target_id)).toEqual([
+        'primary_failure',
+        'secondary_success',
+      ]);
+      expect(ledger.attempts.map((attempt) => attempt.fallback_index)).toEqual([0, 1]);
+      expect(ledger.attempts.map((attempt) => attempt.global_attempt_index)).toEqual([0, 1]);
     } finally {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
@@ -784,23 +939,45 @@ function resolvedModelPolicyFor(modelPolicy: string): ResolvedModelPolicy {
     isModelGateway ? ['text', 'tools', 'usage'] : ['text', 'tools'];
   const modelId = isModelGateway ? 'dar-local-model' : modelPolicy;
   const gatewayProfile = isModelGateway ? 'local-openai-compatible' : 'local-deterministic';
+  const modelHash = isModelGateway ? 'a'.repeat(64) : 'b'.repeat(64);
+  const gatewayConfigHash = isModelGateway
+    ? hashModelGatewayProfileConfig({
+        profile_id: gatewayProfile,
+        display_name: 'Local OpenAI-compatible',
+        protocol: 'openai_chat_completions',
+        base_url: 'http://127.0.0.1:1',
+        auth_type: 'bearer',
+      })
+    : 'c'.repeat(64);
   return {
     model_policy_id: isModelGateway
       ? 'model-gateway-readonly-tool'
       : modelPolicy.replace(/[^a-z0-9_-]+/giu, '-'),
     model_policy_version: 1,
     model_policy_hash: 'f'.repeat(64),
-    protocol: isModelGateway ? 'openai_chat_completions' : 'dar_generate',
+    protocol: 'openai_chat_completions',
     resolved_targets: [
       {
         target_id: isModelGateway
           ? 'local-openai-compatible-primary'
           : 'local-deterministic-primary',
-        gateway_profile: gatewayProfile,
+        model_ref: {
+          model_id: modelId,
+          version: 1,
+          model_hash: modelHash,
+        },
         model_id: modelId,
+        model_version: 1,
+        model_hash: modelHash,
+        gateway_profile_id: gatewayProfile,
+        gateway_profile_config_hash: gatewayConfigHash,
+        upstream_model_id: modelId,
+        provider: gatewayProfile,
         priority: 0,
         enabled: true,
         capabilities,
+        context_window: 32768,
+        max_output_tokens: 4096,
       },
     ],
     retry_policy: {
@@ -841,6 +1018,31 @@ function firstModelTarget(
   return target;
 }
 
+function withModelGatewayBaseUrl(executionPlan: AgentExecutionPlan, baseUrl: string): AgentExecutionPlan {
+  const targets = executionPlan.resolved_model_policy.resolved_targets.map((target) => {
+    if (target.gateway_profile_id !== 'local-openai-compatible') {
+      return target;
+    }
+    return {
+      ...target,
+      gateway_profile_config_hash: hashModelGatewayProfileConfig({
+        profile_id: target.gateway_profile_id,
+        display_name: 'Local OpenAI-compatible',
+        protocol: 'openai_chat_completions',
+        base_url: baseUrl,
+        auth_type: 'bearer',
+      }),
+    };
+  });
+  return {
+    ...executionPlan,
+    resolved_model_policy: {
+      ...executionPlan.resolved_model_policy,
+      resolved_targets: targets,
+    },
+  };
+}
+
 function agentRunFor(executionPlan: AgentExecutionPlan): AgentRunRecord {
   const target = firstModelTarget(executionPlan);
   return {
@@ -860,7 +1062,7 @@ function agentRunFor(executionPlan: AgentExecutionPlan): AgentRunRecord {
     model_policy_version: executionPlan.model_policy_version,
     model_policy_hash: executionPlan.model_policy_hash,
     selected_model_id: target.model_id,
-    selected_provider: target.gateway_profile,
+    selected_provider: target.provider,
     fallback_count: 0,
     model_call_count: 0,
     execution_mode: 'mediated_tool_call',
@@ -886,11 +1088,13 @@ interface ModelCallLedgerDb {
 
 type LedgerTableName = 'model_call_log' | 'model_call_attempt';
 type LedgerRow = Record<string, unknown>;
+const modelCredentialMasterKey = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
 
-function createModelCallLedgerDb(): ModelCallLedgerDb {
-  const rows: Record<LedgerTableName, LedgerRow[]> = {
+function createModelCallLedgerDb(baseUrl: string): ModelCallLedgerDb {
+  const rows: Record<LedgerTableName | 'model_gateway_profile', LedgerRow[]> = {
     model_call_log: [],
     model_call_attempt: [],
+    model_gateway_profile: [modelGatewayProfileRow(baseUrl)],
   };
   const db = {
     selectFrom: (table: string) => new LedgerQuery(rows, table, 'select'),
@@ -910,7 +1114,7 @@ class LedgerQuery {
   private whereValue: unknown;
 
   constructor(
-    private readonly rows: Record<LedgerTableName, LedgerRow[]>,
+    private readonly rows: Record<LedgerTableName | 'model_gateway_profile', LedgerRow[]>,
     private readonly table: string,
     private readonly op: 'select' | 'insert' | 'update',
   ) {}
@@ -994,7 +1198,7 @@ class LedgerQuery {
   }
 
   private tableRows(): LedgerRow[] {
-    const rows = this.rows[this.table as LedgerTableName];
+    const rows = this.rows[this.table as LedgerTableName | 'model_gateway_profile'];
     if (!rows) {
       throw new Error(`unexpected fake ledger table: ${this.table}`);
     }
@@ -1004,6 +1208,42 @@ class LedgerQuery {
   private matchesWhere(row: LedgerRow): boolean {
     return this.whereColumn ? row[this.whereColumn] === this.whereValue : true;
   }
+}
+
+function modelGatewayProfileRow(baseUrl: string): LedgerRow {
+  const credential = new ModelCredentialCipher(modelCredentialMasterKey).encrypt({
+    profile_id: 'local-openai-compatible',
+    credential_revision: 1,
+    api_key: 'test-key',
+  });
+  const configHash = hashModelGatewayProfileConfig({
+    profile_id: 'local-openai-compatible',
+    display_name: 'Local OpenAI-compatible',
+    protocol: 'openai_chat_completions',
+    base_url: baseUrl,
+    auth_type: 'bearer',
+  });
+  return {
+    profile_id: 'local-openai-compatible',
+    display_name: 'Local OpenAI-compatible',
+    protocol: 'openai_chat_completions',
+    base_url: baseUrl,
+    auth_type: 'bearer',
+    status: 'published',
+    config_hash: configHash,
+    revision: 1,
+    credential_ciphertext: credential.ciphertext,
+    credential_iv: credential.iv,
+    credential_auth_tag: credential.auth_tag,
+    credential_fingerprint: credential.credential_fingerprint,
+    credential_revision: credential.credential_revision,
+    created_by: 'operator',
+    updated_by: 'operator',
+    created_at: new Date('2026-01-01T00:00:00.000Z'),
+    updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    published_at: new Date('2026-01-01T00:00:00.000Z'),
+    disabled_at: null,
+  };
 }
 
 function withLedgerDefaults(table: string, row: LedgerRow): LedgerRow {

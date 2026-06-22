@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-06-22 for AR-2B-FINAL-GATE closure.
+Last updated: 2026-06-22 for MODEL-CATALOG-MVP-1.
 
 ## Platform Version
 
@@ -108,31 +108,36 @@ Verified locally:
 - `corepack pnpm smoke:control-plane-ui-e2e` passed against a live local stack, creating Registry resources through visual forms, selecting exact versions, publishing Flow+Route, verifying router preview, rollback, and Human Task approval.
 - `corepack pnpm smoke:evaluation-ui-e2e` passed against a live local stack with an evaluation-enabled runtime-worker, creating Dataset/Case/Gate Policy through visual forms and verifying Evaluation Run, Gate Decision, Override/RBAC, and exact gate publish behavior.
 
-## Model Gateway Runtime
+## Model Catalog MVP
 
-Production requirements:
+**MODEL-CATALOG-MVP-1 IMPLEMENTED IN WORKING TREE**
+
+This pass keeps the platform version at `0.8.0` and does not create a tag or release.
+
+Implemented in this pass:
+
+- `model_gateway_profile` and `model_definition` registry tables in `018_model_gateway_and_catalog.sql`.
+- `ModelGatewayProfile`, `ModelDefinition`, and exact `ModelDefinitionRef` contracts.
+- `ModelPolicy` targets now select exact published `model_ref` values instead of raw `gateway_profile` and `model_id`.
+- AES-256-GCM credential encryption through `ModelCredentialCipher` with fingerprint and credential revision.
+- Control-plane APIs and pages for `/api/v1/model-gateways`, `/api/v1/models`, `/model-gateways`, and `/models`.
+- Runtime Worker DB-backed resolver for ModelDefinition, ModelGatewayProfile, current encrypted credentials, client cache, cross-gateway fallback, and credential rotation.
+- ModelCall ledger identity fields for gateway profile, profile hash, credential fingerprint/revision, model id/version/hash, upstream model id, provider, and fallback index.
+- Mock server gateway prefixes `/gateway-a/v1/chat/completions` and `/gateway-b/v1/chat/completions` for multi-gateway smoke.
+- `corepack pnpm smoke:model-catalog-multi-gateway-e2e`.
+
+Runtime Worker model-gateway configuration now uses DB-backed catalog data:
+
+Production/runtime smoke requirements:
 
 ```text
 PI_AGENT_MODE=model_gateway
-MODEL_GATEWAY_MODE=openai_compatible
-MODEL_GATEWAY_PROTOCOL=openai_chat_completions
-MODEL_GATEWAY_BASE_URL
-MODEL_GATEWAY_API_KEY
+MODEL_GATEWAY_CONFIG_SOURCE=db
+MODEL_CREDENTIAL_MASTER_KEY=<base64 32-byte key>
+MODEL_GATEWAY_CLIENT_CACHE_TTL_MS=60000
 ```
 
-Development/test mock gateway is only available through `infra/docker-compose.pi-smoke.yml` and `devtools/mock-server`.
-
-Local Ollama development/test profile:
-
-```text
-MODEL_GATEWAY_PROFILE_ID=local-ollama
-MODEL_GATEWAY_BASE_URL=http://host.docker.internal:11434/v1
-MODEL_GATEWAY_API_KEY=ollama
-MODEL_GATEWAY_MODEL=qwen2.5:7b-instruct-q4_K_M
-MODEL_GATEWAY_ALLOW_INSECURE_HTTP=true
-```
-
-`local-ollama`, insecure HTTP, and the placeholder `ollama` API key are rejected by production readiness.
+Deployment-level `MODEL_GATEWAY_BASE_URL`, `MODEL_GATEWAY_API_KEY`, `MODEL_GATEWAY_MODEL`, and `MODEL_GATEWAY_PROFILE_ID` are no longer production model-call facts for Runtime Worker. New model calls resolve through `model_definition` and `model_gateway_profile`. Development/test mock gateways are still only available through `infra/docker-compose.pi-smoke.yml` and `devtools/mock-server`.
 
 ## Smoke Commands
 

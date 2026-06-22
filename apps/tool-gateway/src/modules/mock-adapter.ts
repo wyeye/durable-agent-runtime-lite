@@ -29,5 +29,9 @@ export async function invokeMockAdapter(input: MockAdapterInput): Promise<unknow
     };
   }
 
-  throw new Error(`Unsupported mock tool: ${input.toolName}`);
+  return {
+    ok: true,
+    tool_name: input.toolName,
+    arguments_hash: createHash('sha256').update(JSON.stringify(input.args)).digest('hex').slice(0, 16),
+  };
 }

@@ -96,6 +96,39 @@ GET  /api/v1/tenant-agent-admissions/:admissionId
 
 BFF 会向下游透传 `x-user-id`、`x-tenant-id`、`x-roles`、`x-request-id`，下游不可用映射为 `503 DOWNSTREAM_UNAVAILABLE`。
 
+## Model Catalog API
+
+模型网关和模型目录由 control-plane 管理，不新增生产 app。API Key 只允许出现在写请求体中，响应、Audit metadata、日志和 OpenAPI response schema 不返回明文、ciphertext、IV 或 auth tag。
+
+模型网关：
+
+```text
+GET    /api/v1/model-gateways
+POST   /api/v1/model-gateways
+GET    /api/v1/model-gateways/:profileId
+PUT    /api/v1/model-gateways/:profileId
+POST   /api/v1/model-gateways/:profileId/publish
+POST   /api/v1/model-gateways/:profileId/disable
+POST   /api/v1/model-gateways/:profileId/rotate-credential
+POST   /api/v1/model-gateways/:profileId/test-connection
+```
+
+模型：
+
+```text
+GET    /api/v1/models
+POST   /api/v1/models
+GET    /api/v1/models/:modelId/versions
+GET    /api/v1/models/:modelId/versions/:version
+PUT    /api/v1/models/:modelId/versions/:version
+POST   /api/v1/models/:modelId/versions/:version/clone
+POST   /api/v1/models/:modelId/versions/:version/validate
+POST   /api/v1/models/:modelId/versions/:version/publish
+POST   /api/v1/models/:modelId/versions/:version/disable
+```
+
+`platform_admin` 可创建、发布、禁用、测试和轮换凭据；`capability_operator` 和 `auditor` 只能读取允许的元数据。连接测试使用已保存凭据调用 OpenAI-compatible `/v1/chat/completions`，只返回安全摘要。
+
 ## Evaluation API
 
 Evaluation Registry 和运行 API 仍通过 control-plane 暴露，不新增生产 app：
@@ -158,6 +191,8 @@ Fastify 在 production 同进程托管 Vite build 产物。前端页面均通过
 /registry/tools
 /registry/agents
 /registry/prompts
+/model-gateways
+/models
 /evaluation/datasets
 /evaluation/runs
 /evaluation/gates
@@ -182,7 +217,7 @@ x-request-id
 
 页面不硬编码 runtime-api / tool-gateway 地址，也不直接访问下游服务。Operations 页面必须通过 control-plane BFF。
 
-Registry 页面使用 JSON 编辑器管理 draft：
+Registry 页面和 ModelPolicy 页面使用可视化表单管理 draft，JSON 仅只读：
 
 - JSON parse 失败不提交。
 - `PUT` 自动携带当前 `revision` 作为 `expected_revision`。
@@ -190,6 +225,13 @@ Registry 页面使用 JSON 编辑器管理 draft：
 - `422` 展示 validate errors/warnings/dependency graph。
 - 发布、灰度、回滚、废弃、禁用均要求二次确认和 `release_note`。
 - gray 支持 tenant allowlist。
+- ModelPolicy target 必须通过精确已发布模型选择器生成 `model_ref`，不提供手填 `gateway_profile` / `model_id`。
+
+Model Catalog 页面：
+
+- `/model-gateways` 支持创建、发布、禁用、连接测试和凭据轮换，API Key 使用 Password 输入且保存后不回显。
+- `/models` 支持绑定已发布模型网关、创建/校验/发布/克隆/禁用模型版本。
+- 页面只展示凭据是否已配置、fingerprint 和 revision，不展示明文或密文字段。
 
 Human Task 页面：
 

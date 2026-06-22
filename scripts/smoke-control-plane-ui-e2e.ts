@@ -7,15 +7,20 @@ import type {
   CapabilityRelease,
   FlowSpec,
   HumanTaskListResponse,
+  ModelDefinitionRef,
   ModelPolicy,
   PromptDefinition,
   RouteSpec,
   RouterPreviewResponse,
   StandardResponse,
+  TenantPolicyModelRule,
+  TenantPolicyToolRule,
+  TenantRuntimePolicy,
   TaskRun,
   ToolManifest,
 } from '@dar/contracts';
-import { hashModelPolicy } from '@dar/db';
+import { closeDb, createDb, hashModelPolicy } from '@dar/db';
+import { ensureModelCatalogEntry } from './model-catalog-seed.js';
 
 const require = createRequire(import.meta.url);
 const workspaceRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -87,6 +92,9 @@ interface RegistryRecord<TSpec> {
 
 const controlPlaneUrl = trimTrailingSlash(process.env.CONTROL_PLANE_URL ?? 'http://localhost:3100');
 const runtimeApiUrl = trimTrailingSlash(process.env.RUNTIME_API_URL ?? 'http://localhost:3000');
+const databaseUrl =
+  process.env.DATABASE_URL ??
+  'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime';
 const tenantId = process.env.SMOKE_TENANT_ID ?? 'default';
 const userId = process.env.SMOKE_USER_ID ?? 'cp_ui_smoke_operator';
 const requestPrefix = `cp_ui_smoke_${Date.now()}`;
@@ -107,6 +115,18 @@ async function main(): Promise<void> {
       keywordV1: `${requestPrefix}-keyword-v1`,
       keywordV2: `${requestPrefix}-keyword-v2`,
     };
+    const db = createDb({ databaseUrl });
+    const catalog = await ensureModelCatalogEntry(db, {
+      profileId: `${requestPrefix}_profile`,
+      displayName: `Control-plane UI smoke model ${requestPrefix}`,
+      baseUrl: 'http://mock-server:4100',
+      authType: 'none',
+      modelId: `${requestPrefix}_model`,
+      upstreamModelId: `${requestPrefix}_model`,
+      provider: 'local-mock',
+      capabilities: ['text', 'tools', 'usage'],
+      operatorId: 'cp-ui-smoke',
+    }).finally(async () => closeDb(db));
 
     await page.goto(controlPlaneUrl);
     await page.waitForLoadState('networkidle');
@@ -123,8 +143,8 @@ async function main(): Promise<void> {
 
     const prompt = await createPromptThroughUi(page, ids);
     const tool = await createToolThroughUi(page, ids);
-    const modelPolicySpecV1 = modelPolicySpec(ids, 1);
-    const modelPolicy = await createModelPolicyThroughUi(page, ids);
+    const modelPolicySpecV1 = modelPolicySpec(ids, 1, catalog.model_ref);
+    const modelPolicy = await createModelPolicyThroughUi(page, ids, catalog.model_ref);
     await validateResource(page, 'prompts', ids.prompt, 1);
     await validateResource(page, 'tools', ids.tool, 1);
     await validateResource(page, 'model-policies', ids.modelPolicy, 1);
@@ -157,6 +177,7 @@ async function main(): Promise<void> {
       },
       adminHeaders,
     );
+    await publishTenantPolicyForUiSmoke(page, ids, catalog.model_ref, modelPolicySpecV1);
 
     await page.goto(`${controlPlaneUrl}/registry/flows`);
     await page.getByTestId('registry-keyword').fill(ids.flow);
@@ -222,7 +243,7 @@ async function main(): Promise<void> {
     await page.getByText('发布中心').first().waitFor({ timeout: 15_000 });
     await page.getByText(ids.route).first().waitFor({ timeout: 15_000 });
 
-    const l3Task = await startSeededL3Task(page);
+    const l3Task = await startSeededL3Task(page, ids.keywordV1);
     const pendingHumanTask = await waitForPendingHumanTask(page, l3Task.task_run_id);
     await page.goto(
       `${controlPlaneUrl}/human-tasks?task_run_id=${encodeURIComponent(l3Task.task_run_id)}`,
@@ -276,8 +297,8 @@ function toolSpec(ids: { tool: string }, version: string): ToolManifest {
     tool_name: ids.tool,
     version,
     description: 'Control-plane UI smoke mock tool.',
-    risk_level: 'L1',
-    side_effect: false,
+    risk_level: 'L3',
+    side_effect: true,
     adapter: { type: 'mock', endpoint_ref: 'mock/control-plane-ui-smoke' },
     input_schema: { type: 'object', properties: { query: { type: 'string' } } },
     output_schema: { type: 'object', properties: { ok: { type: 'boolean' } } },
@@ -286,20 +307,22 @@ function toolSpec(ids: { tool: string }, version: string): ToolManifest {
   };
 }
 
-function modelPolicySpec(ids: { modelPolicy: string }, version: number): ModelPolicy {
+function modelPolicySpec(
+  ids: { modelPolicy: string },
+  version: number,
+  modelRef: ModelDefinitionRef,
+): ModelPolicy {
   return {
     model_policy_id: ids.modelPolicy,
     version,
     status: 'draft',
-    protocol: 'dar_generate',
+    protocol: 'openai_chat_completions',
     targets: [
       {
         target_id: `${ids.modelPolicy}_primary`,
-        gateway_profile: 'local-ui-smoke',
-        model_id: 'deterministic:final_only',
+        model_ref: modelRef,
         priority: 0,
         enabled: true,
-        capabilities: ['text', 'tools', 'usage'],
       },
     ],
     retry_policy: {
@@ -372,6 +395,7 @@ function flowSpec(ids: { flow: string; tool: string; agent: string }, version: n
         type: 'tool',
         tool: ids.tool,
         tool_version: '1.0.0',
+        mode: 'preview_commit',
         input: { query: '${text}' },
       },
       { id: 'agent_step', type: 'agent', agent_id: ids.agent, input: { agent_version: 1 } },
@@ -402,6 +426,124 @@ function routeSpec(
   };
 }
 
+async function publishTenantPolicyForUiSmoke(
+  page: PageLike,
+  ids: { tool: string; modelPolicy: string },
+  modelRef: ModelDefinitionRef,
+  modelPolicy: ModelPolicy,
+): Promise<TenantRuntimePolicy> {
+  const versions = await getJson<Array<RegistryRecord<TenantRuntimePolicy>>>(
+    page,
+    `${controlPlaneUrl}/api/v1/tenant-runtime-policies/${encodeURIComponent(tenantId)}/versions`,
+    operatorHeaders,
+  );
+  const latestPublished = versions
+    .map((record) => record.spec)
+    .filter((policy) => policy.status === 'published')
+    .sort((left, right) => right.version - left.version)[0];
+  const nextVersion = Math.max(0, ...versions.map((entry) => entry.version)) + 1;
+  const requiredToolRule: TenantPolicyToolRule = {
+    tool_name: ids.tool,
+    versions: ['1.0.0'],
+    allowed_operations: ['invoke', 'preview', 'commit'],
+    max_risk_level: 'L3',
+  };
+  const requiredModelRules: TenantPolicyModelRule[] = [
+    { model_id: ids.modelPolicy },
+    { model_id: `${ids.modelPolicy}@${modelPolicy.version}` },
+    {
+      model_id: `${ids.modelPolicy}@${modelPolicy.version}#${hashModelPolicy(modelPolicy)}`,
+    },
+    { model_id: modelPolicy.targets[0]?.target_id ?? `${ids.modelPolicy}_primary` },
+    { model_id: modelRef.model_id },
+  ];
+  const base = latestPublished ?? minimalTenantPolicy(nextVersion);
+  const draftPolicy: TenantRuntimePolicy = {
+    ...base,
+    version: nextVersion,
+    status: 'draft',
+    allowed_tools: mergeToolRules(base.allowed_tools, requiredToolRule),
+    denied_tools: base.denied_tools.filter((rule) => rule.tool_name !== ids.tool),
+    allowed_models: mergeModelRules(base.allowed_models, requiredModelRules),
+    created_by: undefined,
+    updated_by: undefined,
+    published_by: undefined,
+    created_at: undefined,
+    updated_at: undefined,
+    published_at: undefined,
+  };
+  const draft = await postJson<RegistryRecord<TenantRuntimePolicy>>(
+    page,
+    `${controlPlaneUrl}/api/v1/tenant-runtime-policies`,
+    { spec: draftPolicy },
+    operatorHeaders,
+  );
+  await validateResource(page, 'tenant-runtime-policies', tenantId, draft.version);
+  await publishResource(
+    page,
+    'tenant-runtime-policies',
+    tenantId,
+    draft.version,
+    `Control-plane UI smoke tenant policy ${requestPrefix}`,
+  );
+  return getJson<RegistryRecord<TenantRuntimePolicy>>(
+    page,
+    `${controlPlaneUrl}/api/v1/tenant-runtime-policies/${encodeURIComponent(tenantId)}/versions/${draft.version}`,
+    operatorHeaders,
+  ).then((record) => record.spec);
+}
+
+function minimalTenantPolicy(version: number): TenantRuntimePolicy {
+  return {
+    tenant_id: tenantId,
+    version,
+    status: 'draft',
+    allowed_tools: [],
+    denied_tools: [],
+    allowed_models: [],
+    denied_models: [],
+    allowed_handoffs: [],
+    denied_handoffs: [],
+    budget_cap: {
+      max_segments: 6,
+      max_model_turns: 12,
+      max_tool_calls: 6,
+      max_input_tokens: 8000,
+      max_output_tokens: 8000,
+      max_total_tokens: 12000,
+      max_duration_ms: 600000,
+      max_handoffs: 2,
+      max_context_bytes: 524288,
+    },
+    max_concurrent_agent_runs: 2,
+    revision: 1,
+  };
+}
+
+function mergeToolRules(
+  existing: TenantPolicyToolRule[],
+  required: TenantPolicyToolRule,
+): TenantPolicyToolRule[] {
+  return [
+    ...existing.filter((rule) => rule.tool_name !== required.tool_name),
+    required,
+  ];
+}
+
+function mergeModelRules(
+  existing: TenantPolicyModelRule[],
+  required: TenantPolicyModelRule[],
+): TenantPolicyModelRule[] {
+  const byId = new Map<string, TenantPolicyModelRule>();
+  for (const rule of existing) {
+    byId.set(rule.model_id, rule);
+  }
+  for (const rule of required) {
+    byId.set(rule.model_id, rule);
+  }
+  return [...byId.values()];
+}
+
 async function createPromptThroughUi(page: PageLike, ids: { prompt: string }): Promise<RegistryRecord<PromptDefinition>> {
   const spec = promptSpec(ids, 1);
   await openCreateDraft(page, 'prompts');
@@ -423,28 +565,43 @@ async function createToolThroughUi(page: PageLike, ids: { tool: string }): Promi
   await openCreateDraft(page, 'tools');
   await page.getByTestId('vc-tool-name').fill(spec.tool_name);
   await selectByTestId(page, 'vc-tool-risk-level', spec.risk_level);
+  await page.getByTestId('vc-tool-side-effect').click();
   await page.getByTestId('vc-tool-endpoint-ref').fill(spec.adapter.endpoint_ref ?? '');
   await page.getByTestId('draft-submit').click();
   await page.getByText(spec.tool_name).first().waitFor({ timeout: 15_000 });
   const record = await getRegistryVersion<ToolManifest>(page, 'tools', spec.tool_name, 1);
   assert.equal(record.spec.tool_name, spec.tool_name);
   assert.equal(record.spec.risk_level, spec.risk_level);
+  assert.equal(record.spec.side_effect, true);
   return record;
 }
 
-async function createModelPolicyThroughUi(page: PageLike, ids: { modelPolicy: string }): Promise<RegistryRecord<ModelPolicy>> {
-  const spec = modelPolicySpec(ids, 1);
+async function createModelPolicyThroughUi(
+  page: PageLike,
+  ids: { modelPolicy: string },
+  modelRef: ModelDefinitionRef,
+): Promise<RegistryRecord<ModelPolicy>> {
+  const spec = modelPolicySpec(ids, 1, modelRef);
   await openCreateDraft(page, 'model-policies');
   await page.getByTestId('vc-model-policy-id').fill(spec.model_policy_id);
   await page.getByTestId('vc-model-target-id').fill(spec.targets[0]?.target_id ?? 'primary');
-  await page.getByTestId('vc-model-target-gateway-profile').fill(spec.targets[0]?.gateway_profile ?? 'local-ui-smoke');
-  await page.getByTestId('vc-model-target-model-id').fill(spec.targets[0]?.model_id ?? 'deterministic:final_only');
+  await selectExactByTestId(
+    page,
+    'vc-model-target-model-ref',
+    `${modelRef.model_id}@${modelRef.version}`,
+    modelRef.model_id,
+  );
   await page.getByTestId('vc-model-target-add').click();
   await page.getByTestId('draft-submit').click();
   await page.getByText(spec.model_policy_id).first().waitFor({ timeout: 15_000 });
   const record = await getRegistryVersion<ModelPolicy>(page, 'model-policies', spec.model_policy_id, 1);
   assert.equal(record.spec.model_policy_id, spec.model_policy_id);
-  assert.ok(record.spec.targets.some((target) => target.target_id === spec.targets[0]?.target_id));
+  assert.ok(record.spec.targets.some((target) =>
+    target.target_id === spec.targets[0]?.target_id
+    && target.model_ref.model_id === modelRef.model_id
+    && target.model_ref.version === modelRef.version
+    && target.model_ref.model_hash === modelRef.model_hash,
+  ));
   return record;
 }
 
@@ -479,6 +636,7 @@ async function createFlowThroughUi(
   await page.getByTestId('vc-flow-add-step-tool').click();
   await page.getByTestId('vc-flow-step-edit-1').click();
   await selectByTestId(page, 'vc-flow-step-tool-ref', `${ids.tool}@1.0.0`);
+  await page.getByTestId('vc-flow-step-tool-mode').fill('preview_commit');
   await page.getByTestId('vc-flow-step-done').click();
   await page.getByTestId('vc-flow-add-step-agent').click();
   await page.getByTestId('vc-flow-step-edit-2').click();
@@ -488,7 +646,7 @@ async function createFlowThroughUi(
   await page.getByTestId('draft-submit').click();
   await page.getByText(spec.flow_id).first().waitFor({ timeout: 15_000 });
   const record = await getRegistryVersion<FlowSpec>(page, 'flows', spec.flow_id, 1);
-  assert.ok(record.spec.steps.some((step) => step.type === 'tool' && step.tool === ids.tool));
+  assert.ok(record.spec.steps.some((step) => step.type === 'tool' && step.tool === ids.tool && step.mode === 'preview_commit'));
   assert.ok(record.spec.steps.some((step) => step.type === 'agent' && step.agent_id === ids.agent));
   return record;
 }
@@ -528,11 +686,22 @@ async function selectByTestId(page: PageLike, testId: string, value: string): Pr
   await select.click();
   const fallback = value.includes('@') ? value.split('@')[0] : value;
   await select.locator('input').fill(value).catch(() => undefined);
+  await page.getByText(fallback ?? value, { exact: false }).last().waitFor({ timeout: 15_000 }).catch(() => undefined);
   await page.locator(`.ant-select-item-option[title="${cssString(value)}"]`).last().click().catch(async () => {
-    await page.getByText(value, { exact: false }).last().click().catch(async () => {
-      await page.getByText(fallback ?? value, { exact: false }).last().click();
+    await page.locator(`.ant-select-item-option:has-text("${cssString(fallback ?? value)}")`).last().click().catch(async () => {
+      await page.getByText(value, { exact: false }).last().click().catch(async () => {
+        await page.getByText(fallback ?? value, { exact: false }).last().click();
+      });
     });
   });
+}
+
+async function selectExactByTestId(page: PageLike, testId: string, value: string, text: string): Promise<void> {
+  const select = page.getByTestId(testId);
+  await select.click();
+  await select.locator('input').fill(value).catch(() => undefined);
+  await page.getByText(text, { exact: false }).last().waitFor({ timeout: 15_000 });
+  await page.getByText(text, { exact: false }).last().click();
 }
 
 function cssString(value: string): string {
@@ -633,6 +802,7 @@ async function previewRoute(page: PageLike, keyword: string): Promise<RouterPrev
 
 async function startSeededL3Task(
   page: PageLike,
+  keyword: string,
 ): Promise<{ task_run_id: string; workflow_id: string }> {
   return runtimePostJson<{ task_run_id: string; workflow_id: string }>(
     page,
@@ -641,7 +811,8 @@ async function startSeededL3Task(
       tenant_id: tenantId,
       user_id: userId,
       request_id: `${requestPrefix}_l3_task`,
-      input: { text: 'db-smoke UI human approval' },
+      channel: 'api',
+      input: { text: `please run ${keyword} with approval` },
     },
   );
 }

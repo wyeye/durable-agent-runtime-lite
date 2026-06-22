@@ -1,3 +1,4 @@
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 
 export const authContextSchema = z.object({
@@ -243,6 +244,91 @@ export function requireControlPlanePermission(auth: AuthContext, permission: Con
   if (!hasControlPlanePermission(auth, permission)) {
     throw new AuthError('FORBIDDEN', 'Permission denied', { permission, roles: auth.roles });
   }
+}
+
+export interface ModelCredentialCiphertext {
+  ciphertext: string;
+  iv: string;
+  auth_tag: string;
+  credential_fingerprint: string;
+  credential_revision: number;
+}
+
+export interface ModelCredentialEncryptInput {
+  profile_id: string;
+  api_key: string;
+  credential_revision: number;
+}
+
+export interface ModelCredentialDecryptInput {
+  profile_id: string;
+  credential_revision: number;
+  ciphertext: string;
+  iv: string;
+  auth_tag: string;
+}
+
+export class ModelCredentialCipher {
+  private readonly key: Buffer;
+
+  constructor(masterKeyBase64: string) {
+    this.key = parseModelCredentialMasterKey(masterKeyBase64);
+  }
+
+  encrypt(input: ModelCredentialEncryptInput): ModelCredentialCiphertext {
+    if (!input.api_key) {
+      throw new Error('MODEL_CREDENTIAL_EMPTY');
+    }
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', this.key, iv);
+    cipher.setAAD(credentialAad(input.profile_id, input.credential_revision));
+    const ciphertext = Buffer.concat([
+      cipher.update(input.api_key, 'utf8'),
+      cipher.final(),
+    ]);
+    const authTag = cipher.getAuthTag();
+    return {
+      ciphertext: ciphertext.toString('base64'),
+      iv: iv.toString('base64'),
+      auth_tag: authTag.toString('base64'),
+      credential_fingerprint: modelCredentialFingerprint(input.api_key),
+      credential_revision: input.credential_revision,
+    };
+  }
+
+  decrypt(input: ModelCredentialDecryptInput): string {
+    const decipher = createDecipheriv(
+      'aes-256-gcm',
+      this.key,
+      Buffer.from(input.iv, 'base64'),
+    );
+    decipher.setAAD(credentialAad(input.profile_id, input.credential_revision));
+    decipher.setAuthTag(Buffer.from(input.auth_tag, 'base64'));
+    try {
+      return Buffer.concat([
+        decipher.update(Buffer.from(input.ciphertext, 'base64')),
+        decipher.final(),
+      ]).toString('utf8');
+    } catch (error) {
+      throw new Error('MODEL_CREDENTIAL_DECRYPT_FAILED', { cause: error });
+    }
+  }
+}
+
+export function parseModelCredentialMasterKey(value: string): Buffer {
+  const key = Buffer.from(value, 'base64');
+  if (key.length !== 32 || !constantTimeEqual(key.toString('base64'), value)) {
+    throw new Error('MODEL_CREDENTIAL_MASTER_KEY_INVALID');
+  }
+  return key;
+}
+
+export function modelCredentialFingerprint(apiKey: string): string {
+  return createHash('sha256').update(apiKey).digest('hex').slice(0, 12);
+}
+
+function credentialAad(profileId: string, credentialRevision: number): Buffer {
+  return Buffer.from(`model_gateway_profile:${profileId}:credential_revision:${credentialRevision}`, 'utf8');
 }
 
 export function permissionsForRole(role: string): ControlPlanePermission[] {

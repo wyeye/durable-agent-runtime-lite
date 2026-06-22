@@ -46,6 +46,7 @@
     "smoke:model-gateway-live-final-e2e": "LIVE_MODEL_GATEWAY_SCENARIO=final tsx scripts/smoke-model-gateway-live.ts",
     "smoke:model-gateway-live-readonly-e2e": "LIVE_MODEL_GATEWAY_SCENARIO=readonly tsx scripts/smoke-model-gateway-live.ts",
     "smoke:model-gateway-live-l3-e2e": "LIVE_MODEL_GATEWAY_SCENARIO=l3 tsx scripts/smoke-model-gateway-live.ts",
+    "smoke:model-catalog-multi-gateway-e2e": "tsx scripts/smoke-model-catalog-multi-gateway-e2e.ts",
     "ollama:probe": "tsx scripts/probe-ollama-model.ts",
     "runtime:assert-containerized": "tsx scripts/assert-containerized-runtime.ts",
     "smoke:ollama-containerized-e2e": "tsx scripts/smoke-ollama-containerized-e2e.ts",

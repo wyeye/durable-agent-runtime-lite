@@ -51,6 +51,9 @@ Deferred Pi tools 只能产生 proposal，不得持有 Tool Gateway、DB、Tempo
 ## AR-1.1 运行时要求
 
 - 每个 AgentRun 必须使用不可变 `agent_execution_plan_ref` 和 plan hash。
+- `PI_AGENT_MODE=model_gateway` 时，模型调用必须从 AgentExecutionPlan 的 `resolved_model_policy.targets[].model_ref` 出发，经 DB 精确解析 ModelDefinition 和 ModelGatewayProfile；不得回退到部署级 `MODEL_GATEWAY_BASE_URL` / `MODEL_GATEWAY_API_KEY` / `MODEL_GATEWAY_MODEL`。
+- Client cache key 必须包含 `profile_id`、`config_hash` 和 `credential_revision`；凭据轮换后下一次调用自动使用新 credential revision。
+- ModelCall / Attempt ledger 必须记录 gateway profile、profile config hash、credential fingerprint/revision、model id/version/hash、upstream model id 和 provider，不得记录 API Key、Authorization、ciphertext、IV、auth tag 或 raw provider response。
 - Segment 之间必须累计 `AgentBudgetLedger`。
 - Agent tool idempotency key 使用 `agent:{agent_run_id}:segment:{segment_index}:call:{call_id}:{operation}`。
 - Context Snapshot 使用执行计划的 `max_context_bytes`。

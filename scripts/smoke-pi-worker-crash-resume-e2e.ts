@@ -8,13 +8,16 @@ import type {
   AgentRunRecord,
   AgentStepRecord,
   HumanTask,
+  ModelPolicy,
   StandardResponse,
   TaskRun,
   ToolCallLog,
 } from '@dar/contracts';
+import { tenantRuntimePolicySchema } from '@dar/contracts';
 import {
   AgentExecutionPlanRepository,
   ModelPolicyRepository,
+  TenantRuntimePolicyRepository,
   ToolManifestRepository,
   closeDb,
   createDb,
@@ -23,6 +26,7 @@ import {
   upsertAgentSpec,
   upsertPromptDefinition,
 } from '@dar/db';
+import { ensureModelCatalogEntry } from './model-catalog-seed.js';
 
 type Db = ReturnType<typeof createDb>;
 type Dateish = Date | string;
@@ -148,7 +152,7 @@ const runtimeWorkerUrl = trimTrailingSlash(
 const databaseUrl =
   process.env.DATABASE_URL ??
   'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime';
-const tenantId = process.env.SMOKE_TENANT_ID ?? 'default';
+const tenantId = process.env.SMOKE_TENANT_ID ?? `pi_crash_${Date.now()}`;
 const userId = process.env.SMOKE_USER_ID ?? 'pi_crash_smoke_user';
 const timeoutMs = Number(process.env.SMOKE_TIMEOUT_MS ?? 180_000);
 const composeFiles = (
@@ -162,12 +166,14 @@ const runtimeHeaders = authHeaders(`${requestPrefix}_runtime`);
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const resultFile = process.env.PI_CRASH_RESULT_FILE;
 const dockerCommandTimeoutMs = Number(process.env.PI_CRASH_DOCKER_COMMAND_TIMEOUT_MS ?? 120_000);
+const workerPiAgentMode = process.env.PI_AGENT_MODE ?? process.env.PI_SMOKE_MODE ?? 'deterministic';
 let workerRestartNeeded = false;
 
 async function main(): Promise<void> {
   const db = createDb({ databaseUrl });
   try {
     await checkHealth(`${runtimeApiUrl}/healthz`, 'runtime-api');
+    await startWorker();
     await checkReady(`${runtimeWorkerUrl}/readyz`, 'runtime-worker');
     const waitingUser = await runWaitingUserRecovery(db);
     const l3 = await runL3Recovery(db);
@@ -399,9 +405,16 @@ async function seedAgentPlan(db: Db, scenario: 'need_user' | 'l3_tool'): Promise
   const agentId = `pi_crash_agent_${scenario}`;
   const displayPolicy = `deterministic:${scenario}`;
   const modelPolicyId = `pi_crash_model_${scenario}`;
-  const publishedModelPolicy = await seedModelPolicy(db, modelPolicyId, displayPolicy);
+  const catalogModelId = `${requestPrefix}_${scenario}_model`;
+  const publishedModelPolicy = await seedModelPolicy(
+    db,
+    modelPolicyId,
+    displayPolicy,
+    catalogModelId,
+  );
   const modelPolicyHash = hashModelPolicy(publishedModelPolicy);
   await seedTools(db);
+  await seedTenantPolicy(db, publishedModelPolicy, displayPolicy);
   await upsertPromptDefinition(
     db,
     {
@@ -444,8 +457,24 @@ async function seedAgentPlan(db: Db, scenario: 'need_user' | 'l3_tool'): Promise
   return plan.execution_plan_ref;
 }
 
-async function seedModelPolicy(db: Db, modelPolicyId: string, displayPolicy: string) {
+async function seedModelPolicy(
+  db: Db,
+  modelPolicyId: string,
+  displayPolicy: string,
+  catalogModelId: string,
+) {
   const repository = new ModelPolicyRepository(db);
+  const catalog = await ensureModelCatalogEntry(db, {
+    profileId: `${catalogModelId}_gateway`,
+    displayName: `Deterministic ${displayPolicy}`,
+    baseUrl: 'http://mock-server:4100',
+    authType: 'none',
+    modelId: catalogModelId,
+    upstreamModelId: displayPolicy,
+    provider: 'local-mock',
+    capabilities: ['text', 'tools', 'usage'],
+    operatorId: 'pi-worker-crash-smoke',
+  });
   const existing = await repository.getByIdAndVersion(modelPolicyId, 1, { tenantId });
   if (existing?.status === 'published' || existing?.status === 'gray') {
     return existing;
@@ -460,15 +489,13 @@ async function seedModelPolicy(db: Db, modelPolicyId: string, displayPolicy: str
       model_policy_id: modelPolicyId,
       version: 1,
       status: 'draft',
-      protocol: 'dar_generate',
+      protocol: 'openai_chat_completions',
       targets: [
         {
           target_id: `${modelPolicyId}_primary`,
-          gateway_profile: 'local-deterministic',
-          model_id: displayPolicy,
+          model_ref: catalog.model_ref,
           priority: 0,
           enabled: true,
-          capabilities: ['text', 'tools', 'usage'],
         },
       ],
       retry_policy: {
@@ -504,6 +531,72 @@ async function seedModelPolicy(db: Db, modelPolicyId: string, displayPolicy: str
     tenantId,
     operatorId: 'pi-crash-smoke',
     releaseNote: `pi crash smoke ${displayPolicy}`,
+  });
+}
+
+async function seedTenantPolicy(
+  db: Db,
+  modelPolicy: ModelPolicy,
+  displayPolicy: string,
+): Promise<void> {
+  const repository = new TenantRuntimePolicyRepository(db);
+  const modelIds = new Set<string>([displayPolicy, modelPolicy.model_policy_id]);
+  for (const target of modelPolicy.targets) {
+    modelIds.add(target.model_ref.model_id);
+  }
+  const existing = await repository.getLatestPublished(tenantId);
+  if (existing) {
+    for (const rule of existing.allowed_models) {
+      modelIds.add(rule.model_id);
+    }
+    const requiredAllowed = [displayPolicy, modelPolicy.model_policy_id].every((modelId) =>
+      existing.allowed_models.some((rule) => rule.model_id === modelId),
+    ) && modelPolicy.targets.every((target) =>
+      existing.allowed_models.some((rule) => rule.model_id === target.model_ref.model_id),
+    );
+    if (requiredAllowed) {
+      return;
+    }
+  }
+  const policy = tenantRuntimePolicySchema.parse({
+    tenant_id: tenantId,
+    version: (existing?.version ?? 0) + 1,
+    status: 'draft',
+    allowed_tools: [
+      {
+        tool_name: 'knowledge.search',
+        versions: ['1.0.0'],
+        allowed_operations: ['invoke'],
+        max_risk_level: 'L1',
+      },
+      {
+        tool_name: 'record.write.mock',
+        versions: ['1.0.0'],
+        allowed_operations: ['invoke', 'preview', 'commit'],
+        max_risk_level: 'L3',
+      },
+    ],
+    denied_tools: [],
+    allowed_models: [...modelIds].map((modelId) => ({ model_id: modelId })),
+    denied_models: [],
+    allowed_handoffs: [],
+    denied_handoffs: [],
+    budget_cap: {
+      max_segments: 4,
+      max_model_turns: 4,
+      max_tool_calls: 2,
+      max_total_tokens: 4000,
+      max_duration_ms: 300000,
+      max_handoffs: 0,
+      max_context_bytes: 262144,
+    },
+    max_concurrent_agent_runs: 2,
+  });
+  await repository.createDraft(policy, { tenantId, operatorId: 'pi-crash-smoke' });
+  await repository.publish(tenantId, policy.version, {
+    tenantId,
+    operatorId: 'pi-crash-smoke',
+    releaseNote: 'pi worker crash smoke tenant policy',
   });
 }
 
@@ -553,7 +646,7 @@ async function killWorker(): Promise<void> {
 }
 
 async function startWorker(): Promise<void> {
-  await dockerCompose(['up', '-d', 'runtime-worker']);
+  await dockerCompose(['up', '-d', '--force-recreate', 'runtime-worker']);
   workerRestartNeeded = false;
 }
 
@@ -1011,7 +1104,7 @@ async function runCommand(
     const child = spawn(command, args, {
       cwd: repoRoot,
       stdio: options.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
-      env: process.env,
+      env: { ...process.env, PI_AGENT_MODE: workerPiAgentMode },
     });
     const timeout =
       options.timeoutMs && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0

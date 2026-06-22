@@ -77,6 +77,16 @@ x-request-id
 - rollback 选择目标版本；rollback 不修改历史 spec 内容。
 - 版本对比使用两侧格式化 JSON，暂不引入重型 diff 依赖。
 - Flow 可视化 canvas 只表达现有 `steps` 数组顺序执行语义，不保存节点坐标，也不引入任意 DAG。
+- ModelPolicy target 必须使用精确已发布 ModelDefinition 选择器生成 `model_ref`；不显示或提交旧 `gateway_profile` / `model_id` 手工输入。
+- JSON 视图只读，不允许通过粘贴 JSON 绕过模型选择器。
+
+## Model Catalog UI 规则
+
+- `/model-gateways` 和 `/models` 只调用 control-plane 同源 `/api/v1/model-gateways`、`/api/v1/models`。
+- `platform_admin` 可创建、发布、禁用、测试连接和轮换凭据；`capability_operator`、`auditor` 不显示凭据写入或轮换操作。
+- API Key 使用 Password 输入，保存后不回填、不提供查看按钮，也不把 ciphertext、IV、auth tag 放入只读 JSON。
+- 模型必须绑定已发布 Gateway Profile；ModelPolicy 只能选择已发布模型版本。
+- 列表和详情页只展示凭据配置状态、fingerprint 和 revision。
 
 ## 运行查询 UI 规则
 
@@ -123,8 +133,9 @@ corepack pnpm smoke:temporal-db-e2e
 corepack pnpm smoke:control-plane-api-e2e
 corepack pnpm smoke:control-plane-ui-e2e
 corepack pnpm smoke:evaluation-ui-e2e
+corepack pnpm smoke:model-catalog-multi-gateway-e2e
 ```
 
-UI smoke 需要 control-plane、runtime-api、runtime-worker、tool-gateway、PostgreSQL、Temporal 已运行。它会在浏览器中设置开发身份，验证页面渲染，创建并发布 Registry 资源，执行 router preview、rollback，并通过 Human Task 页面 approve 一个 L3 pending task。
+UI smoke 需要 control-plane、runtime-api、runtime-worker、tool-gateway、PostgreSQL、Temporal 已运行。它会在浏览器中设置开发身份，验证页面渲染，创建并发布 Registry 资源和 Model Catalog 资源，执行 router preview、rollback，并通过 Human Task 页面 approve 一个 L3 pending task。
 
 Evaluation UI smoke 还需要 mock-server 和 `PI_AGENT_MODE=model_gateway` 的 runtime-worker。它通过浏览器完成 Dataset/Case、Gate Policy、Run、Gate Decision、Registry Gate Card 和 Override/RBAC 操作；setup 只准备 UI 当前不负责创建的 immutable candidate snapshot / execution plan。当前可写配置 smoke 不应驱动 `json-editor-textarea`。

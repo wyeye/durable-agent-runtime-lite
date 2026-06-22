@@ -17,6 +17,10 @@ import type {
   ModelCallAttemptStatus,
   ModelCallRecord,
   ModelCallStatus,
+  ModelDefinition,
+  ModelDefinitionStatus,
+  ModelGatewayProfile,
+  ModelGatewayProfileStatus,
   ModelPolicy,
   ModelPolicyStatus,
   ModelUsage,
@@ -53,7 +57,9 @@ import {
   idempotencyRecordSchema,
   modelCallAttemptSchema,
   modelCallRecordSchema,
+  modelDefinitionSchema,
   modelFallbackPolicySchema,
+  modelGatewayProfileSchema,
   modelPolicySchema,
   modelRequestPolicySchema,
   modelRetryPolicySchema,
@@ -76,6 +82,7 @@ import {
   type FlowExecutionPlanAgent,
   type FlowExecutionPlanTool,
   type ModelTarget,
+  type ResolvedModelTarget,
   type RouteResult,
   type WorkflowStartResponse,
 } from '@dar/contracts';
@@ -95,6 +102,8 @@ import type {
   IdempotencyRecordTable,
   ModelCallAttemptTable,
   ModelCallLogTable,
+  ModelDefinitionTable,
+  ModelGatewayProfileTable,
   ModelPolicyTable,
   PromptDefinitionTable,
   TaskRunTable,
@@ -284,6 +293,76 @@ export interface ModelPolicyListOptions extends RepositoryTenantOptions {
   offset?: number;
 }
 
+export interface ModelGatewayProfileListOptions {
+  status?: ModelGatewayProfileStatus;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ModelGatewayProfileWriteOptions {
+  operatorId: string;
+}
+
+export interface ModelGatewayProfileCreateInput extends ModelGatewayProfileWriteOptions {
+  profile_id: string;
+  display_name: string;
+  protocol: ModelGatewayProfile['protocol'];
+  base_url: string;
+  auth_type: ModelGatewayProfile['auth_type'];
+  credential?: {
+    ciphertext: string;
+    iv: string;
+    auth_tag: string;
+    credential_fingerprint: string;
+    credential_revision: number;
+  };
+}
+
+export interface ModelGatewayProfileUpdateDraftInput extends ModelGatewayProfileWriteOptions {
+  expectedRevision: number;
+  patch: Partial<Pick<ModelGatewayProfile, 'display_name' | 'protocol' | 'base_url' | 'auth_type'>>;
+  credential?: ModelGatewayProfileCreateInput['credential'];
+}
+
+export interface ModelGatewayCredentialRotateInput extends ModelGatewayProfileWriteOptions {
+  expectedCredentialRevision?: number;
+  credential: NonNullable<ModelGatewayProfileCreateInput['credential']>;
+}
+
+export interface ModelDefinitionListOptions {
+  modelId?: string;
+  status?: ModelDefinitionStatus;
+  gatewayProfileId?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ModelDefinitionWriteOptions {
+  operatorId: string;
+}
+
+export interface ModelDefinitionCreateInput extends ModelDefinitionWriteOptions {
+  model: Omit<
+    ModelDefinition,
+    | 'status'
+    | 'revision'
+    | 'model_hash'
+    | 'gateway_profile_config_hash'
+    | 'created_by'
+    | 'updated_by'
+    | 'published_by'
+    | 'created_at'
+    | 'updated_at'
+    | 'published_at'
+    | 'disabled_at'
+  >;
+}
+
+export interface ModelDefinitionUpdateDraftInput extends ModelDefinitionWriteOptions {
+  expectedRevision: number;
+  model: Partial<Omit<ModelDefinitionCreateInput['model'], 'model_id' | 'version'>>;
+}
+
 export interface ModelPolicyWriteOptions extends RepositoryTenantOptions {
   operatorId: string;
   version?: number;
@@ -330,6 +409,19 @@ export interface ModelCallCreateOrGetInput {
   fallback_index?: number;
 }
 
+export interface ModelCallTargetIdentity {
+  targetId: string;
+  provider?: string;
+  modelId: string;
+  modelVersion: number;
+  modelHash: string;
+  gatewayProfileId: string;
+  gatewayProfileConfigHash: string;
+  credentialFingerprint?: string;
+  credentialRevision: number;
+  upstreamModelId: string;
+}
+
 export type ModelCallCreateOrGetResult =
   | { decision: 'created'; record: ModelCallRecord }
   | { decision: 'existing'; record: ModelCallRecord }
@@ -358,6 +450,13 @@ export interface ModelCallAttemptStartInput {
   target_id: string;
   provider?: string;
   model_id: string;
+  model_version: number;
+  model_hash: string;
+  gateway_profile_id: string;
+  gateway_profile_config_hash: string;
+  credential_fingerprint?: string;
+  credential_revision: number;
+  upstream_model_id: string;
 }
 
 export interface ModelCallAttemptCompleteInput {
@@ -1818,6 +1917,483 @@ export class ToolManifestRepository {
   }
 }
 
+export class ModelGatewayProfileRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async list(options: ModelGatewayProfileListOptions = {}): Promise<ModelGatewayProfile[]> {
+    let query = this.db.selectFrom('model_gateway_profile').selectAll();
+    if (options.status) {
+      query = query.where('status', '=', options.status);
+    }
+    const rows = await query
+      .orderBy('profile_id', 'asc')
+      .limit(limit(options.limit))
+      .offset(offset(options.offset))
+      .execute();
+    return rows.map(mapModelGatewayProfile);
+  }
+
+  async get(profileId: string): Promise<ModelGatewayProfile | undefined> {
+    const row = await this.db
+      .selectFrom('model_gateway_profile')
+      .selectAll()
+      .where('profile_id', '=', profileId)
+      .executeTakeFirst();
+    return row ? mapModelGatewayProfile(row) : undefined;
+  }
+
+  async getCredential(profileId: string): Promise<Selectable<ModelGatewayProfileTable> | undefined> {
+    return this.db
+      .selectFrom('model_gateway_profile')
+      .selectAll()
+      .where('profile_id', '=', profileId)
+      .executeTakeFirst();
+  }
+
+  async createDraft(input: ModelGatewayProfileCreateInput): Promise<ModelGatewayProfile> {
+    const parsed = modelGatewayProfileSchema.parse({
+      ...input,
+      status: 'draft',
+      config_hash: hashModelGatewayProfileConfig(input),
+      revision: 1,
+      credential_configured: Boolean(input.credential),
+      credential_fingerprint: input.credential?.credential_fingerprint,
+      credential_revision: input.credential?.credential_revision ?? 0,
+    });
+    const row: Insertable<ModelGatewayProfileTable> = {
+      profile_id: parsed.profile_id,
+      display_name: parsed.display_name,
+      protocol: parsed.protocol,
+      base_url: parsed.base_url,
+      auth_type: parsed.auth_type,
+      status: 'draft',
+      config_hash: parsed.config_hash,
+      revision: 1,
+      credential_ciphertext: input.credential?.ciphertext ?? null,
+      credential_iv: input.credential?.iv ?? null,
+      credential_auth_tag: input.credential?.auth_tag ?? null,
+      credential_fingerprint: parsed.credential_fingerprint ?? null,
+      credential_revision: parsed.credential_revision,
+      created_by: input.operatorId,
+      updated_by: input.operatorId,
+      updated_at: new Date(),
+      published_at: null,
+      disabled_at: null,
+    };
+    assertGatewayCredentialState(row);
+    const saved = await this.db
+      .insertInto('model_gateway_profile')
+      .values(row)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return mapModelGatewayProfile(saved);
+  }
+
+  async updateDraft(profileId: string, input: ModelGatewayProfileUpdateDraftInput): Promise<ModelGatewayProfile> {
+    const existing = await this.getCredential(profileId);
+    if (!existing) {
+      throw new RegistryRepositoryError('MODEL_GATEWAY_PROFILE_NOT_FOUND', 'Model Gateway Profile not found', { profile_id: profileId });
+    }
+    if (existing.status !== 'draft') {
+      throw new RegistryRepositoryError('MODEL_GATEWAY_PROFILE_IMMUTABLE', 'Only draft Model Gateway Profiles can be updated', { profile_id: profileId, status: existing.status });
+    }
+    if (existing.revision !== input.expectedRevision) {
+      throw new RegistryRepositoryError('REGISTRY_OPTIMISTIC_LOCK_CONFLICT', 'Model Gateway Profile revision conflict', {
+        profile_id: profileId,
+        expected_revision: input.expectedRevision,
+        actual_revision: existing.revision,
+      });
+    }
+    const next = {
+      profile_id: existing.profile_id,
+      display_name: input.patch.display_name ?? existing.display_name,
+      protocol: input.patch.protocol ?? existing.protocol,
+      base_url: input.patch.base_url ?? existing.base_url,
+      auth_type: input.patch.auth_type ?? existing.auth_type,
+    };
+    const authNone = next.auth_type === 'none';
+    const candidate = {
+      ...existing,
+      ...next,
+      config_hash: hashModelGatewayProfileConfig(next),
+      credential_ciphertext: authNone ? null : (input.credential?.ciphertext ?? existing.credential_ciphertext),
+      credential_iv: authNone ? null : (input.credential?.iv ?? existing.credential_iv),
+      credential_auth_tag: authNone ? null : (input.credential?.auth_tag ?? existing.credential_auth_tag),
+      credential_fingerprint: authNone ? null : (input.credential?.credential_fingerprint ?? existing.credential_fingerprint),
+      credential_revision: authNone ? 0 : (input.credential?.credential_revision ?? existing.credential_revision),
+    };
+    assertGatewayCredentialState(candidate);
+    const row = await this.db
+      .updateTable('model_gateway_profile')
+      .set({
+        display_name: next.display_name,
+        protocol: next.protocol,
+        base_url: next.base_url,
+        auth_type: next.auth_type,
+        config_hash: candidate.config_hash,
+        revision: sql<number>`revision + 1`,
+        updated_by: input.operatorId,
+        updated_at: new Date(),
+        credential_ciphertext: candidate.credential_ciphertext,
+        credential_iv: candidate.credential_iv,
+        credential_auth_tag: candidate.credential_auth_tag,
+        credential_fingerprint: candidate.credential_fingerprint,
+        credential_revision: candidate.credential_revision,
+      })
+      .where('profile_id', '=', profileId)
+      .where('revision', '=', input.expectedRevision)
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new RegistryRepositoryError('REGISTRY_OPTIMISTIC_LOCK_CONFLICT', 'Model Gateway Profile revision conflict', { profile_id: profileId });
+    }
+    return mapModelGatewayProfile(row);
+  }
+
+  async publish(profileId: string, options: ModelGatewayProfileWriteOptions & { expectedRevision?: number }): Promise<ModelGatewayProfile> {
+    const existing = await this.getCredential(profileId);
+    if (!existing) {
+      throw new RegistryRepositoryError('MODEL_GATEWAY_PROFILE_NOT_FOUND', 'Model Gateway Profile not found', { profile_id: profileId });
+    }
+    if (options.expectedRevision !== undefined && existing.revision !== options.expectedRevision) {
+      throw new RegistryRepositoryError('REGISTRY_OPTIMISTIC_LOCK_CONFLICT', 'Model Gateway Profile revision conflict', {
+        profile_id: profileId,
+        expected_revision: options.expectedRevision,
+        actual_revision: existing.revision,
+      });
+    }
+    assertGatewayCredentialState(existing);
+    const row = await this.db
+      .updateTable('model_gateway_profile')
+      .set({
+        status: 'published',
+        revision: sql<number>`revision + 1`,
+        updated_by: options.operatorId,
+        updated_at: new Date(),
+        published_at: new Date(),
+        disabled_at: null,
+      })
+      .where('profile_id', '=', profileId)
+      .where('status', '=', 'draft')
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new RegistryRepositoryError('INVALID_SPEC_STATUS_TRANSITION', 'Model Gateway Profile cannot be published from current status', { profile_id: profileId });
+    }
+    return mapModelGatewayProfile(row);
+  }
+
+  async disable(profileId: string, options: ModelGatewayProfileWriteOptions): Promise<ModelGatewayProfile> {
+    const row = await this.db
+      .updateTable('model_gateway_profile')
+      .set({
+        status: 'disabled',
+        revision: sql<number>`revision + 1`,
+        updated_by: options.operatorId,
+        updated_at: new Date(),
+        disabled_at: new Date(),
+      })
+      .where('profile_id', '=', profileId)
+      .where('status', 'in', ['draft', 'published'])
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new RegistryRepositoryError('MODEL_GATEWAY_PROFILE_NOT_FOUND', 'Model Gateway Profile not found or cannot be disabled', { profile_id: profileId });
+    }
+    return mapModelGatewayProfile(row);
+  }
+
+  async rotateCredential(profileId: string, input: ModelGatewayCredentialRotateInput): Promise<ModelGatewayProfile> {
+    return withTransaction(this.db, async (trx) => {
+      const row = await trx
+        .selectFrom('model_gateway_profile')
+        .selectAll()
+        .where('profile_id', '=', profileId)
+        .executeTakeFirst();
+      if (!row) {
+        throw new RegistryRepositoryError('MODEL_GATEWAY_PROFILE_NOT_FOUND', 'Model Gateway Profile not found', { profile_id: profileId });
+      }
+      if (row.auth_type !== 'bearer') {
+        throw new RegistryRepositoryError('MODEL_GATEWAY_PROFILE_CREDENTIAL_UNSUPPORTED', 'Only bearer Model Gateway Profiles can rotate credentials', { profile_id: profileId });
+      }
+      if (
+        input.expectedCredentialRevision !== undefined &&
+        row.credential_revision !== input.expectedCredentialRevision
+      ) {
+        throw new RegistryRepositoryError('REGISTRY_OPTIMISTIC_LOCK_CONFLICT', 'Model Gateway credential revision conflict', {
+          profile_id: profileId,
+          expected_credential_revision: input.expectedCredentialRevision,
+          actual_credential_revision: row.credential_revision,
+        });
+      }
+      const saved = await trx
+        .updateTable('model_gateway_profile')
+        .set({
+          credential_ciphertext: input.credential.ciphertext,
+          credential_iv: input.credential.iv,
+          credential_auth_tag: input.credential.auth_tag,
+          credential_fingerprint: input.credential.credential_fingerprint,
+          credential_revision: input.credential.credential_revision,
+          revision: sql<number>`revision + 1`,
+          updated_by: input.operatorId,
+          updated_at: new Date(),
+        })
+        .where('profile_id', '=', profileId)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      return mapModelGatewayProfile(saved);
+    });
+  }
+}
+
+export class ModelDefinitionRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async list(options: ModelDefinitionListOptions = {}): Promise<ModelDefinition[]> {
+    let query = this.db.selectFrom('model_definition').selectAll();
+    if (options.modelId) {
+      query = query.where('model_id', '=', options.modelId);
+    }
+    if (options.status) {
+      query = query.where('status', '=', options.status);
+    }
+    if (options.gatewayProfileId) {
+      query = query.where('gateway_profile_id', '=', options.gatewayProfileId);
+    }
+    const rows = await query
+      .orderBy('model_id', 'asc')
+      .orderBy('version', 'desc')
+      .limit(limit(options.limit))
+      .offset(offset(options.offset))
+      .execute();
+    return rows.map(mapModelDefinition);
+  }
+
+  async listVersions(modelId: string): Promise<ModelDefinition[]> {
+    const rows = await this.db
+      .selectFrom('model_definition')
+      .selectAll()
+      .where('model_id', '=', modelId)
+      .orderBy('version', 'desc')
+      .execute();
+    return rows.map(mapModelDefinition);
+  }
+
+  async get(modelId: string, version: number): Promise<ModelDefinition | undefined> {
+    const row = await this.db
+      .selectFrom('model_definition')
+      .selectAll()
+      .where('model_id', '=', modelId)
+      .where('version', '=', version)
+      .executeTakeFirst();
+    return row ? mapModelDefinition(row) : undefined;
+  }
+
+  async createDraft(input: ModelDefinitionCreateInput): Promise<ModelDefinition> {
+    const profile = await new ModelGatewayProfileRepository(this.db).get(input.model.gateway_profile_id);
+    if (!profile || profile.status !== 'published') {
+      throw new RegistryRepositoryError('MODEL_GATEWAY_PROFILE_NOT_PUBLISHED', 'ModelDefinition must reference a published Gateway Profile', { gateway_profile_id: input.model.gateway_profile_id });
+    }
+    const withoutHash = {
+      ...input.model,
+      gateway_profile_config_hash: profile.config_hash,
+      status: 'draft' as const,
+      revision: 1,
+    };
+    const parsed = modelDefinitionSchema.parse({
+      ...withoutHash,
+      model_hash: hashModelDefinition(withoutHash),
+      created_by: input.operatorId,
+      updated_by: input.operatorId,
+    });
+    const row: Insertable<ModelDefinitionTable> = {
+      model_id: parsed.model_id,
+      version: parsed.version,
+      display_name: parsed.display_name,
+      gateway_profile_id: parsed.gateway_profile_id,
+      gateway_profile_config_hash: parsed.gateway_profile_config_hash,
+      upstream_model_id: parsed.upstream_model_id,
+      provider: parsed.provider,
+      capabilities_json: toDbJson(parsed.capabilities),
+      context_window: parsed.context_window,
+      max_output_tokens: parsed.max_output_tokens,
+      input_cost_per_million: parsed.input_cost_per_million,
+      output_cost_per_million: parsed.output_cost_per_million,
+      currency: parsed.currency,
+      tags_json: toDbJson(parsed.tags),
+      status: parsed.status,
+      revision: parsed.revision,
+      model_hash: parsed.model_hash,
+      created_by: input.operatorId,
+      updated_by: input.operatorId,
+      published_by: null,
+      updated_at: new Date(),
+      published_at: null,
+      disabled_at: null,
+    };
+    const saved = await this.db
+      .insertInto('model_definition')
+      .values(row)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return mapModelDefinition(saved);
+  }
+
+  async updateDraft(modelId: string, version: number, input: ModelDefinitionUpdateDraftInput): Promise<ModelDefinition> {
+    const existing = await this.get(modelId, version);
+    if (!existing) {
+      throw new RegistryRepositoryError('MODEL_DEFINITION_NOT_FOUND', 'ModelDefinition not found', { model_id: modelId, version });
+    }
+    if (existing.status !== 'draft' && existing.status !== 'validated') {
+      throw new RegistryRepositoryError('MODEL_DEFINITION_IMMUTABLE', 'Only draft or validated ModelDefinitions can be updated', { model_id: modelId, version, status: existing.status });
+    }
+    if (existing.revision !== input.expectedRevision) {
+      throw new RegistryRepositoryError('REGISTRY_OPTIMISTIC_LOCK_CONFLICT', 'ModelDefinition revision conflict', {
+        model_id: modelId,
+        version,
+        expected_revision: input.expectedRevision,
+        actual_revision: existing.revision,
+      });
+    }
+    const merged = { ...existing, ...input.model, model_id: modelId, version };
+    const profile = await new ModelGatewayProfileRepository(this.db).get(merged.gateway_profile_id);
+    if (!profile || profile.status !== 'published') {
+      throw new RegistryRepositoryError('MODEL_GATEWAY_PROFILE_NOT_PUBLISHED', 'ModelDefinition must reference a published Gateway Profile', { gateway_profile_id: merged.gateway_profile_id });
+    }
+    const next = modelDefinitionSchema.parse({
+      ...merged,
+      gateway_profile_config_hash: profile.config_hash,
+      status: 'draft',
+      revision: existing.revision + 1,
+      model_hash: hashModelDefinition({ ...merged, gateway_profile_config_hash: profile.config_hash }),
+      updated_by: input.operatorId,
+      updated_at: new Date().toISOString(),
+    });
+    const row = await this.db
+      .updateTable('model_definition')
+      .set({
+        display_name: next.display_name,
+        gateway_profile_id: next.gateway_profile_id,
+        gateway_profile_config_hash: next.gateway_profile_config_hash,
+        upstream_model_id: next.upstream_model_id,
+        provider: next.provider,
+        capabilities_json: toDbJson(next.capabilities),
+        context_window: next.context_window,
+        max_output_tokens: next.max_output_tokens,
+        input_cost_per_million: next.input_cost_per_million,
+        output_cost_per_million: next.output_cost_per_million,
+        currency: next.currency,
+        tags_json: toDbJson(next.tags),
+        status: 'draft',
+        revision: next.revision,
+        model_hash: next.model_hash,
+        updated_by: input.operatorId,
+        updated_at: new Date(),
+      })
+      .where('model_id', '=', modelId)
+      .where('version', '=', version)
+      .where('revision', '=', input.expectedRevision)
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new RegistryRepositoryError('REGISTRY_OPTIMISTIC_LOCK_CONFLICT', 'ModelDefinition revision conflict', { model_id: modelId, version });
+    }
+    return mapModelDefinition(row);
+  }
+
+  async cloneVersion(modelId: string, version: number, options: ModelDefinitionWriteOptions & { version?: number }): Promise<ModelDefinition> {
+    const source = await this.get(modelId, version);
+    if (!source) {
+      throw new RegistryRepositoryError('MODEL_DEFINITION_NOT_FOUND', 'ModelDefinition not found', { model_id: modelId, version });
+    }
+    const nextVersion =
+      options.version ??
+      Math.max(0, ...(await this.listVersions(modelId)).map((entry) => entry.version)) + 1;
+    return this.createDraft({
+      operatorId: options.operatorId,
+      model: {
+        model_id: source.model_id,
+        version: nextVersion,
+        display_name: source.display_name,
+        gateway_profile_id: source.gateway_profile_id,
+        upstream_model_id: source.upstream_model_id,
+        provider: source.provider,
+        capabilities: source.capabilities,
+        context_window: source.context_window,
+        max_output_tokens: source.max_output_tokens,
+        input_cost_per_million: source.input_cost_per_million,
+        output_cost_per_million: source.output_cost_per_million,
+        currency: source.currency,
+        tags: source.tags,
+      },
+    });
+  }
+
+  async markValidated(modelId: string, version: number, options: ModelDefinitionWriteOptions): Promise<ModelDefinition> {
+    return this.updateStatus(modelId, version, 'validated', options);
+  }
+
+  async publish(modelId: string, version: number, options: ModelDefinitionWriteOptions & { expectedRevision?: number }): Promise<ModelDefinition> {
+    const existing = await this.get(modelId, version);
+    if (!existing) {
+      throw new RegistryRepositoryError('MODEL_DEFINITION_NOT_FOUND', 'ModelDefinition not found', { model_id: modelId, version });
+    }
+    if (options.expectedRevision !== undefined && existing.revision !== options.expectedRevision) {
+      throw new RegistryRepositoryError('REGISTRY_OPTIMISTIC_LOCK_CONFLICT', 'ModelDefinition revision conflict', {
+        model_id: modelId,
+        version,
+        expected_revision: options.expectedRevision,
+        actual_revision: existing.revision,
+      });
+    }
+    const profile = await new ModelGatewayProfileRepository(this.db).get(existing.gateway_profile_id);
+    if (!profile || profile.status !== 'published' || profile.config_hash !== existing.gateway_profile_config_hash) {
+      throw new RegistryRepositoryError('MODEL_GATEWAY_PROFILE_HASH_MISMATCH', 'ModelDefinition Gateway Profile hash is not publishable', {
+        model_id: modelId,
+        version,
+        gateway_profile_id: existing.gateway_profile_id,
+      });
+    }
+    return this.updateStatus(modelId, version, 'published', options);
+  }
+
+  async disable(modelId: string, version: number, options: ModelDefinitionWriteOptions): Promise<ModelDefinition> {
+    return this.updateStatus(modelId, version, 'disabled', options);
+  }
+
+  async deprecate(modelId: string, version: number, options: ModelDefinitionWriteOptions): Promise<ModelDefinition> {
+    return this.updateStatus(modelId, version, 'deprecated', options);
+  }
+
+  private async updateStatus(
+    modelId: string,
+    version: number,
+    status: ModelDefinitionStatus,
+    options: ModelDefinitionWriteOptions,
+  ): Promise<ModelDefinition> {
+    const row = await this.db
+      .updateTable('model_definition')
+      .set({
+        status,
+        revision: sql<number>`revision + 1`,
+        updated_by: options.operatorId,
+        updated_at: new Date(),
+        ...(status === 'published'
+          ? { published_by: options.operatorId, published_at: new Date(), disabled_at: null }
+          : {}),
+        ...(status === 'disabled' ? { disabled_at: new Date() } : {}),
+      })
+      .where('model_id', '=', modelId)
+      .where('version', '=', version)
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new RegistryRepositoryError('MODEL_DEFINITION_NOT_FOUND', 'ModelDefinition not found', { model_id: modelId, version });
+    }
+    return mapModelDefinition(row);
+  }
+}
+
 export class ModelPolicyRepository {
   constructor(private readonly db: Kysely<Database>) {}
 
@@ -2424,7 +3000,7 @@ export class AgentRunRepository {
       model_policy_version: plan.model_policy_version,
       model_policy_hash: plan.model_policy_hash,
       selected_model_id: plan.resolved_model_policy.resolved_targets[0]?.model_id ?? null,
-      selected_provider: plan.resolved_model_policy.resolved_targets[0]?.gateway_profile ?? null,
+      selected_provider: plan.resolved_model_policy.resolved_targets[0]?.provider ?? null,
       fallback_count: 0,
       model_call_count: 0,
       execution_mode: input.executionMode ?? 'mediated_tool_call',
@@ -3432,6 +4008,13 @@ export class ModelCallLogRepository {
       target_id: null,
       provider: null,
       model_id: null,
+      model_version: null,
+      model_hash: null,
+      gateway_profile_id: null,
+      gateway_profile_config_hash: null,
+      credential_fingerprint: null,
+      credential_revision: null,
+      upstream_model_id: null,
       protocol: parsed.protocol,
       attempt_count: 0,
       fallback_index: parsed.fallback_index,
@@ -3477,7 +4060,7 @@ export class ModelCallLogRepository {
 
   async markRunning(
     modelCallId: string,
-    input: { targetId: string; provider?: string; modelId: string; fallbackIndex?: number },
+    input: ModelCallTargetIdentity & { fallbackIndex?: number },
   ): Promise<ModelCallRecord> {
     const row = await this.db
       .updateTable('model_call_log')
@@ -3486,6 +4069,13 @@ export class ModelCallLogRepository {
         target_id: input.targetId,
         provider: input.provider ?? null,
         model_id: input.modelId,
+        model_version: input.modelVersion,
+        model_hash: input.modelHash,
+        gateway_profile_id: input.gatewayProfileId,
+        gateway_profile_config_hash: input.gatewayProfileConfigHash,
+        credential_fingerprint: input.credentialFingerprint ?? null,
+        credential_revision: input.credentialRevision,
+        upstream_model_id: input.upstreamModelId,
         fallback_index: input.fallbackIndex ?? 0,
         started_at: new Date(),
         updated_at: new Date(),
@@ -3502,6 +4092,13 @@ export class ModelCallLogRepository {
       targetId: string;
       provider?: string;
       modelId: string;
+      modelVersion: number;
+      modelHash: string;
+      gatewayProfileId: string;
+      gatewayProfileConfigHash: string;
+      credentialFingerprint?: string;
+      credentialRevision: number;
+      upstreamModelId: string;
       attemptCount: number;
       fallbackIndex: number;
       finishReason?: string;
@@ -3519,6 +4116,13 @@ export class ModelCallLogRepository {
         target_id: input.targetId,
         provider: input.provider ?? null,
         model_id: input.modelId,
+        model_version: input.modelVersion,
+        model_hash: input.modelHash,
+        gateway_profile_id: input.gatewayProfileId,
+        gateway_profile_config_hash: input.gatewayProfileConfigHash,
+        credential_fingerprint: input.credentialFingerprint ?? null,
+        credential_revision: input.credentialRevision,
+        upstream_model_id: input.upstreamModelId,
         attempt_count: input.attemptCount,
         fallback_index: input.fallbackIndex,
         finish_reason: input.finishReason ?? null,
@@ -3666,6 +4270,13 @@ export class ModelCallAttemptRepository {
       target_id: input.target_id,
       provider: input.provider,
       model_id: input.model_id,
+      model_version: input.model_version,
+      model_hash: input.model_hash,
+      gateway_profile_id: input.gateway_profile_id,
+      gateway_profile_config_hash: input.gateway_profile_config_hash,
+      credential_fingerprint: input.credential_fingerprint,
+      credential_revision: input.credential_revision,
+      upstream_model_id: input.upstream_model_id,
       status: 'started',
       started_at: new Date().toISOString(),
     });
@@ -3679,6 +4290,13 @@ export class ModelCallAttemptRepository {
       target_id: parsed.target_id,
       provider: parsed.provider ?? null,
       model_id: parsed.model_id,
+      model_version: parsed.model_version ?? null,
+      model_hash: parsed.model_hash ?? null,
+      gateway_profile_id: parsed.gateway_profile_id ?? null,
+      gateway_profile_config_hash: parsed.gateway_profile_config_hash ?? null,
+      credential_fingerprint: parsed.credential_fingerprint ?? null,
+      credential_revision: parsed.credential_revision ?? null,
+      upstream_model_id: parsed.upstream_model_id ?? null,
       status: parsed.status,
       http_status: null,
       error_class: null,
@@ -5004,7 +5622,7 @@ function parseToolVersionRefs(values: string[], label: string): ToolVersionRef[]
   });
 }
 
-async function resolveAgentModelPolicy(
+export async function resolveAgentModelPolicy(
   db: Kysely<Database>,
   agentSpec: AgentSpec,
   options: RepositoryTenantOptions,
@@ -5036,20 +5654,77 @@ async function resolveAgentModelPolicy(
       `ModelPolicy hash mismatch: ${ref.model_policy_id}@${ref.model_policy_version}`,
     );
   }
+  return resolveModelPolicyRecord(db, record, modelPolicyHash);
+}
+
+export async function resolveModelPolicyRecord(
+  db: Kysely<Database>,
+  record: ModelPolicy,
+  modelPolicyHash = hashModelPolicy(record),
+): Promise<ResolvedModelPolicy> {
+  if (!isDependencyPublishable(record.status)) {
+    throw new Error(
+      `ModelPolicy is not executable for plan generation: ${record.model_policy_id}@${record.version}`,
+    );
+  }
   const resolvedTargets = record.targets
     .filter((target) => target.enabled)
     .sort(compareModelTargets);
   if (resolvedTargets.length === 0) {
     throw new Error(
-      `ModelPolicy has no enabled targets: ${ref.model_policy_id}@${ref.model_policy_version}`,
+      `ModelPolicy has no enabled targets: ${record.model_policy_id}@${record.version}`,
     );
+  }
+  const modelDefinitions = new ModelDefinitionRepository(db);
+  const gatewayProfiles = new ModelGatewayProfileRepository(db);
+  const expandedTargets: ResolvedModelTarget[] = [];
+  for (const target of resolvedTargets) {
+    const model = await modelDefinitions.get(target.model_ref.model_id, target.model_ref.version);
+    if (!model) {
+      throw new Error(
+        `ModelDefinition exact version not found: ${target.model_ref.model_id}@${target.model_ref.version}`,
+      );
+    }
+    if (model.status !== 'published') {
+      throw new Error(
+        `ModelDefinition is not executable for plan generation: ${model.model_id}@${model.version}`,
+      );
+    }
+    if (model.model_hash !== target.model_ref.model_hash) {
+      throw new Error(
+        `ModelDefinition hash mismatch: ${target.model_ref.model_id}@${target.model_ref.version}`,
+      );
+    }
+    const profile = await gatewayProfiles.get(model.gateway_profile_id);
+    if (!profile || profile.status !== 'published') {
+      throw new Error(`Model Gateway Profile is not published: ${model.gateway_profile_id}`);
+    }
+    if (profile.config_hash !== model.gateway_profile_config_hash) {
+      throw new Error(`Model Gateway Profile config hash mismatch: ${model.gateway_profile_id}`);
+    }
+    expandedTargets.push({
+      ...target,
+      model_id: model.model_id,
+      model_version: model.version,
+      model_hash: model.model_hash,
+      gateway_profile_id: model.gateway_profile_id,
+      gateway_profile_config_hash: model.gateway_profile_config_hash,
+      upstream_model_id: model.upstream_model_id,
+      provider: model.provider,
+      capabilities: model.capabilities,
+      context_window: model.context_window,
+      max_output_tokens: model.max_output_tokens,
+      input_cost_per_million: model.input_cost_per_million,
+      output_cost_per_million: model.output_cost_per_million,
+      currency: model.currency,
+    });
   }
   return resolvedModelPolicySchema.parse({
     model_policy_id: record.model_policy_id,
     model_policy_version: record.version,
     model_policy_hash: modelPolicyHash,
     protocol: record.protocol,
-    resolved_targets: resolvedTargets,
+    resolved_targets: expandedTargets,
     retry_policy: record.retry_policy,
     fallback_policy: record.fallback_policy,
     request_policy: record.request_policy,
@@ -5075,6 +5750,58 @@ export function hashModelPolicy(policy: ModelPolicy): string {
     fallback_policy: policy.fallback_policy,
     request_policy: policy.request_policy,
   });
+}
+
+export function hashModelGatewayProfileConfig(input: Pick<ModelGatewayProfile, 'profile_id' | 'display_name' | 'protocol' | 'base_url' | 'auth_type'>): string {
+  return hashJson({
+    profile_id: input.profile_id,
+    display_name: input.display_name,
+    protocol: input.protocol,
+    base_url: input.base_url,
+    auth_type: input.auth_type,
+  });
+}
+
+export function hashModelDefinition(input: Pick<ModelDefinition, 'model_id' | 'version' | 'display_name' | 'gateway_profile_id' | 'gateway_profile_config_hash' | 'upstream_model_id' | 'provider' | 'capabilities' | 'context_window' | 'max_output_tokens' | 'input_cost_per_million' | 'output_cost_per_million' | 'currency' | 'tags'>): string {
+  return hashJson({
+    model_id: input.model_id,
+    version: input.version,
+    display_name: input.display_name,
+    gateway_profile_id: input.gateway_profile_id,
+    gateway_profile_config_hash: input.gateway_profile_config_hash,
+    upstream_model_id: input.upstream_model_id,
+    provider: input.provider,
+    capabilities: input.capabilities,
+    context_window: input.context_window,
+    max_output_tokens: input.max_output_tokens,
+    input_cost_per_million: input.input_cost_per_million,
+    output_cost_per_million: input.output_cost_per_million,
+    currency: input.currency,
+    tags: input.tags,
+  });
+}
+
+function assertGatewayCredentialState(input: {
+  profile_id: string;
+  auth_type: string;
+  credential_ciphertext?: string | null;
+  credential_iv?: string | null;
+  credential_auth_tag?: string | null;
+  credential_fingerprint?: string | null;
+}): void {
+  if (input.auth_type === 'bearer') {
+    if (!input.credential_ciphertext || !input.credential_iv || !input.credential_auth_tag || !input.credential_fingerprint) {
+      throw new RegistryRepositoryError('MODEL_GATEWAY_CREDENTIAL_REQUIRED', 'Bearer Model Gateway Profile requires an encrypted credential', { profile_id: input.profile_id });
+    }
+    return;
+  }
+  if (input.auth_type === 'none') {
+    if (input.credential_ciphertext || input.credential_iv || input.credential_auth_tag || input.credential_fingerprint) {
+      throw new RegistryRepositoryError('MODEL_GATEWAY_CREDENTIAL_NOT_ALLOWED', 'auth_type=none must not store credentials', { profile_id: input.profile_id });
+    }
+    return;
+  }
+  throw new RegistryRepositoryError('MODEL_GATEWAY_AUTH_TYPE_UNSUPPORTED', 'Unsupported Model Gateway auth_type', { profile_id: input.profile_id, auth_type: input.auth_type });
 }
 
 async function resolveToolPlanEntry(
@@ -5393,6 +6120,57 @@ function mapModelPolicy(row: Selectable<ModelPolicyTable>): ModelPolicy {
   });
 }
 
+function mapModelGatewayProfile(row: Selectable<ModelGatewayProfileTable>): ModelGatewayProfile {
+  return modelGatewayProfileSchema.parse({
+    profile_id: row.profile_id,
+    display_name: row.display_name,
+    protocol: row.protocol,
+    base_url: row.base_url,
+    auth_type: row.auth_type,
+    status: row.status,
+    config_hash: row.config_hash,
+    revision: row.revision,
+    credential_configured: Boolean(row.credential_fingerprint),
+    ...(row.credential_fingerprint ? { credential_fingerprint: row.credential_fingerprint } : {}),
+    credential_revision: row.credential_revision,
+    ...(row.created_by ? { created_by: row.created_by } : {}),
+    ...(row.updated_by ? { updated_by: row.updated_by } : {}),
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+    ...(row.published_at ? { published_at: toIso(row.published_at) } : {}),
+    ...(row.disabled_at ? { disabled_at: toIso(row.disabled_at) } : {}),
+  });
+}
+
+function mapModelDefinition(row: Selectable<ModelDefinitionTable>): ModelDefinition {
+  return modelDefinitionSchema.parse({
+    model_id: row.model_id,
+    version: row.version,
+    display_name: row.display_name,
+    gateway_profile_id: row.gateway_profile_id,
+    gateway_profile_config_hash: row.gateway_profile_config_hash,
+    upstream_model_id: row.upstream_model_id,
+    provider: row.provider,
+    capabilities: jsonArray(row.capabilities_json),
+    context_window: row.context_window,
+    max_output_tokens: row.max_output_tokens,
+    input_cost_per_million: Number(row.input_cost_per_million),
+    output_cost_per_million: Number(row.output_cost_per_million),
+    currency: row.currency,
+    tags: jsonArray(row.tags_json),
+    status: row.status,
+    revision: row.revision,
+    model_hash: row.model_hash,
+    ...(row.created_by ? { created_by: row.created_by } : {}),
+    ...(row.updated_by ? { updated_by: row.updated_by } : {}),
+    ...(row.published_by ? { published_by: row.published_by } : {}),
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+    ...(row.published_at ? { published_at: toIso(row.published_at) } : {}),
+    ...(row.disabled_at ? { disabled_at: toIso(row.disabled_at) } : {}),
+  });
+}
+
 function mapAgentRun(row: Selectable<AgentRunTable>): AgentRunRecord {
   return agentRunRecordSchema.parse({
     agent_run_id: row.agent_run_id,
@@ -5459,6 +6237,13 @@ function mapModelCallRecord(row: Selectable<ModelCallLogTable>): ModelCallRecord
     ...(row.target_id ? { target_id: row.target_id } : {}),
     ...(row.provider ? { provider: row.provider } : {}),
     ...(row.model_id ? { model_id: row.model_id } : {}),
+    ...(row.model_version !== null ? { model_version: row.model_version } : {}),
+    ...(row.model_hash ? { model_hash: row.model_hash } : {}),
+    ...(row.gateway_profile_id ? { gateway_profile_id: row.gateway_profile_id } : {}),
+    ...(row.gateway_profile_config_hash ? { gateway_profile_config_hash: row.gateway_profile_config_hash } : {}),
+    ...(row.credential_fingerprint ? { credential_fingerprint: row.credential_fingerprint } : {}),
+    ...(row.credential_revision !== null ? { credential_revision: row.credential_revision } : {}),
+    ...(row.upstream_model_id ? { upstream_model_id: row.upstream_model_id } : {}),
     protocol: row.protocol,
     attempt_count: row.attempt_count,
     fallback_index: row.fallback_index,
@@ -5495,6 +6280,13 @@ function mapModelCallAttempt(row: Selectable<ModelCallAttemptTable>): ModelCallA
     target_id: row.target_id,
     ...(row.provider ? { provider: row.provider } : {}),
     model_id: row.model_id,
+    ...(row.model_version !== null ? { model_version: row.model_version } : {}),
+    ...(row.model_hash ? { model_hash: row.model_hash } : {}),
+    ...(row.gateway_profile_id ? { gateway_profile_id: row.gateway_profile_id } : {}),
+    ...(row.gateway_profile_config_hash ? { gateway_profile_config_hash: row.gateway_profile_config_hash } : {}),
+    ...(row.credential_fingerprint ? { credential_fingerprint: row.credential_fingerprint } : {}),
+    ...(row.credential_revision !== null ? { credential_revision: row.credential_revision } : {}),
+    ...(row.upstream_model_id ? { upstream_model_id: row.upstream_model_id } : {}),
     status: row.status,
     ...(row.http_status !== null ? { http_status: row.http_status } : {}),
     ...(row.error_class ? { error_class: row.error_class } : {}),

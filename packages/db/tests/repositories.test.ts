@@ -297,15 +297,17 @@ function modelPolicyFixture(modelPolicyId: string, version: number) {
     model_policy_id: modelPolicyId,
     version,
     status: 'published' as const,
-    protocol: 'dar_generate' as const,
+    protocol: 'openai_chat_completions' as const,
     targets: [
       {
         target_id: `${modelPolicyId}-target`,
-        gateway_profile: 'local-mock',
-        model_id: `deterministic:${modelPolicyId}`,
+        model_ref: {
+          model_id: `deterministic:${modelPolicyId}`,
+          version: 1,
+          model_hash: 'a'.repeat(64),
+        },
         priority: 0,
         enabled: true,
-        capabilities: ['text' as const],
       },
     ],
     retry_policy: {
@@ -334,6 +336,42 @@ function modelPolicyFixture(modelPolicyId: string, version: number) {
       allow_parallel_tool_calls: false,
     },
     revision: 1,
+  };
+}
+
+function resolvedModelPolicyFixture(
+  modelPolicyId: string,
+  version: number,
+  modelPolicyHash: string,
+): ResolvedModelPolicy {
+  const policy = modelPolicyFixture(modelPolicyId, version);
+  const target = policy.targets[0];
+  if (!target) {
+    throw new Error('modelPolicyFixture must include a target');
+  }
+  return {
+    model_policy_id: modelPolicyId,
+    model_policy_version: version,
+    model_policy_hash: modelPolicyHash,
+    protocol: policy.protocol,
+    resolved_targets: [
+      {
+        ...target,
+        model_id: target.model_ref.model_id,
+        model_version: target.model_ref.version,
+        model_hash: target.model_ref.model_hash,
+        gateway_profile_id: 'local-mock',
+        gateway_profile_config_hash: 'c'.repeat(64),
+        upstream_model_id: target.model_ref.model_id,
+        provider: 'local-mock',
+        capabilities: ['text'],
+        context_window: 32768,
+        max_output_tokens: 4096,
+      },
+    ],
+    retry_policy: policy.retry_policy,
+    fallback_policy: policy.fallback_policy,
+    request_policy: policy.request_policy,
   };
 }
 
@@ -558,7 +596,7 @@ describe('db repositories', () => {
     ]);
   });
 
-  it('normalizes legacy ModelPolicy request_policy tool_choice_mode from DB rows', async () => {
+  it('rejects legacy ModelPolicy targets from DB rows', async () => {
     const now = '2026-01-01T00:00:00.000Z';
     const db = new FakeDb({
       model_policy: [
@@ -599,18 +637,10 @@ describe('db repositories', () => {
       ],
     });
 
-    const policy = await new ModelPolicyRepository(db as never).getByIdAndVersion('legacy_model_policy', 1, {
+    await expect(new ModelPolicyRepository(db as never).getByIdAndVersion('legacy_model_policy', 1, {
         tenantId: 'tenant_1',
-      });
-
-    expect(policy).toMatchObject({
-      model_policy_id: 'legacy_model_policy',
-      request_policy: {
-        initial_tool_choice_mode: 'auto',
-        after_tool_result_tool_choice_mode: 'auto',
       },
-    });
-    expect(policy?.request_policy).not.toHaveProperty('tool_choice_mode');
+    )).rejects.toThrow();
   });
 
   it('hashes evaluation datasets, candidate bundles, and gate policies with exact content', () => {
@@ -818,6 +848,7 @@ describe('db repositories', () => {
       },
       modelPolicy: modelPolicyFixture('policy_1', 1),
       modelPolicyHash,
+      resolvedModelPolicy: resolvedModelPolicyFixture('policy_1', 1, modelPolicyHash),
       generatedAt: '2026-01-01T00:00:00.000Z',
     });
 
@@ -865,6 +896,7 @@ describe('db repositories', () => {
       },
       modelPolicy: modelPolicyFixture('policy_candidate', 4),
       modelPolicyHash,
+      resolvedModelPolicy: resolvedModelPolicyFixture('policy_candidate', 4, modelPolicyHash),
       generatedAt: '2026-01-01T00:00:00.000Z',
     });
 
@@ -912,6 +944,7 @@ describe('db repositories', () => {
       },
       modelPolicy: modelPolicyFixture('candidate_policy', 9),
       modelPolicyHash,
+      resolvedModelPolicy: resolvedModelPolicyFixture('candidate_policy', 9, modelPolicyHash),
       generatedAt: '2026-01-01T00:00:00.000Z',
     });
 
@@ -958,6 +991,7 @@ describe('db repositories', () => {
       },
       modelPolicy: modelPolicyFixture('policy_1', 1),
       modelPolicyHash: hash,
+      resolvedModelPolicy: resolvedModelPolicyFixture('policy_1', 1, hash),
       generatedAt: '2026-01-01T00:00:00.000Z',
     });
     const bundle = {
@@ -1543,6 +1577,7 @@ describe('db repositories', () => {
       },
       modelPolicy: modelPolicyFixture('policy_1', 1),
       modelPolicyHash: 'f'.repeat(64),
+      resolvedModelPolicy: resolvedModelPolicyFixture('policy_1', 1, 'f'.repeat(64)),
       generatedAt: now,
     });
     const candidateBundle = {
@@ -2099,15 +2134,27 @@ describe('db repositories', () => {
       model_policy_id: 'deterministic-final',
       model_policy_version: 1,
       model_policy_hash: hash,
-      protocol: 'dar_generate',
+      protocol: 'openai_chat_completions',
       resolved_targets: [
         {
           target_id: 'deterministic-final-target',
-          gateway_profile: 'local-mock',
+          model_ref: {
+            model_id: 'deterministic:final_only',
+            version: 1,
+            model_hash: hash,
+          },
           model_id: 'deterministic:final_only',
+          model_version: 1,
+          model_hash: hash,
+          gateway_profile_id: 'local-mock',
+          gateway_profile_config_hash: 'c'.repeat(64),
+          upstream_model_id: 'deterministic:final_only',
+          provider: 'local-mock',
           priority: 0,
           enabled: true,
           capabilities: ['text'],
+          context_window: 32768,
+          max_output_tokens: 4096,
         },
       ],
       retry_policy: {
@@ -2289,15 +2336,27 @@ describe('db repositories', () => {
       model_policy_id: 'deterministic-final',
       model_policy_version: 1,
       model_policy_hash: hash,
-      protocol: 'dar_generate',
+      protocol: 'openai_chat_completions',
       resolved_targets: [
         {
           target_id: 'deterministic-final-target',
-          gateway_profile: 'local-mock',
+          model_ref: {
+            model_id: 'deterministic:final_only',
+            version: 1,
+            model_hash: hash,
+          },
           model_id: 'deterministic:final_only',
+          model_version: 1,
+          model_hash: hash,
+          gateway_profile_id: 'local-mock',
+          gateway_profile_config_hash: 'c'.repeat(64),
+          upstream_model_id: 'deterministic:final_only',
+          provider: 'local-mock',
           priority: 0,
           enabled: true,
           capabilities: ['text'],
+          context_window: 32768,
+          max_output_tokens: 4096,
         },
       ],
       retry_policy: {

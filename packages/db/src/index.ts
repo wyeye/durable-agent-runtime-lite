@@ -356,6 +356,55 @@ export interface ModelPolicyTable {
   published_at: Timestamp | null;
 }
 
+export interface ModelGatewayProfileTable {
+  profile_id: string;
+  display_name: string;
+  protocol: 'openai_chat_completions';
+  base_url: string;
+  auth_type: 'none' | 'bearer';
+  status: string;
+  config_hash: string;
+  revision: number;
+  credential_ciphertext: string | null;
+  credential_iv: string | null;
+  credential_auth_tag: string | null;
+  credential_fingerprint: string | null;
+  credential_revision: number;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  published_at: Timestamp | null;
+  disabled_at: Timestamp | null;
+}
+
+export interface ModelDefinitionTable {
+  model_id: string;
+  version: number;
+  display_name: string;
+  gateway_profile_id: string;
+  gateway_profile_config_hash: string;
+  upstream_model_id: string;
+  provider: string;
+  capabilities_json: Json;
+  context_window: number;
+  max_output_tokens: number;
+  input_cost_per_million: number;
+  output_cost_per_million: number;
+  currency: string;
+  tags_json: Json;
+  status: string;
+  revision: number;
+  model_hash: string;
+  created_by: string | null;
+  updated_by: string | null;
+  published_by: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  published_at: Timestamp | null;
+  disabled_at: Timestamp | null;
+}
+
 export interface ModelCallLogTable {
   model_call_id: string;
   model_request_key: string;
@@ -373,6 +422,13 @@ export interface ModelCallLogTable {
   target_id: string | null;
   provider: string | null;
   model_id: string | null;
+  model_version: number | null;
+  model_hash: string | null;
+  gateway_profile_id: string | null;
+  gateway_profile_config_hash: string | null;
+  credential_fingerprint: string | null;
+  credential_revision: number | null;
+  upstream_model_id: string | null;
   protocol: string;
   attempt_count: number;
   fallback_index: number;
@@ -405,6 +461,13 @@ export interface ModelCallAttemptTable {
   target_id: string;
   provider: string | null;
   model_id: string;
+  model_version: number | null;
+  model_hash: string | null;
+  gateway_profile_id: string | null;
+  gateway_profile_config_hash: string | null;
+  credential_fingerprint: string | null;
+  credential_revision: number | null;
+  upstream_model_id: string | null;
   status: string;
   http_status: number | null;
   error_class: string | null;
@@ -678,6 +741,8 @@ export interface Database {
   agent_step: AgentStepTable;
   agent_context_snapshot: AgentContextSnapshotTable;
   model_policy: ModelPolicyTable;
+  model_gateway_profile: ModelGatewayProfileTable;
+  model_definition: ModelDefinitionTable;
   model_call_log: ModelCallLogTable;
   model_call_attempt: ModelCallAttemptTable;
   evaluation_dataset: EvaluationDatasetTable;

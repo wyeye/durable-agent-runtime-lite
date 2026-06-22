@@ -34,6 +34,7 @@ import {
   upsertAgentSpec,
   upsertPromptDefinition,
 } from '@dar/db';
+import { ensureModelCatalogEntry } from './model-catalog-seed.js';
 
 const require = createRequire(import.meta.url);
 const workspaceRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -519,6 +520,17 @@ async function seedTenantPolicy(db: Db): Promise<TenantRuntimePolicy> {
 
 async function seedModelPolicy(db: Db, modelPolicyId: string, status: 'published' | 'validated'): Promise<ModelPolicy> {
   const repository = new ModelPolicyRepository(db);
+  const catalog = await ensureModelCatalogEntry(db, {
+    profileId: 'local-mock',
+    displayName: 'Local mock evaluation UI model',
+    baseUrl: 'http://mock-server:4100',
+    authType: 'none',
+    modelId: 'dar-local-model',
+    upstreamModelId: 'dar-local-model',
+    provider: 'local-mock',
+    capabilities: ['text', 'tools', 'usage', 'tool_choice'],
+    operatorId: userId,
+  });
   await repository.createDraft({
     model_policy_id: modelPolicyId,
     version: 1,
@@ -526,11 +538,9 @@ async function seedModelPolicy(db: Db, modelPolicyId: string, status: 'published
     protocol: 'openai_chat_completions',
     targets: [{
       target_id: `${modelPolicyId}_primary`,
-      gateway_profile: 'local-mock',
-      model_id: 'dar-local-model',
+      model_ref: catalog.model_ref,
       priority: 0,
       enabled: true,
-      capabilities: ['text', 'tools', 'usage', 'tool_choice'],
     }],
     retry_policy: { max_attempts_per_target: 1, retryable_status_codes: [429, 500, 502, 503, 504], retry_on_timeout: true, retry_on_network_error: true, backoff_ms: 10, max_backoff_ms: 50 },
     fallback_policy: { enabled: false, ordered_target_ids: [], eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'], stop_on_auth_error: true, stop_on_validation_error: true, stop_on_policy_denial: true },

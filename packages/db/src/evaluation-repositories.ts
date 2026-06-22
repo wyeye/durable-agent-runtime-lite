@@ -77,6 +77,7 @@ import {
   ModelPolicyRepository,
   parseAgentOutputSchema,
   PromptDefinitionRepository,
+  resolveModelPolicyRecord,
   stableStringify,
   TaskRunRepository,
   ToolCallLogRepository,
@@ -2281,12 +2282,14 @@ export class EvaluationCandidateResolver {
     });
 
     const allowedTools = await this.resolveAllowedTools(records.agent.spec, input.tenantId);
+    const resolvedModelPolicy = await resolveModelPolicyRecord(this.db, records.modelPolicy, records.modelPolicyHash);
     const plan = buildCandidateAgentExecutionPlan({
       tenantId: input.tenantId,
       agent: records.agent,
       prompt: records.prompt,
       modelPolicy: records.modelPolicy,
       modelPolicyHash: records.modelPolicyHash,
+      resolvedModelPolicy,
       allowedTools,
     });
     const savedPlan = await new AgentExecutionPlanRepository(this.db).create(plan);
@@ -3663,10 +3666,11 @@ export function buildCandidateAgentExecutionPlan(input: {
   prompt: { spec: PromptDefinition; sha256: string };
   modelPolicy: ModelPolicy;
   modelPolicyHash: string;
+  resolvedModelPolicy?: ResolvedModelPolicy;
   allowedTools?: AgentExecutionPlan['allowed_tools'];
   generatedAt?: string;
 }): AgentExecutionPlan {
-  const resolvedModelPolicy = resolveEvaluationModelPolicy(input.modelPolicy, input.modelPolicyHash);
+  const resolvedModelPolicy = input.resolvedModelPolicy ?? resolveEvaluationModelPolicy(input.modelPolicy, input.modelPolicyHash);
   if (input.agent.spec.allowed_tools.length > 0 && !input.allowedTools) {
     throw new EvaluationRepositoryError(
       'EVALUATION_TOOL_RESOLUTION_REQUIRED',

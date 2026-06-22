@@ -18,6 +18,7 @@ import {
   upsertAgentSpec,
   upsertPromptDefinition,
 } from '@dar/db';
+import { ensureModelCatalogEntry } from './model-catalog-seed.js';
 
 const scenario = process.env.TENANT_POLICY_SMOKE_SCENARIO ?? 'policy';
 const runtimeApiUrl = trimTrailingSlash(process.env.RUNTIME_API_URL ?? 'http://localhost:3000');
@@ -185,6 +186,17 @@ async function seedModelPolicy(
   displayPolicy: string,
 ) {
   const repository = new ModelPolicyRepository(db);
+  const catalog = await ensureModelCatalogEntry(db, {
+    profileId: 'local-deterministic',
+    displayName: `Deterministic ${displayPolicy}`,
+    baseUrl: 'http://mock-server:4100',
+    authType: 'none',
+    modelId: displayPolicy,
+    upstreamModelId: displayPolicy,
+    provider: 'local-mock',
+    capabilities: ['text', 'tools', 'usage'],
+    operatorId: 'tenant-policy-smoke',
+  });
   const existing = await repository.getByIdAndVersion(modelPolicyId, 1, { tenantId });
   if (existing?.status === 'published' || existing?.status === 'gray') {
     return existing;
@@ -199,15 +211,13 @@ async function seedModelPolicy(
       model_policy_id: modelPolicyId,
       version: 1,
       status: 'draft',
-      protocol: 'dar_generate',
+      protocol: 'openai_chat_completions',
       targets: [
         {
           target_id: `${modelPolicyId}_primary`,
-          gateway_profile: 'local-mock',
-          model_id: displayPolicy,
+          model_ref: catalog.model_ref,
           priority: 0,
           enabled: true,
-          capabilities: ['text', 'tools', 'usage'],
         },
       ],
       retry_policy: {

@@ -3,6 +3,7 @@ import type {
   AgentSpec,
   CapabilityRelease,
   FlowSpec,
+  ModelDefinitionRef,
   ModelPolicy,
   PromptDefinition,
   RouteSpec,
@@ -11,11 +12,15 @@ import type {
   ToolManifest,
   ToolInvokeResponse,
 } from '@dar/contracts';
-import { hashModelPolicy } from '@dar/db';
+import { closeDb, createDb, hashModelPolicy } from '@dar/db';
+import { ensureModelCatalogEntry } from './model-catalog-seed.js';
 
 const controlPlaneUrl = trimTrailingSlash(process.env.CONTROL_PLANE_URL ?? 'http://localhost:3100');
 const runtimeApiUrl = trimTrailingSlash(process.env.RUNTIME_API_URL ?? 'http://localhost:3000');
 const toolGatewayUrl = trimTrailingSlash(process.env.TOOL_GATEWAY_URL ?? 'http://localhost:3200');
+const databaseUrl =
+  process.env.DATABASE_URL ??
+  'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime';
 const runtimeWorkerToolGatewayToken = process.env.RUNTIME_WORKER_TOOL_GATEWAY_TOKEN ?? 'dev-only-runtime-worker-token';
 const tenantId = process.env.SMOKE_TENANT_ID ?? 'default';
 const userId = process.env.SMOKE_USER_ID ?? 'cp_smoke_operator';
@@ -52,6 +57,19 @@ async function main(): Promise<void> {
     keywordV2: `${requestPrefix}-keyword-v2`,
   };
 
+  const db = createDb({ databaseUrl });
+  const catalog = await ensureModelCatalogEntry(db, {
+    profileId: `${requestPrefix}_profile`,
+    displayName: `Control-plane smoke model ${requestPrefix}`,
+    baseUrl: 'http://mock-server:4100',
+    authType: 'none',
+    modelId: `${requestPrefix}_model`,
+    upstreamModelId: `${requestPrefix}_model`,
+    provider: 'local-mock',
+    capabilities: ['text', 'tools', 'usage'],
+    operatorId: 'cp-smoke',
+  }).finally(async () => closeDb(db));
+
   await checkHealth(`${controlPlaneUrl}/healthz`, 'control-plane');
   await checkHealth(`${controlPlaneUrl}/readyz`, 'control-plane readyz');
   await checkI18nContract();
@@ -85,7 +103,7 @@ async function main(): Promise<void> {
 
   const prompt = await createDraft<PromptDefinition>('prompts', promptSpec(ids, 1));
   const tool = await createDraft<ToolManifest>('tools', toolSpec(ids, '1.0.0'));
-  const modelPolicySpecV1 = modelPolicySpec(ids, 1);
+  const modelPolicySpecV1 = modelPolicySpec(ids, 1, catalog.model_ref);
   const modelPolicy = await createDraft<ModelPolicy>('model-policies', modelPolicySpecV1);
   await validateResource('prompts', ids.prompt, 1);
   await validateResource('tools', ids.tool, 1);
@@ -288,20 +306,22 @@ function toolSpec(ids: { tool: string }, version: string): ToolManifest {
   };
 }
 
-function modelPolicySpec(ids: { modelPolicy: string }, version: number): ModelPolicy {
+function modelPolicySpec(
+  ids: { modelPolicy: string },
+  version: number,
+  modelRef: ModelDefinitionRef,
+): ModelPolicy {
   return {
     model_policy_id: ids.modelPolicy,
     version,
     status: 'draft',
-    protocol: 'dar_generate',
+    protocol: 'openai_chat_completions',
     targets: [
       {
         target_id: `${ids.modelPolicy}_primary`,
-        gateway_profile: 'local-smoke',
-        model_id: 'mock',
+        model_ref: modelRef,
         priority: 0,
         enabled: true,
-        capabilities: ['text', 'tools', 'usage'],
       },
     ],
     retry_policy: {

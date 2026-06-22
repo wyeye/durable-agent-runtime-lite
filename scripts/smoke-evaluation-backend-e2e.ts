@@ -45,6 +45,7 @@ import {
   upsertAgentSpec,
   upsertPromptDefinition,
 } from '@dar/db';
+import { ensureModelCatalogEntry } from './model-catalog-seed.js';
 
 type Scenario = 'framework' | 'regression' | 'publish_gate';
 type SubjectType = 'prompt' | 'agent' | 'model_policy';
@@ -128,6 +129,7 @@ const artifactDir = process.env.EVALUATION_SMOKE_ARTIFACT_DIR
   : join(repoRoot, 'artifacts/evaluation-backend-e2e');
 let modelGatewayProfile = process.env.EVALUATION_SMOKE_MODEL_PROVIDER ?? 'local-mock';
 let modelGatewayModel = process.env.EVALUATION_SMOKE_MODEL_ID ?? 'dar-local-model';
+let modelGatewayBaseUrl = process.env.MODEL_GATEWAY_BASE_URL ?? 'http://mock-server:4100';
 
 const adminHeaders = authHeaders('platform_admin', `${requestPrefix}_admin`);
 const operatorHeaders = authHeaders('capability_operator', `${requestPrefix}_operator`);
@@ -866,6 +868,17 @@ async function seedTools(
 
 async function seedModelPolicy(db: Db, modelPolicyId: string, status: 'published' | 'validated'): Promise<ModelPolicy> {
   const repository = new ModelPolicyRepository(db);
+  const catalog = await ensureModelCatalogEntry(db, {
+    profileId: modelGatewayProfile,
+    displayName: `${modelGatewayProfile} ${modelGatewayModel}`,
+    baseUrl: modelGatewayBaseUrl,
+    authType: 'none',
+    modelId: modelGatewayModel,
+    upstreamModelId: modelGatewayModel,
+    provider: modelGatewayProfile,
+    capabilities: ['text', 'tools', 'usage', 'tool_choice'],
+    operatorId: userId,
+  });
   const existing = await repository.getByIdAndVersion(modelPolicyId, 1, { tenantId });
   if (existing?.status === status) {
     return existing;
@@ -877,11 +890,9 @@ async function seedModelPolicy(db: Db, modelPolicyId: string, status: 'published
     protocol: 'openai_chat_completions',
     targets: [{
       target_id: `${modelPolicyId}_primary`,
-      gateway_profile: modelGatewayProfile,
-      model_id: modelGatewayModel,
+      model_ref: catalog.model_ref,
       priority: 0,
       enabled: true,
-      capabilities: ['text', 'tools', 'usage', 'tool_choice'],
     }],
     retry_policy: {
       max_attempts_per_target: 1,
@@ -921,10 +932,7 @@ async function seedModelPolicy(db: Db, modelPolicyId: string, status: 'published
     operatorId: userId,
     releaseNote: 'AR-2B evaluation smoke published model policy',
   });
-  return {
-    ...published,
-    targets: published.targets.map((target) => ({ ...target, model_id: modelGatewayModel })),
-  };
+  return published;
 }
 
 async function startAndWaitEvaluationRun(
@@ -1531,6 +1539,9 @@ async function assertWorkerUsesModelGateway(): Promise<void> {
   };
   if (body.checks?.model_gateway_profile) {
     modelGatewayProfile = body.checks.model_gateway_profile;
+    modelGatewayBaseUrl = body.checks.model_gateway_profile === 'local-ollama'
+      ? 'http://host.docker.internal:11434/v1'
+      : modelGatewayBaseUrl;
   }
   if (body.checks?.model_gateway_model) {
     modelGatewayModel = body.checks.model_gateway_model;

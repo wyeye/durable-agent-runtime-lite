@@ -5,7 +5,6 @@ import type {
   AgentRunRecord,
   AgentStepRecord,
   HumanTask,
-  ModelGatewayProtocol,
   StandardResponse,
   TaskRun,
 } from '@dar/contracts';
@@ -25,6 +24,7 @@ import {
   upsertAgentSpec,
   upsertPromptDefinition,
 } from '@dar/db';
+import { ensureModelCatalogEntry } from './model-catalog-seed.js';
 
 const runtimeApiUrl = trimTrailingSlash(process.env.RUNTIME_API_URL ?? 'http://localhost:3000');
 const databaseUrl =
@@ -38,10 +38,9 @@ const tenantId =
   process.env.SMOKE_TENANT_ID ??
   (mode === 'model_gateway' ? `pi_smoke_${scenario}_${runId}` : 'default');
 const userId = process.env.SMOKE_USER_ID ?? 'pi_smoke_user';
-const modelGatewayProtocol = (process.env.MODEL_GATEWAY_PROTOCOL ??
-  'openai_chat_completions') as ModelGatewayProtocol;
 const modelGatewayModel = process.env.MODEL_GATEWAY_MODEL ?? 'dar-local-model';
 const modelGatewayProvider = process.env.MODEL_GATEWAY_PROVIDER ?? 'local-mock';
+const modelGatewayBaseUrl = process.env.MODEL_GATEWAY_BASE_URL ?? 'http://mock-server:4100';
 const requestId = `pi_smoke_${scenario}_${Date.now()}`;
 const runtimeHeaders = authHeaders(`${requestId}_runtime`);
 
@@ -238,6 +237,19 @@ async function seedModelPolicy(
   displayPolicy: string,
 ) {
   const repository = new ModelPolicyRepository(db);
+  const catalog = await ensureModelCatalogEntry(db, {
+    profileId: mode === 'model_gateway' ? modelGatewayProvider : 'local-deterministic',
+    displayName: mode === 'model_gateway'
+      ? `${modelGatewayProvider} ${modelGatewayModel}`
+      : `Deterministic ${displayPolicy}`,
+    baseUrl: mode === 'model_gateway' ? modelGatewayBaseUrl : 'http://mock-server:4100',
+    authType: 'none',
+    modelId: mode === 'model_gateway' ? modelGatewayModel : displayPolicy,
+    upstreamModelId: mode === 'model_gateway' ? modelGatewayModel : displayPolicy,
+    provider: mode === 'model_gateway' ? modelGatewayProvider : 'local-mock',
+    capabilities: ['text', 'tools', 'usage'],
+    operatorId: 'pi-smoke',
+  });
   const existing = await repository.getByIdAndVersion(modelPolicyId, 1, { tenantId });
   if (existing?.status === 'published' || existing?.status === 'gray') {
     return existing;
@@ -252,15 +264,13 @@ async function seedModelPolicy(
       model_policy_id: modelPolicyId,
       version: 1,
       status: 'draft',
-      protocol: mode === 'model_gateway' ? modelGatewayProtocol : 'dar_generate',
+      protocol: 'openai_chat_completions',
       targets: [
         {
           target_id: `${modelPolicyId}_primary`,
-          gateway_profile: mode === 'model_gateway' ? modelGatewayProvider : 'local-mock',
-          model_id: mode === 'model_gateway' ? modelGatewayModel : displayPolicy,
+          model_ref: catalog.model_ref,
           priority: 0,
           enabled: true,
-          capabilities: ['text', 'tools', 'usage'],
         },
       ],
       retry_policy: {

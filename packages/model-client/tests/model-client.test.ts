@@ -247,6 +247,49 @@ describe('Model Gateway contract', () => {
     });
   });
 
+  it('preserves gateway path prefixes when posting OpenAI-compatible requests', async () => {
+    const seen: Array<{ url?: string }> = [];
+    const server = createServer((request, response) => {
+      seen.push({ url: request.url });
+      request.resume();
+      request.on('end', () => {
+        response.setHeader('content-type', 'application/json');
+        response.end(
+          JSON.stringify({
+            id: 'chatcmpl_prefixed_gateway',
+            model: 'gpt-test',
+            choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'done' } }],
+          }),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    servers.push(server);
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('test server did not bind to a TCP port');
+    }
+
+    const client = new ModelGatewayClient({
+      baseUrl: `http://127.0.0.1:${address.port}/gateway-a`,
+      apiKey: 'test-key',
+      protocol: 'openai_chat_completions',
+      allowInsecureHttp: true,
+      maxRetries: 0,
+    });
+
+    await client.call({
+      model_request_key: 'prefixed-gateway',
+      model: 'gpt-test',
+      messages: [{ role: 'user', content: 'hello' }],
+      tools: [],
+      tool_choice: 'none',
+      response_format: 'text',
+    });
+
+    expect(seen[0]?.url).toBe('/gateway-a/v1/chat/completions');
+  });
+
   it('fails closed on unmatched tool result ids and unknown provider aliases', async () => {
     const client = new ModelGatewayClient({
       baseUrl: 'http://127.0.0.1:1',

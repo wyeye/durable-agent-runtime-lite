@@ -92,6 +92,27 @@ export function buildServer() {
     });
   });
 
+  server.post('/gateway-a/v1/chat/completions', async (request, reply) => {
+    if (!authorized(request.headers.authorization, ['gateway-a-secret'])) {
+      reply.code(401);
+      return { error: { code: 'unauthorized', message: 'Unauthorized' } };
+    }
+    const body = request.body as OpenAiChatRequest;
+    if (process.env.MOCK_GATEWAY_A_FORCE_503 === 'true' || body.model?.includes('force_503')) {
+      reply.code(503);
+      return { error: { code: 'temporarily_unavailable', message: 'Gateway A unavailable' } };
+    }
+    return openAiPrefixedGatewayResponse(body, 'gateway-a');
+  });
+
+  server.post('/gateway-b/v1/chat/completions', async (request, reply) => {
+    if (!authorized(request.headers.authorization, ['gateway-b-secret', 'gateway-b-secret-v2'])) {
+      reply.code(401);
+      return { error: { code: 'unauthorized', message: 'Unauthorized' } };
+    }
+    return openAiPrefixedGatewayResponse(request.body as OpenAiChatRequest, 'gateway-b');
+  });
+
   return server;
 }
 
@@ -231,6 +252,28 @@ function openAiResponseForScenario(
       total_tokens: response.usage.total_tokens,
     },
   };
+}
+
+function openAiPrefixedGatewayResponse(body: OpenAiChatRequest, gateway: 'gateway-a' | 'gateway-b') {
+  const messages = (body.messages ?? []).map((message) => ({
+    role: message.role,
+    content: messageContentToText(message.content),
+  }));
+  const scenario = scenarioFromMessages(messages);
+  const response = openAiResponseForScenario(scenario, {
+    ...(body.model ? { model: body.model } : {}),
+    messages,
+    toolAliases: toolAliasesFromOpenAiTools(body.tools ?? []),
+  });
+  return {
+    ...response,
+    id: `${gateway}_${response.id}`,
+  };
+}
+
+function authorized(header: string | undefined, acceptedTokens: string[]): boolean {
+  const token = /^Bearer\s+(.+)$/iu.exec(header ?? '')?.[1];
+  return Boolean(token && acceptedTokens.includes(token));
 }
 
 interface ToolAliasMap {

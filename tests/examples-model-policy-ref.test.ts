@@ -13,7 +13,9 @@ describe('example ModelPolicy references', () => {
     const agent = agentSpecSchema.parse(await readJson('examples/agents/sample-agent.json'));
     const target = policy.targets[0];
 
-    expect(target?.model_id).toBe(agent.model_policy);
+    expect(target?.model_ref.model_id).toBe('deterministic-final-only');
+    expect(target?.model_ref.version).toBe(1);
+    expect(target?.model_ref.model_hash).toMatch(/^[a-f0-9]{64}$/u);
     expect(agent.model_policy_ref).toEqual({
       model_policy_id: policy.model_policy_id,
       model_policy_version: policy.version,

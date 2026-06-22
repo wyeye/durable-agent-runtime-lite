@@ -180,7 +180,7 @@ function FlowStepPropertyDrawer({
               }}
             />
           </Form.Item>
-          <Form.Item label="mode"><Input value={step.mode ?? ''} disabled={readOnly} onChange={(event) => onChange({ ...step, mode: event.target.value || undefined })} /></Form.Item>
+          <Form.Item label="mode"><Input data-testid="vc-flow-step-tool-mode" value={step.mode ?? ''} disabled={readOnly} onChange={(event) => onChange({ ...step, mode: event.target.value || undefined })} /></Form.Item>
           <Form.Item label="risk_level"><Select allowClear value={step.risk_level} disabled={readOnly} options={['L0', 'L1', 'L2', 'L3', 'L4'].map((item) => ({ value: item, label: item }))} onChange={(risk_level) => onChange({ ...step, risk_level })} /></Form.Item>
         </>
       ) : null}

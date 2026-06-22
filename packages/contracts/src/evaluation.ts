@@ -17,18 +17,33 @@ const modelCapabilitySchema = z.enum([
 ]);
 const modelToolChoiceModeSchema = z.enum(['auto', 'none', 'required']);
 const modelResponseFormatSchema = z.enum(['text', 'json_object', 'json_schema']);
+const modelDefinitionRefSchema = z.object({
+  model_id: z.string().min(1),
+  version: z.number().int().positive(),
+  model_hash: sha256Schema,
+});
 const modelTargetSchema = z.object({
   target_id: z.string().min(1),
-  gateway_profile: z.string().min(1),
-  provider_hint: z.string().min(1).optional(),
-  model_id: z.string().min(1),
+  model_ref: modelDefinitionRefSchema,
   priority: z.number().int().nonnegative(),
   enabled: z.boolean().default(true),
-  capabilities: z.array(modelCapabilitySchema).min(1),
   timeout_ms: z.number().int().positive().optional(),
   max_retries: z.number().int().nonnegative().max(10).optional(),
+}).strict();
+const resolvedModelTargetSchema = modelTargetSchema.extend({
+  model_id: z.string().min(1),
+  model_version: z.number().int().positive(),
+  model_hash: sha256Schema,
+  gateway_profile_id: z.string().min(1),
+  gateway_profile_config_hash: sha256Schema,
+  upstream_model_id: z.string().min(1),
+  provider: z.string().min(1),
+  capabilities: z.array(modelCapabilitySchema).min(1),
+  context_window: z.number().int().positive(),
+  max_output_tokens: z.number().int().positive(),
   input_cost_per_million: z.number().nonnegative().optional(),
   output_cost_per_million: z.number().nonnegative().optional(),
+  currency: z.string().min(1).optional(),
 });
 const modelRetryPolicySchema = z.object({
   max_attempts_per_target: z.number().int().positive().max(10).default(2),
@@ -60,7 +75,7 @@ const resolvedModelPolicySchema = z.object({
   model_policy_version: z.number().int().positive(),
   model_policy_hash: sha256Schema,
   protocol: modelGatewayProtocolSchema,
-  resolved_targets: z.array(modelTargetSchema).min(1),
+  resolved_targets: z.array(resolvedModelTargetSchema).min(1),
   retry_policy: modelRetryPolicySchema,
   fallback_policy: modelFallbackPolicySchema,
   request_policy: modelRequestPolicySchema,

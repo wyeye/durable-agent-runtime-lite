@@ -3,10 +3,12 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { getAppPort, getBuildInfo, loadConfig, type RuntimeConfig } from '@dar/config';
 import { createLogger, logErrorEvent, logEvent } from '@dar/logger';
 import { installFastifyLocale } from '@dar/i18n';
+import { parseModelCredentialMasterKey } from '@dar/security';
 import { startTemporalWorker, type TemporalWorkerHandle } from './worker.js';
 
 const appName = 'runtime-worker' as const;
 const logger = createLogger(appName);
+const processStartedAt = new Date().toISOString();
 
 export function buildServer(
   worker: Pick<TemporalWorkerHandle, 'mode' | 'state' | 'taskQueues' | 'evaluationTaskQueue' | 'evaluationState'> = {
@@ -29,6 +31,7 @@ export function buildServer(
 
   server.get('/version', async (request) => ({
     ...getBuildInfo(appName, config),
+    process_started_at: processStartedAt,
     message_key: 'common.health.versionReady',
     message: request.t('common.health.versionReady'),
     locale: request.locale,
@@ -57,7 +60,7 @@ export function buildServer(
         evaluation_worker_status: worker.evaluationState?.status ?? 'disabled',
         pi_agent_mode: config.PI_AGENT_MODE,
         pi_agent: piReady.status,
-        model_gateway_profile: config.MODEL_GATEWAY_PROFILE_ID,
+        model_gateway_config_source: config.MODEL_GATEWAY_CONFIG_SOURCE,
         ...(worker.state.error ? { worker_error: worker.state.error } : {}),
         ...(worker.evaluationState?.error ? { evaluation_worker_error: worker.evaluationState.error } : {}),
         ...(piReady.error ? { pi_error: piReady.error } : {}),
@@ -112,61 +115,16 @@ function piReadiness(config: RuntimeConfig): { ready: boolean; status: string; e
       error: 'PI_AGENT_MODE=model_gateway is required in production',
     };
   }
-  if (
-    config.PI_AGENT_MODE === 'model_gateway' &&
-    (!config.MODEL_GATEWAY_BASE_URL || !config.MODEL_GATEWAY_API_KEY)
-  ) {
-    return {
-      ready: false,
-      status: 'not_ready',
-      error: 'Model Gateway configuration is incomplete',
-    };
-  }
-  if (
-    production &&
-    config.PI_AGENT_MODE === 'model_gateway' &&
-    /^dev-only-|placeholder/iu.test(config.MODEL_GATEWAY_API_KEY)
-  ) {
-    return {
-      ready: false,
-      status: 'not_ready',
-      error: 'Production Model Gateway API key must be provided by secret management',
-    };
-  }
-  if (
-    production &&
-    config.PI_AGENT_MODE === 'model_gateway' &&
-    config.MODEL_GATEWAY_PROFILE_ID === 'local-ollama'
-  ) {
-    return {
-      ready: false,
-      status: 'not_ready',
-      error: 'local-ollama Model Gateway profile is development/test only',
-    };
-  }
-  if (
-    production &&
-    config.PI_AGENT_MODE === 'model_gateway' &&
-    config.MODEL_GATEWAY_API_KEY === 'ollama'
-  ) {
-    return {
-      ready: false,
-      status: 'not_ready',
-      error: 'Ollama compatibility API key is development/test only',
-    };
-  }
-  if (
-    production &&
-    config.PI_AGENT_MODE === 'model_gateway' &&
-    !config.MODEL_GATEWAY_ALLOW_INSECURE_HTTP &&
-    !config.MODEL_GATEWAY_BASE_URL.startsWith('https://')
-  ) {
-    return {
-      ready: false,
-      status: 'not_ready',
-      error:
-        'Production Model Gateway URL must use HTTPS unless insecure HTTP is explicitly allowed',
-    };
+  if (config.PI_AGENT_MODE === 'model_gateway') {
+    try {
+      parseModelCredentialMasterKey(config.MODEL_CREDENTIAL_MASTER_KEY);
+    } catch {
+      return {
+        ready: false,
+        status: 'not_ready',
+        error: 'MODEL_CREDENTIAL_MASTER_KEY must be a base64 encoded 32-byte key',
+      };
+    }
   }
   if (
     production &&
@@ -177,28 +135,6 @@ function piReadiness(config: RuntimeConfig): { ready: boolean; status: string; e
       ready: false,
       status: 'not_ready',
       error: 'Production Model Gateway must not allow insecure HTTP',
-    };
-  }
-  if (
-    production &&
-    config.PI_AGENT_MODE === 'model_gateway' &&
-    config.MODEL_GATEWAY_MODE !== 'openai_compatible'
-  ) {
-    return {
-      ready: false,
-      status: 'not_ready',
-      error: 'MODEL_GATEWAY_MODE=openai_compatible is required in production',
-    };
-  }
-  if (
-    production &&
-    config.PI_AGENT_MODE === 'model_gateway' &&
-    config.MODEL_GATEWAY_PROTOCOL !== 'openai_chat_completions'
-  ) {
-    return {
-      ready: false,
-      status: 'not_ready',
-      error: 'MODEL_GATEWAY_PROTOCOL=openai_chat_completions is required in production',
     };
   }
   return { ready: true, status: config.PI_AGENT_MODE };
