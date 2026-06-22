@@ -7,6 +7,7 @@ import { navigation } from './navigation.js';
 import { operations } from './operations.js';
 import { registry } from './registry.js';
 import { statuses } from './statuses.js';
+import { visualConfig } from './visual-config.js';
 
 export const zhCN = {
   audit,
@@ -18,4 +19,5 @@ export const zhCN = {
   operations,
   registry,
   statuses,
+  visualConfig,
 };

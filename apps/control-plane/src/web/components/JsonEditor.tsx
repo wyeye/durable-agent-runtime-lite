@@ -1,51 +1,19 @@
-import { Alert, Button, Input, Space } from 'antd';
-import { useMemo, useState } from 'react';
-import { parseJson, stringifyPretty } from '../utils/json.js';
+import { ReadonlyJsonPreview } from '../visual-config/components/ReadonlyJsonPreview.js';
 
 export function JsonEditor({
   value,
-  onChange,
-  minRows = 14,
-  readOnly = false,
+  filename = 'readonly-json.json',
 }: {
   value: string;
-  onChange(value: string): void;
-  minRows?: number;
-  readOnly?: boolean;
+  filename?: string;
 }) {
-  const [error, setError] = useState<string | undefined>();
-  const parseState = useMemo(() => parseJson(value), [value]);
+  return <ReadonlyJsonPreview value={safeParse(value)} filename={filename} />;
+}
 
-  return (
-    <Space direction="vertical" style={{ width: '100%' }}>
-      <Input.TextArea
-        data-testid="json-editor-textarea"
-        value={value}
-        onChange={(event) => {
-          onChange(event.target.value);
-          setError(undefined);
-        }}
-        autoSize={{ minRows, maxRows: 32 }}
-        readOnly={readOnly}
-        spellCheck={false}
-      />
-      {error || !parseState.ok ? (
-        <Alert type="error" showIcon message="JSON 格式错误" description={error ?? parseState.error} />
-      ) : null}
-      {!readOnly ? (
-        <Button
-          onClick={() => {
-            const parsed = parseJson(value);
-            if (!parsed.ok) {
-              setError(parsed.error ?? 'JSON parse failed');
-              return;
-            }
-            onChange(stringifyPretty(parsed.value));
-          }}
-        >
-          格式化 JSON
-        </Button>
-      ) : null}
-    </Space>
-  );
+function safeParse(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return { raw_text: value };
+  }
 }

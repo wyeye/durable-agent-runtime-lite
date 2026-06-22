@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-06-21 for FULLSTACK-I18N-1 implementation pass.
+Last updated: 2026-06-22 for CP-VISUAL-CONFIG-1 implementation pass.
 
 ## Platform Version
 
@@ -83,6 +83,30 @@ This repository must still not be labeled `0.9.0-rc.1`; AR-2A completion is a de
 First-version locale support is `zh-CN` only. `packages/i18n` owns locale negotiation, shared translation resources, API error/message helpers, log message helpers, audit display localization, Zod issue localization, and Fastify locale middleware. control-plane, runtime-api, runtime-worker, and tool-gateway set `Content-Language` / `Vary` on HTTP responses.
 
 The control-plane UI has no language switcher in this pass. User-visible navigation, page titles, buttons, table headers, form prompts, state labels, major errors, and operation notices are Chinese. Stable machine fields remain untranslated, including error codes, event codes, enums, IDs, hashes, JSON field names, API paths, tool names, provider IDs, and model IDs.
+
+## Control-Plane Visual Configuration
+
+**CP-VISUAL-CONFIG-1 COMPLETE**
+
+The control-plane writable configuration path has been converted from editable JSON to visual forms for Registry resources, Evaluation Dataset, Evaluation Case, and Evaluation Gate Policy. JSON is retained as a read-only preview with copy/download. Form data is converted back to existing Contract objects and validated with `@dar/contracts` before using existing APIs; no backend API, runtime, DB migration, Temporal, Pi, or Tool Gateway semantics were changed.
+
+Implemented locally:
+
+- Visual editor adapter registry under `apps/control-plane/src/web/visual-config`.
+- Prompt, Route, Agent, ModelPolicy, Tool, TenantRuntimePolicy, Flow, Dataset, Case, and Gate Policy visual editors.
+- Exact version selector for Registry resources and published Evaluation Dataset references.
+- Structured JSON value editor and JSON Schema subset builder with advanced keyword preservation.
+- React Flow-based ordered Flow sequence canvas that does not persist node positions or introduce DAG semantics.
+- Browser/navigation unsaved-change guards on Registry and Evaluation visual edit/create paths.
+- Standard 409/422 API error mapping into form-level summaries with field focus anchors where field paths are available.
+- Round-trip tests for all supported resource shapes.
+- `corepack pnpm visual-config:check` static guard against writable JSON editor regressions.
+- UI smoke scripts updated so current writable configuration creation paths no longer drive `json-editor-textarea`.
+
+Verified locally:
+
+- `corepack pnpm smoke:control-plane-ui-e2e` passed against a live local stack, creating Registry resources through visual forms, selecting exact versions, publishing Flow+Route, verifying router preview, rollback, and Human Task approval.
+- `corepack pnpm smoke:evaluation-ui-e2e` passed against a live local stack with an evaluation-enabled runtime-worker, creating Dataset/Case/Gate Policy through visual forms and verifying Evaluation Run, Gate Decision, Override/RBAC, and exact gate publish behavior.
 
 ## Model Gateway Runtime
 

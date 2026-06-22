@@ -82,6 +82,7 @@ interface LocatorLike {
   first(): LocatorLike;
   last(): LocatorLike;
   nth(index: number): LocatorLike;
+  locator(selector: string): LocatorLike;
   waitFor(options?: { timeout?: number }): Promise<unknown>;
   isVisible(options?: { timeout?: number }): Promise<boolean>;
   innerText(options?: { timeout?: number }): Promise<string>;
@@ -220,14 +221,23 @@ async function createDatasetThroughUi(page: PageLike) {
   await page.goto(`${controlPlaneUrl}/evaluation/datasets`);
   await page.getByText('评测数据集').first().waitFor({ timeout: 15_000 });
   await page.getByTestId('evaluation-dataset-create').click();
-  await page.getByTestId('json-editor-textarea').last().fill(JSON.stringify(dataset, null, 2));
+  await page.getByTestId('vc-dataset-id').fill(dataset.dataset_id);
+  await page.getByTestId('vc-dataset-name').fill(dataset.name);
   await page.getByTestId('evaluation-dataset-submit').click();
   await page.getByText(datasetId).first().waitFor({ timeout: 15_000 });
 
   for (const evaluationCase of [caseSpec(datasetId, 'pass', 'Mock final answer'), caseSpec(datasetId, 'second', 'Mock final answer')]) {
     await page.getByRole('tab', { name: 'Case 列表', exact: true }).click();
     await page.getByTestId('evaluation-case-create').click();
-    await page.getByTestId('json-editor-textarea').last().fill(JSON.stringify(evaluationCase, null, 2));
+    await page.getByTestId('vc-case-id').fill(evaluationCase.case_id);
+    await page.getByTestId('vc-case-name').fill(evaluationCase.name);
+    await page.getByTestId('vc-case-add-expected-tool').click();
+    await page.getByTestId('vc-case-expected-tool-name-0').fill(`${datasetId}.expected_tool`);
+    await fillByTestId(page, 'vc-case-expected-tool-min-0', '0');
+    await fillByTestId(page, 'vc-case-expected-tool-max-0', '0');
+    await selectByTestId(page, 'vc-case-final-assertion-type-0', 'contains');
+    await page.getByTestId('vc-case-final-assertion-value-0').fill('Mock final answer');
+    await fillByTestId(page, 'vc-case-latency-budget-ms', '30000');
     await page.getByTestId('evaluation-case-submit').click();
     await page.getByText(evaluationCase.case_id).first().waitFor({ timeout: 15_000 });
   }
@@ -283,7 +293,10 @@ async function createGatePolicyThroughUi(page: PageLike, dataset: EvaluationData
   await page.goto(`${controlPlaneUrl}/evaluation/gates`);
   await page.getByText('发布门禁').first().waitFor({ timeout: 15_000 });
   await page.getByTestId('evaluation-gate-create').click();
-  await page.getByTestId('json-editor-textarea').last().fill(JSON.stringify({ policy: gatePolicy }, null, 2));
+  await page.getByTestId('vc-gate-policy-id').fill(gatePolicy.gate_policy_id);
+  await selectByTestId(page, 'vc-gate-dataset-ref', `${dataset.dataset_id}@${dataset.version}`);
+  await fillByTestId(page, 'vc-gate-minimum-pass-rate', '1');
+  await fillByTestId(page, 'vc-gate-maximum-latency-regression-percent', '0');
   await page.getByRole('button', { name: /提交\s*draft/u }).click();
   await page.getByText(gatePolicy.gate_policy_id).first().waitFor({ timeout: 15_000 });
   await page.getByRole('button', { name: /校\s*验/u }).click();
@@ -329,6 +342,26 @@ async function selectTriggerType(page: PageLike, triggerType: 'manual' | 'publis
     await page.keyboard.press('ArrowDown');
   }
   await page.keyboard.press('Enter');
+}
+
+async function selectByTestId(page: PageLike, testId: string, value: string): Promise<void> {
+  const select = page.getByTestId(testId);
+  await select.click();
+  await select.locator('input').fill(value).catch(() => undefined);
+  await page.locator(`.ant-select-item-option[title="${cssString(value)}"]`).last().click().catch(async () => {
+    await page.getByText(value, { exact: false }).last().click();
+  });
+}
+
+async function fillByTestId(page: PageLike, testId: string, value: string): Promise<void> {
+  const field = page.getByTestId(testId);
+  await field.fill(value).catch(async () => {
+    await field.locator('input').fill(value);
+  });
+}
+
+function cssString(value: string): string {
+  return value.replace(/\\/gu, '\\\\').replace(/"/gu, '\\"');
 }
 
 async function publishPromptThroughUi(page: PageLike, prompt: Candidate['prompt'], decision: EvaluationGateDecision, overrideId?: string) {

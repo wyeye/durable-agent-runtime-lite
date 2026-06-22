@@ -34,8 +34,8 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
         workflow_type: 'ConfigDrivenWorkflow',
         task_queue: 'config-driven',
       },
-      input_schema: {},
-      output_schema: {},
+      input_schema: { type: 'object' },
+      output_schema: { type: 'object' },
       steps: [
         {
           id: 'start',
@@ -94,8 +94,8 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
         type: 'mock',
         config: {},
       },
-      input_schema: {},
-      output_schema: {},
+      input_schema: { type: 'object' },
+      output_schema: { type: 'object' },
       required_permissions: [],
     }),
     renderSummary: renderToolSummary,

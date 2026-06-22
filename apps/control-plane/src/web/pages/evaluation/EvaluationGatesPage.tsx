@@ -7,12 +7,16 @@ import { Link, useNavigate } from 'react-router';
 import { Can, ReadOnlyNotice } from '../../auth/role-guard.js';
 import { EmptyState } from '../../components/EmptyState.js';
 import { ErrorAlert } from '../../components/ErrorAlert.js';
-import { JsonEditor } from '../../components/JsonEditor.js';
 import { useApiClient } from '../../api/use-api-client.js';
 import { createGatePolicy, listGatePolicies } from '../../api/evaluation-api.js';
 import { formatDateTime } from '../../utils/format.js';
-import { parseJson, stringifyPretty } from '../../utils/json.js';
 import { displayStatus } from '../../utils/i18n-labels.js';
+import { FormErrorSummary } from '../../visual-config/components/FormErrorSummary.js';
+import { ReadonlyJsonPreview } from '../../visual-config/components/ReadonlyJsonPreview.js';
+import { issuesFromError } from '../../visual-config/form-error-mapper.js';
+import { evaluationGatePolicyAdapter } from '../../visual-config/registry.js';
+import { EvaluationGatePolicyVisualEditor } from '../../visual-config/editors/EvaluationGatePolicyVisualEditor.js';
+import { useUnsavedChangeGuard } from '../../visual-config/useUnsavedChangeGuard.js';
 import { EvaluationStatusTag, HashText } from './evaluation-utils.js';
 
 const statuses: EvaluationDatasetStatus[] = ['draft', 'validated', 'published', 'deprecated', 'disabled'];
@@ -28,7 +32,10 @@ export function EvaluationGatesPage() {
   const { message } = App.useApp();
   const [filters, setFilters] = useState<GateFilters>({});
   const [createOpen, setCreateOpen] = useState(false);
-  const [createText, setCreateText] = useState(() => stringifyPretty({ policy: gatePolicyTemplate() }));
+  const [createSpec, setCreateSpec] = useState<EvaluationGatePolicy>(() => evaluationGatePolicyAdapter.createDefault());
+  const [createDirty, setCreateDirty] = useState(false);
+
+  useUnsavedChangeGuard(createOpen && createDirty, '当前 Gate Policy 创建表单有未保存改动，确认离开吗？');
 
   const query = useQuery({
     queryKey: ['evaluation-gate-policies', filters],
@@ -37,15 +44,16 @@ export function EvaluationGatesPage() {
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const parsed = parseJson(createText);
-      if (!parsed.ok) {
-        throw new Error(parsed.error ?? 'JSON 格式错误');
+      const parsed = evaluationGatePolicyAdapter.schema.safeParse(evaluationGatePolicyAdapter.formToSpec(createSpec));
+      if (!parsed.success) {
+        throw new Error(parsed.error.issues.map((issue) => issue.message).join('；'));
       }
-      return createGatePolicy(client, parsed.value as { policy: EvaluationGatePolicy });
+      return createGatePolicy(client, { policy: parsed.data });
     },
     onSuccess: async (policy) => {
       message.success('发布门禁策略草稿已创建');
       setCreateOpen(false);
+      setCreateDirty(false);
       await queryClient.invalidateQueries({ queryKey: ['evaluation-gate-policies'] });
       navigate(`/evaluation/gates/${encodeURIComponent(policy.gate_policy_id)}/versions/${policy.version}`);
     },
@@ -79,7 +87,16 @@ export function EvaluationGatesPage() {
         <Space>
           <Button onClick={() => query.refetch()} loading={query.isFetching}>刷新</Button>
           <Can permission="registry:write">
-            <Button type="primary" data-testid="evaluation-gate-create" onClick={() => setCreateOpen(true)}>创建 draft</Button>
+            <Button
+              type="primary"
+              data-testid="evaluation-gate-create"
+              onClick={() => {
+                setCreateOpen(true);
+                setCreateDirty(false);
+              }}
+            >
+              创建 draft
+            </Button>
           </Can>
         </Space>
       </div>
@@ -101,55 +118,36 @@ export function EvaluationGatesPage() {
           locale={{ emptyText: <EmptyState description="暂无发布门禁策略" /> }}
         />
       </section>
-      <Drawer title="创建发布门禁策略草稿" open={createOpen} onClose={() => setCreateOpen(false)} width={820}>
+      <Drawer
+        title="创建发布门禁策略草稿"
+        open={createOpen}
+        onClose={() => {
+          if (createDirty && !globalThis.confirm('当前 Gate Policy 创建表单有未保存改动，确认关闭吗？')) {
+            return;
+          }
+          setCreateOpen(false);
+          setCreateDirty(false);
+        }}
+        width={820}
+      >
         {createMutation.error ? <ErrorAlert error={createMutation.error} /> : null}
         <Space direction="vertical" style={{ width: '100%' }}>
-          <JsonEditor value={createText} onChange={setCreateText} minRows={18} />
+          <FormErrorSummary apiIssues={issuesFromError(createMutation.error)} />
+          <EvaluationGatePolicyVisualEditor
+            value={createSpec}
+            readOnly={false}
+            onChange={(spec) => {
+              setCreateSpec(spec);
+              setCreateDirty(true);
+            }}
+            client={client}
+          />
+          <ReadonlyJsonPreview value={{ policy: evaluationGatePolicyAdapter.getPreview(createSpec) }} filename={`${createSpec.gate_policy_id}.json`} maxHeight={260} />
           <Button type="primary" loading={createMutation.isPending} onClick={() => createMutation.mutate()}>提交 draft</Button>
         </Space>
       </Drawer>
     </div>
   );
-}
-
-function gatePolicyTemplate(): EvaluationGatePolicy {
-  return {
-    gate_policy_id: `gate_policy_${Date.now()}`,
-    version: 1,
-    status: 'draft',
-    resource_types: ['prompt', 'agent', 'model_policy'],
-    required_dataset_refs: [{
-      dataset_id: 'published_dataset_id',
-      version: 1,
-      dataset_hash: 'a'.repeat(64),
-    }],
-    thresholds: {
-      minimum_pass_rate: 1,
-      minimum_weighted_score: 1,
-      minimum_tool_selection_score: 0,
-      maximum_forbidden_tool_calls: 0,
-      maximum_policy_violations: 0,
-      maximum_side_effect_without_approval: 0,
-      maximum_secret_leaks: 0,
-      maximum_hidden_reasoning_leaks: 0,
-      maximum_cross_tenant_violations: 0,
-      maximum_system_error_rate: 0,
-    },
-    regression_rules: {
-      maximum_score_regression: 0,
-      maximum_pass_rate_regression: 0,
-      maximum_latency_regression_percent: 0,
-      maximum_token_regression_percent: 0,
-      maximum_cost_regression_percent: 0,
-      block_newly_failed_cases: true,
-      block_safety_regression: true,
-      block_tool_regression: true,
-      require_same_dataset: true,
-    },
-    required_case_tags: [],
-    allow_override: true,
-    revision: 1,
-  };
 }
 
 function clean(values: Record<string, unknown>): GateFilters {

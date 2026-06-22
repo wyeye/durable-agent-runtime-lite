@@ -100,7 +100,8 @@ Rules:
 - Do not implement runtime execution logic here.
 - Do not call tools directly from the frontend.
 - Do not duplicate schemas in the frontend; import or generate from shared contracts.
-- Flow editing may start with JSON editor or textarea; do not implement a complex visual workflow designer unless explicitly requested.
+- Writable Registry and Evaluation configuration uses visual forms; JSON views are read-only only.
+- Flow editing uses the visual sequence builder for the existing ordered `steps` array semantics; do not introduce arbitrary DAG semantics unless explicitly requested.
 - Tenant Policy Snapshot and Tenant Agent Admission are runtime operations resources, not editable Registry resources; control-plane may read them but must not create, update or delete them.
 
 ---

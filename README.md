@@ -50,6 +50,8 @@ LOG_LOCALE=zh-CN
 
 国际化第一版只开放 `zh-CN`。API 使用请求 `Accept-Language` 并在不支持语言时回退到 `zh-CN`；运行日志使用部署级 `LOG_LOCALE`；Audit 以 `message_key` 和 `message_params` 作为事实源。详见 `docs/55_fullstack_i18n.md`。
 
+Control-plane 可写配置使用可视化表单作为唯一编辑入口，JSON 仅保留只读查看、复制和下载。Registry、Evaluation Dataset、Case 和 Gate Policy 表单最终仍生成现有 Contract 对象并通过服务端校验；精确版本引用不使用 `latest` 或默认资源兜底。详见 `docs/56_visual_configuration.md`。
+
 DB-backed registry 模式：
 
 ```bash

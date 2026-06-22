@@ -63,7 +63,9 @@ x-request-id
 ## Registry UI 规则
 
 - 五类资源使用统一 ResourcePage，但每类资源必须展示自己的关键字段。
-- 创建和编辑使用 JSON textarea；JSON 解析失败不提交。
+- 创建和编辑使用 `visual-config` 可视化表单；JSON 仅允许只读查看、复制和下载。
+- 表单提交链路必须是 `formToSpec()` -> `@dar/contracts` Zod `safeParse()` -> 现有 API；不得用 Raw JSON 编辑、导入或“应用 JSON”绕过表单。
+- 引用字段必须使用精确版本或结构化引用，不使用 `latest`，不自动选择第一项，不回退到默认资源。
 - `PUT` 必须使用当前版本 `revision` 作为 `expected_revision`。
 - `draft` / `validated` 可编辑；`published` / `gray` / `deprecated` / `disabled` 不可编辑。
 - 修改已发布资源必须 clone 新版本。
@@ -74,6 +76,7 @@ x-request-id
 - gray 支持 `tenant_allowlist` 和可选 `user_allowlist`，不使用随机分流。
 - rollback 选择目标版本；rollback 不修改历史 spec 内容。
 - 版本对比使用两侧格式化 JSON，暂不引入重型 diff 依赖。
+- Flow 可视化 canvas 只表达现有 `steps` 数组顺序执行语义，不保存节点坐标，也不引入任意 DAG。
 
 ## 运行查询 UI 规则
 
@@ -87,6 +90,7 @@ x-request-id
 
 - Evaluation 页面只调用 control-plane 同源 `/api/v1/evaluation-*` 和 `/api/v1/evaluation-runs*`。
 - Dataset / Case 页面不使用 sample/mock 生产数据；empty 仅表示后端成功返回空结果。
+- Dataset / Case / Gate Policy 创建和编辑使用可视化表单；JSON 仅只读。Gate Policy Required Dataset 通过 exact Dataset version/hash 选择器生成，不能手工伪造 hash。
 - Create Run 必须输入 exact Dataset version/hash、Subject Snapshot ref/hash、EvaluationExecutionPlan ref/hash，不允许 latest。
 - Run Detail 只显示 safe evidence refs 和 summary，不显示完整 Tool Result、raw Provider Response 或 hidden reasoning。
 - Gate Decision freshness/stale reasons 以后端返回为准，前端不重算 Gate Decision。
@@ -123,4 +127,4 @@ corepack pnpm smoke:evaluation-ui-e2e
 
 UI smoke 需要 control-plane、runtime-api、runtime-worker、tool-gateway、PostgreSQL、Temporal 已运行。它会在浏览器中设置开发身份，验证页面渲染，创建并发布 Registry 资源，执行 router preview、rollback，并通过 Human Task 页面 approve 一个 L3 pending task。
 
-Evaluation UI smoke 还需要 mock-server 和 `PI_AGENT_MODE=model_gateway` 的 runtime-worker。它通过浏览器完成 Dataset/Case、Gate Policy、Run、Gate Decision、Registry Gate Card 和 Override/RBAC 操作；setup 只准备 UI 当前不负责创建的 immutable candidate snapshot / execution plan。
+Evaluation UI smoke 还需要 mock-server 和 `PI_AGENT_MODE=model_gateway` 的 runtime-worker。它通过浏览器完成 Dataset/Case、Gate Policy、Run、Gate Decision、Registry Gate Card 和 Override/RBAC 操作；setup 只准备 UI 当前不负责创建的 immutable candidate snapshot / execution plan。当前可写配置 smoke 不应驱动 `json-editor-textarea`。

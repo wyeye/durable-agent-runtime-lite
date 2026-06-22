@@ -6,7 +6,6 @@ import { Link, useNavigate, useParams } from 'react-router';
 import { Can, ReadOnlyNotice } from '../../auth/role-guard.js';
 import { EmptyState } from '../../components/EmptyState.js';
 import { ErrorAlert } from '../../components/ErrorAlert.js';
-import { JsonEditor } from '../../components/JsonEditor.js';
 import { useApiClient } from '../../api/use-api-client.js';
 import {
   cloneGatePolicy,
@@ -17,8 +16,13 @@ import {
   validateGatePolicy,
 } from '../../api/evaluation-api.js';
 import { formatDateTime } from '../../utils/format.js';
-import { parseJson, stringifyPretty } from '../../utils/json.js';
-import { CopyHashButton, EvaluationStatusTag, HashText, SafeJsonPreview } from './evaluation-utils.js';
+import { FormErrorSummary } from '../../visual-config/components/FormErrorSummary.js';
+import { ReadonlyJsonPreview } from '../../visual-config/components/ReadonlyJsonPreview.js';
+import { issuesFromError } from '../../visual-config/form-error-mapper.js';
+import { evaluationGatePolicyAdapter } from '../../visual-config/registry.js';
+import { EvaluationGatePolicyVisualEditor } from '../../visual-config/editors/EvaluationGatePolicyVisualEditor.js';
+import { useUnsavedChangeGuard } from '../../visual-config/useUnsavedChangeGuard.js';
+import { CopyHashButton, EvaluationStatusTag, HashText } from './evaluation-utils.js';
 
 export function EvaluationGateDetailPage() {
   const { gatePolicyId, version } = useParams();
@@ -27,8 +31,11 @@ export function EvaluationGateDetailPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { message } = App.useApp();
-  const [editorText, setEditorText] = useState('');
+  const [policySpec, setPolicySpec] = useState<EvaluationGatePolicy>(() => evaluationGatePolicyAdapter.createDefault());
   const [cloneTarget, setCloneTarget] = useState<number | undefined>();
+  const [policyDirty, setPolicyDirty] = useState(false);
+
+  useUnsavedChangeGuard(editableFromStatus(policySpec.status) && policyDirty, '当前 Gate Policy 表单有未保存改动，确认离开吗？');
 
   const policyQuery = useQuery({
     queryKey: ['evaluation-gate-policy', gatePolicyId, policyVersion],
@@ -44,7 +51,8 @@ export function EvaluationGateDetailPage() {
 
   useEffect(() => {
     if (policyQuery.data) {
-      setEditorText(stringifyPretty(policyPatchView(policyQuery.data)));
+      setPolicySpec(policyQuery.data);
+      setPolicyDirty(false);
     }
   }, [policyQuery.data]);
 
@@ -65,17 +73,18 @@ export function EvaluationGateDetailPage() {
       if (!policy || !gatePolicyId) {
         throw new Error('Gate Policy 未加载');
       }
-      const parsed = parseJson(editorText);
-      if (!parsed.ok) {
-        throw new Error(parsed.error ?? 'JSON 格式错误');
+      const parsed = evaluationGatePolicyAdapter.schema.safeParse(policySpec);
+      if (!parsed.success) {
+        throw new Error(parsed.error.issues.map((issue) => issue.message).join('；'));
       }
       return updateGatePolicy(client, gatePolicyId, policyVersion, {
-        policy: parsed.value as Partial<EvaluationGatePolicy>,
+        policy: policyPatchView(parsed.data),
         expected_revision: policy.revision,
       });
     },
     onSuccess: async (policy) => {
       message.success('Gate Policy 已保存');
+      setPolicyDirty(false);
       await refresh(policy);
     },
   });
@@ -165,7 +174,17 @@ export function EvaluationGateDetailPage() {
                 children: (
                   <section className="cp-section">
                     <Space direction="vertical" style={{ width: '100%' }}>
-                      <JsonEditor value={editorText} onChange={setEditorText} readOnly={!editable} minRows={18} />
+                      <FormErrorSummary apiIssues={issuesFromError(updateMutation.error)} />
+                      <EvaluationGatePolicyVisualEditor
+                        value={policySpec}
+                        readOnly={!editable}
+                        onChange={(spec) => {
+                          setPolicySpec(spec);
+                          setPolicyDirty(true);
+                        }}
+                        client={client}
+                      />
+                      <ReadonlyJsonPreview value={policyPatchView(policySpec)} filename={`${policySpec.gate_policy_id}-${policySpec.version}.json`} maxHeight={260} />
                       <Can permission="registry:write">
                         <Button type="primary" disabled={!editable} loading={updateMutation.isPending} onClick={() => updateMutation.mutate()}>保存 draft</Button>
                       </Can>
@@ -214,8 +233,8 @@ export function EvaluationGateDetailPage() {
               },
               {
                 key: 'json',
-                label: 'Safe JSON',
-                children: <SafeJsonPreview value={policy} />,
+                label: 'JSON 查看',
+                children: <ReadonlyJsonPreview value={policy} filename={`${policy.gate_policy_id}-${policy.version}.json`} />,
               },
             ]}
           />
@@ -236,4 +255,8 @@ function policyPatchView(policy: EvaluationGatePolicy): Partial<EvaluationGatePo
     required_case_tags: policy.required_case_tags,
     allow_override: policy.allow_override,
   };
+}
+
+function editableFromStatus(status: string | undefined): boolean {
+  return status === 'draft' || status === 'validated';
 }

@@ -8,7 +8,6 @@ import { Can, ReadOnlyNotice } from '../../auth/role-guard.js';
 import { ConfirmActionModal, type ConfirmActionValues } from '../../components/ConfirmActionModal.js';
 import { EmptyState } from '../../components/EmptyState.js';
 import { ErrorAlert } from '../../components/ErrorAlert.js';
-import { JsonEditor } from '../../components/JsonEditor.js';
 import { ReleaseActionButtons, type ReleaseAction } from '../../components/ReleaseActionButtons.js';
 import { StatusTag } from '../../components/StatusTag.js';
 import { ValidationResult } from '../../components/ValidationResult.js';
@@ -32,9 +31,16 @@ import {
 } from '../../api/registry-api.js';
 import { formatDateTime } from '../../utils/format.js';
 import { displayAction, displayStatus } from '../../utils/i18n-labels.js';
-import { parseJson, stringifyPretty } from '../../utils/json.js';
+import { stringifyPretty } from '../../utils/json.js';
+import { FormErrorSummary } from '../../visual-config/components/FormErrorSummary.js';
+import { ReadonlyJsonPreview } from '../../visual-config/components/ReadonlyJsonPreview.js';
+import { issuesFromError } from '../../visual-config/form-error-mapper.js';
+import { getRegistryVisualAdapter } from '../../visual-config/registry.js';
+import { RegistryVisualEditor } from '../../visual-config/editors/RegistryVisualEditor.js';
+import { useUnsavedChangeGuard } from '../../visual-config/useUnsavedChangeGuard.js';
 import { EvaluationGateCard, type GatePublishMetadata } from '../evaluation/EvaluationGateCard.js';
 import { resourceConfigs } from './resource-config.js';
+import type { RegistrySpec } from '../../api/registry-api.js';
 
 interface Filters {
   status?: SpecStatus;
@@ -44,21 +50,22 @@ interface Filters {
 
 interface CreateState {
   open: boolean;
-  text: string;
+  spec: RegistrySpec;
 }
 
 const statuses: SpecStatus[] = ['draft', 'validated', 'published', 'gray', 'deprecated', 'disabled'];
 
 export function RegistryResourcePage({ resourceType }: { resourceType: RegistryResourceType }) {
   const config = resourceConfigs[resourceType];
+  const visualAdapter = getRegistryVisualAdapter(resourceType);
   const apiClient = useApiClient();
   const queryClient = useQueryClient();
   const { message } = App.useApp();
   const [filters, setFilters] = useState<Filters>({});
   const [selected, setSelected] = useState<RegistryRecord | undefined>();
-  const [editorText, setEditorText] = useState('');
+  const [editorSpec, setEditorSpec] = useState<RegistrySpec>(() => visualAdapter.createDefault());
   const [validation, setValidation] = useState<RegistryValidationResult | undefined>();
-  const [createState, setCreateState] = useState<CreateState>({ open: false, text: stringifyPretty(config.makeDraftTemplate()) });
+  const [createState, setCreateState] = useState<CreateState>({ open: false, spec: visualAdapter.createDefault() });
   const [action, setAction] = useState<ReleaseAction | undefined>();
   const [cloneTarget, setCloneTarget] = useState<number | undefined>();
   const [compareLeft, setCompareLeft] = useState<number | undefined>();
@@ -96,7 +103,8 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
 
   const refreshSelected = async (record: RegistryRecord) => {
     setSelected(record);
-    setEditorText(stringifyPretty(record.spec));
+    setEditorSpec(visualAdapter.specToForm(record.spec) as RegistrySpec);
+    setEditorDirty(false);
     setValidation(undefined);
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['registry', resourceType] }),
@@ -107,15 +115,17 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const parsed = parseJson(createState.text);
-      if (!parsed.ok) {
-        throw new Error(parsed.error ?? 'JSON 格式错误');
+      const spec = visualAdapter.formToSpec(createState.spec);
+      const parsed = visualAdapter.schema.safeParse(spec);
+      if (!parsed.success) {
+        throw new Error(parsed.error.issues.map((issue) => issue.message).join('；'));
       }
-      return createDraft(apiClient, resourceType, parsed.value);
+      return createDraft(apiClient, resourceType, parsed.data);
     },
     onSuccess: async (record) => {
       message.success('draft 已创建');
-      setCreateState({ open: false, text: stringifyPretty(config.makeDraftTemplate()) });
+      setCreateState({ open: false, spec: visualAdapter.createDefault() });
+      setCreateDirty(false);
       await refreshSelected(record);
     },
   });
@@ -125,14 +135,16 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
       if (!selected) {
         throw new Error('请选择版本');
       }
-      const parsed = parseJson(editorText);
-      if (!parsed.ok) {
-        throw new Error(parsed.error ?? 'JSON 格式错误');
+      const spec = visualAdapter.formToSpec(editorSpec);
+      const parsed = visualAdapter.schema.safeParse(spec);
+      if (!parsed.success) {
+        throw new Error(parsed.error.issues.map((issue) => issue.message).join('；'));
       }
-      return updateDraft(apiClient, resourceType, selected.resource_id, selected.version, parsed.value, selected.revision);
+      return updateDraft(apiClient, resourceType, selected.resource_id, selected.version, parsed.data, selected.revision);
     },
     onSuccess: async (record) => {
       message.success('draft 已更新，revision 已刷新');
+      setEditorDirty(false);
       await refreshSelected(record);
     },
   });
@@ -211,6 +223,14 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
   const versions = versionsQuery.data ?? [];
   const editable = selected ? ['draft', 'validated'].includes(selected.status) : false;
   const selectedVersionOptions = versions.map((record) => record.version).sort((a, b) => a - b);
+  const editorValidation = visualAdapter.schema.safeParse(editorSpec);
+  const [editorDirty, setEditorDirty] = useState(false);
+  const [createDirty, setCreateDirty] = useState(false);
+
+  useUnsavedChangeGuard(
+    (editable && editorDirty) || (createState.open && createDirty),
+    '当前可视化配置有未保存改动，确认离开吗？',
+  );
 
   const columns = useMemo<ColumnsType<RegistryRecord>>(() => [
     {
@@ -220,12 +240,16 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
       render: (value: string, record) => (
         <Button
           type="link"
-          onClick={() => {
-            setSelected(record);
-            setEditorText(stringifyPretty(record.spec));
-            setValidation(undefined);
-            setCompareLeft(undefined);
-            setCompareRight(undefined);
+            onClick={() => {
+              if (editorDirty && !globalThis.confirm('当前可视化配置有未保存改动，确认切换资源吗？')) {
+                return;
+              }
+              setSelected(record);
+              setEditorSpec(visualAdapter.specToForm(record.spec) as RegistrySpec);
+              setEditorDirty(false);
+              setValidation(undefined);
+              setCompareLeft(undefined);
+              setCompareRight(undefined);
           }}
         >
           {value}
@@ -238,7 +262,7 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
     { title: '摘要', key: 'extra', render: (_, record) => config.renderListExtra?.(record) ?? null },
     { title: '更新人', dataIndex: 'updated_by', key: 'updated_by', render: (value: string | undefined) => value ?? '-' },
     { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', render: formatDateTime },
-  ], [config]);
+  ], [config, editorDirty, visualAdapter]);
 
   return (
     <div className="cp-page">
@@ -249,12 +273,15 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
         </div>
         <Can permission="registry:write">
           <Button
-            type="primary"
-            data-testid="registry-create"
-            onClick={() => setCreateState({ open: true, text: stringifyPretty(config.makeDraftTemplate()) })}
-          >
-            创建 draft
-          </Button>
+              type="primary"
+              data-testid="registry-create"
+              onClick={() => {
+                setCreateState({ open: true, spec: visualAdapter.createDefault() });
+                setCreateDirty(false);
+              }}
+            >
+              创建 draft
+            </Button>
         </Can>
       </div>
       <ReadOnlyNotice />
@@ -329,10 +356,23 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
                   items={[
                     {
                       key: 'editor',
-                      label: 'JSON 编辑',
+                      label: '可视化配置',
                       children: (
                         <Space direction="vertical" style={{ width: '100%' }}>
-                          <JsonEditor value={editorText} onChange={setEditorText} readOnly={!editable} />
+                          <FormErrorSummary
+                            issues={editorValidation.success ? [] : editorValidation.error.issues}
+                            apiIssues={issuesFromError(updateMutation.error)}
+                          />
+                          <RegistryVisualEditor
+                            resourceType={resourceType}
+                            value={editorSpec}
+                            readOnly={!editable}
+                            onChange={(spec) => {
+                              setEditorSpec(spec);
+                              setEditorDirty(true);
+                            }}
+                            client={apiClient}
+                          />
                           <Can permission="registry:write">
                             <Button
                               type="primary"
@@ -347,6 +387,11 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
                           {!editable ? <Typography.Text type="secondary">当前状态不可原地修改，需要 clone 新版本。</Typography.Text> : null}
                         </Space>
                       ),
+                    },
+                    {
+                      key: 'json',
+                      label: 'JSON 查看',
+                      children: <ReadonlyJsonPreview value={visualAdapter.getPreview(editorSpec)} filename={`${selected.resource_id}-${selected.version}.json`} />,
                     },
                     {
                       key: 'validation',
@@ -391,20 +436,39 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
       <Drawer
         title={`创建 ${config.title} draft`}
         open={createState.open}
-        onClose={() => setCreateState((current) => ({ ...current, open: false }))}
+        onClose={() => {
+          if (createDirty && !globalThis.confirm('当前创建表单有未保存改动，确认关闭吗？')) {
+            return;
+          }
+          setCreateState((current) => ({ ...current, open: false }));
+          setCreateDirty(false);
+        }}
         width={720}
       >
         {createMutation.error ? <ErrorAlert error={createMutation.error} /> : null}
-        <JsonEditor value={createState.text} onChange={(text) => setCreateState((current) => ({ ...current, text }))} minRows={18} />
-        <Button
-          type="primary"
-          loading={createMutation.isPending}
-          onClick={() => createMutation.mutate()}
-          data-testid="draft-submit"
-          style={{ marginTop: 12 }}
-        >
-          提交 draft
-        </Button>
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <FormErrorSummary apiIssues={issuesFromError(createMutation.error)} />
+          <RegistryVisualEditor
+            resourceType={resourceType}
+            value={createState.spec}
+            readOnly={false}
+            onChange={(spec) => {
+              setCreateState((current) => ({ ...current, spec }));
+              setCreateDirty(true);
+            }}
+            client={apiClient}
+          />
+          <ReadonlyJsonPreview value={visualAdapter.getPreview(createState.spec)} filename={`${resourceType}-draft-preview.json`} maxHeight={260} />
+          <Button
+            type="primary"
+            loading={createMutation.isPending}
+            onClick={() => createMutation.mutate()}
+            data-testid="draft-submit"
+            style={{ marginTop: 12 }}
+          >
+            提交 draft
+          </Button>
+        </Space>
       </Drawer>
       <ConfirmActionModal
         title={actionTitle(action)}

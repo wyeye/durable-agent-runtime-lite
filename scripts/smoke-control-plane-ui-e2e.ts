@@ -36,6 +36,9 @@ interface BrowserLike {
 interface PageLike {
   goto(url: string): Promise<unknown>;
   waitForLoadState(state?: string): Promise<unknown>;
+  keyboard: {
+    press(key: string): Promise<unknown>;
+  };
   evaluate<TArg, TResult>(
     pageFunction: (arg: TArg) => TResult | Promise<TResult>,
     arg: TArg,
@@ -43,13 +46,16 @@ interface PageLike {
   getByTestId(testId: string): LocatorLike;
   getByText(text: string | RegExp, options?: { exact?: boolean }): LocatorLike;
   getByRole(role: string, options?: { name?: string | RegExp; exact?: boolean }): LocatorLike;
+  locator(selector: string): LocatorLike;
   request: RequestLike;
 }
 
 interface LocatorLike {
   click(): Promise<unknown>;
   fill(value: string): Promise<unknown>;
+  locator(selector: string): LocatorLike;
   first(): LocatorLike;
+  last(): LocatorLike;
   waitFor(options?: { timeout?: number }): Promise<unknown>;
 }
 
@@ -115,10 +121,10 @@ async function main(): Promise<void> {
     await expectChineseShell(page);
     await page.getByText('运营总览').first().waitFor({ timeout: 15_000 });
 
-    const prompt = await createDraft<PromptDefinition>(page, 'prompts', promptSpec(ids, 1));
-    const tool = await createDraft<ToolManifest>(page, 'tools', toolSpec(ids, '1.0.0'));
+    const prompt = await createPromptThroughUi(page, ids);
+    const tool = await createToolThroughUi(page, ids);
     const modelPolicySpecV1 = modelPolicySpec(ids, 1);
-    const modelPolicy = await createDraft<ModelPolicy>(page, 'model-policies', modelPolicySpecV1);
+    const modelPolicy = await createModelPolicyThroughUi(page, ids);
     await validateResource(page, 'prompts', ids.prompt, 1);
     await validateResource(page, 'tools', ids.tool, 1);
     await validateResource(page, 'model-policies', ids.modelPolicy, 1);
@@ -132,16 +138,12 @@ async function main(): Promise<void> {
       'ui smoke publish model policy',
     );
 
-    const agent = await createDraft<AgentSpec>(
-      page,
-      'agents',
-      agentSpec(ids, 1, modelPolicySpecV1),
-    );
+    const agent = await createAgentThroughUi(page, ids, modelPolicySpecV1);
     await validateResource(page, 'agents', ids.agent, 1);
     await publishResource(page, 'agents', ids.agent, 1, 'ui smoke publish agent');
 
-    const flow = await createDraft<FlowSpec>(page, 'flows', flowSpec(ids, 1));
-    const route = await createDraft<RouteSpec>(page, 'routes', routeSpec(ids, 1, ids.keywordV1));
+    const flow = await createFlowThroughUi(page, ids);
+    const route = await createRouteThroughUi(page, ids, ids.keywordV1);
     await validateResource(page, 'flows', ids.flow, 1);
     await postJson<{ flow_release: CapabilityRelease; route_release: CapabilityRelease }>(
       page,
@@ -400,15 +402,152 @@ function routeSpec(
   };
 }
 
-async function createDraft<TSpec>(
+async function createPromptThroughUi(page: PageLike, ids: { prompt: string }): Promise<RegistryRecord<PromptDefinition>> {
+  const spec = promptSpec(ids, 1);
+  await openCreateDraft(page, 'prompts');
+  await page.getByTestId('vc-prompt-id').fill(spec.prompt_id);
+  await page.getByTestId('vc-prompt-content').fill(spec.content);
+  await page.getByTestId('vc-prompt-variables-input').fill('input');
+  await page.keyboard.press('Enter');
+  await page.getByTestId('draft-submit').click();
+  await page.getByText(spec.prompt_id).first().waitFor({ timeout: 15_000 });
+  const record = await getRegistryVersion<PromptDefinition>(page, 'prompts', spec.prompt_id, 1);
+  assert.equal(record.spec.prompt_id, spec.prompt_id);
+  assert.ok(record.spec.variables.includes('input'));
+  assert.match(record.spec.content, /\{\{\s*input\s*\}\}/u);
+  return record;
+}
+
+async function createToolThroughUi(page: PageLike, ids: { tool: string }): Promise<RegistryRecord<ToolManifest>> {
+  const spec = toolSpec(ids, '1.0.0');
+  await openCreateDraft(page, 'tools');
+  await page.getByTestId('vc-tool-name').fill(spec.tool_name);
+  await selectByTestId(page, 'vc-tool-risk-level', spec.risk_level);
+  await page.getByTestId('vc-tool-endpoint-ref').fill(spec.adapter.endpoint_ref ?? '');
+  await page.getByTestId('draft-submit').click();
+  await page.getByText(spec.tool_name).first().waitFor({ timeout: 15_000 });
+  const record = await getRegistryVersion<ToolManifest>(page, 'tools', spec.tool_name, 1);
+  assert.equal(record.spec.tool_name, spec.tool_name);
+  assert.equal(record.spec.risk_level, spec.risk_level);
+  return record;
+}
+
+async function createModelPolicyThroughUi(page: PageLike, ids: { modelPolicy: string }): Promise<RegistryRecord<ModelPolicy>> {
+  const spec = modelPolicySpec(ids, 1);
+  await openCreateDraft(page, 'model-policies');
+  await page.getByTestId('vc-model-policy-id').fill(spec.model_policy_id);
+  await page.getByTestId('vc-model-target-id').fill(spec.targets[0]?.target_id ?? 'primary');
+  await page.getByTestId('vc-model-target-gateway-profile').fill(spec.targets[0]?.gateway_profile ?? 'local-ui-smoke');
+  await page.getByTestId('vc-model-target-model-id').fill(spec.targets[0]?.model_id ?? 'deterministic:final_only');
+  await page.getByTestId('vc-model-target-add').click();
+  await page.getByTestId('draft-submit').click();
+  await page.getByText(spec.model_policy_id).first().waitFor({ timeout: 15_000 });
+  const record = await getRegistryVersion<ModelPolicy>(page, 'model-policies', spec.model_policy_id, 1);
+  assert.equal(record.spec.model_policy_id, spec.model_policy_id);
+  assert.ok(record.spec.targets.some((target) => target.target_id === spec.targets[0]?.target_id));
+  return record;
+}
+
+async function createAgentThroughUi(
+  page: PageLike,
+  ids: { agent: string; prompt: string; tool: string },
+  modelPolicy: ModelPolicy,
+): Promise<RegistryRecord<AgentSpec>> {
+  const spec = agentSpec(ids, 1, modelPolicy);
+  await openCreateDraft(page, 'agents');
+  await page.getByTestId('vc-agent-id').fill(spec.agent_id);
+  await selectByTestId(page, 'vc-agent-prompt-ref', `${ids.prompt}@1`);
+  await selectByTestId(page, 'vc-agent-model-policy-ref', `${modelPolicy.model_policy_id}@${modelPolicy.version}`);
+  await page.getByTestId('vc-agent-allowed-tools-input').fill(`${ids.tool}@1.0.0`);
+  await page.keyboard.press('Enter');
+  await page.getByTestId('draft-submit').click();
+  await page.getByText(spec.agent_id).first().waitFor({ timeout: 15_000 });
+  const record = await getRegistryVersion<AgentSpec>(page, 'agents', spec.agent_id, 1);
+  assert.equal(record.spec.prompt_ref, `${ids.prompt}@1`);
+  assert.equal(record.spec.model_policy_ref?.model_policy_id, modelPolicy.model_policy_id);
+  assert.ok(record.spec.allowed_tools.includes(`${ids.tool}@1.0.0`));
+  return record;
+}
+
+async function createFlowThroughUi(
+  page: PageLike,
+  ids: { flow: string; tool: string; agent: string },
+): Promise<RegistryRecord<FlowSpec>> {
+  const spec = flowSpec(ids, 1);
+  await openCreateDraft(page, 'flows');
+  await page.getByTestId('vc-flow-id').fill(spec.flow_id);
+  await page.getByTestId('vc-flow-add-step-tool').click();
+  await page.getByTestId('vc-flow-step-edit-1').click();
+  await selectByTestId(page, 'vc-flow-step-tool-ref', `${ids.tool}@1.0.0`);
+  await page.getByTestId('vc-flow-step-done').click();
+  await page.getByTestId('vc-flow-add-step-agent').click();
+  await page.getByTestId('vc-flow-step-edit-2').click();
+  await selectByTestId(page, 'vc-flow-step-agent-ref', `${ids.agent}@1`);
+  await page.getByTestId('vc-flow-step-done').click();
+  await page.getByTestId('flow-sequence-canvas').waitFor({ timeout: 15_000 });
+  await page.getByTestId('draft-submit').click();
+  await page.getByText(spec.flow_id).first().waitFor({ timeout: 15_000 });
+  const record = await getRegistryVersion<FlowSpec>(page, 'flows', spec.flow_id, 1);
+  assert.ok(record.spec.steps.some((step) => step.type === 'tool' && step.tool === ids.tool));
+  assert.ok(record.spec.steps.some((step) => step.type === 'agent' && step.agent_id === ids.agent));
+  return record;
+}
+
+async function createRouteThroughUi(
+  page: PageLike,
+  ids: { route: string; flow: string },
+  keyword: string,
+): Promise<RegistryRecord<RouteSpec>> {
+  const spec = routeSpec(ids, 1, keyword);
+  await openCreateDraft(page, 'routes');
+  await page.getByTestId('vc-route-id').fill(spec.route_id ?? ids.route);
+  await selectByTestId(page, 'vc-route-flow-ref', `${ids.flow}@1`);
+  await page.getByTestId('vc-route-keywords-input').fill(keyword);
+  await page.keyboard.press('Enter');
+  await page.getByTestId('vc-route-examples-input').fill(`run ${keyword}`);
+  await page.keyboard.press('Enter');
+  await page.getByTestId('vc-route-channels-input').fill('api');
+  await page.keyboard.press('Enter');
+  await page.getByTestId('draft-submit').click();
+  await page.getByText(ids.route).first().waitFor({ timeout: 15_000 });
+  const record = await getRegistryVersion<RouteSpec>(page, 'routes', ids.route, 1);
+  assert.equal(record.spec.flow_id, ids.flow);
+  assert.ok(record.spec.route.keywords.includes(keyword));
+  assert.ok(record.spec.route.supported_channels.includes('api'));
+  return record;
+}
+
+async function openCreateDraft(page: PageLike, plural: string): Promise<void> {
+  await page.goto(`${controlPlaneUrl}/registry/${plural}`);
+  await page.waitForLoadState('networkidle');
+  await page.getByTestId('registry-create').click();
+}
+
+async function selectByTestId(page: PageLike, testId: string, value: string): Promise<void> {
+  const select = page.getByTestId(testId);
+  await select.click();
+  const fallback = value.includes('@') ? value.split('@')[0] : value;
+  await select.locator('input').fill(value).catch(() => undefined);
+  await page.locator(`.ant-select-item-option[title="${cssString(value)}"]`).last().click().catch(async () => {
+    await page.getByText(value, { exact: false }).last().click().catch(async () => {
+      await page.getByText(fallback ?? value, { exact: false }).last().click();
+    });
+  });
+}
+
+function cssString(value: string): string {
+  return value.replace(/\\/gu, '\\\\').replace(/"/gu, '\\"');
+}
+
+async function getRegistryVersion<TSpec>(
   page: PageLike,
   plural: string,
-  spec: TSpec,
+  resourceId: string,
+  version: number,
 ): Promise<RegistryRecord<TSpec>> {
-  return postJson<RegistryRecord<TSpec>>(
+  return getJson<RegistryRecord<TSpec>>(
     page,
-    `${controlPlaneUrl}/api/v1/${plural}`,
-    { spec },
+    `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}`,
     operatorHeaders,
   );
 }
@@ -461,7 +600,7 @@ async function validateResource(
   assert.equal(
     result.validation.can_publish,
     true,
-    `${plural}:${resourceId}@${version} should validate`,
+    `${plural}:${resourceId}@${version} should validate: ${JSON.stringify(result.validation.errors)}`,
   );
 }
 

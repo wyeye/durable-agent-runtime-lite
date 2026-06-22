@@ -7,12 +7,16 @@ import { Link, useNavigate } from 'react-router';
 import { Can, ReadOnlyNotice } from '../../auth/role-guard.js';
 import { EmptyState } from '../../components/EmptyState.js';
 import { ErrorAlert } from '../../components/ErrorAlert.js';
-import { JsonEditor } from '../../components/JsonEditor.js';
 import { useApiClient } from '../../api/use-api-client.js';
 import { createDataset, listDatasets } from '../../api/evaluation-api.js';
 import { formatDateTime } from '../../utils/format.js';
-import { parseJson, stringifyPretty } from '../../utils/json.js';
 import { displayStatus } from '../../utils/i18n-labels.js';
+import { FormErrorSummary } from '../../visual-config/components/FormErrorSummary.js';
+import { ReadonlyJsonPreview } from '../../visual-config/components/ReadonlyJsonPreview.js';
+import { issuesFromError } from '../../visual-config/form-error-mapper.js';
+import { evaluationDatasetAdapter } from '../../visual-config/registry.js';
+import { EvaluationDatasetVisualEditor } from '../../visual-config/editors/EvaluationDatasetVisualEditor.js';
+import { useUnsavedChangeGuard } from '../../visual-config/useUnsavedChangeGuard.js';
 import { EvaluationStatusTag, HashText } from './evaluation-utils.js';
 
 const statuses: EvaluationDatasetStatus[] = ['draft', 'validated', 'published', 'deprecated', 'disabled'];
@@ -30,7 +34,10 @@ export function EvaluationDatasetsPage() {
   const { message } = App.useApp();
   const [filters, setFilters] = useState<DatasetFilters>({});
   const [createOpen, setCreateOpen] = useState(false);
-  const [createText, setCreateText] = useState(() => stringifyPretty(datasetTemplate()));
+  const [createSpec, setCreateSpec] = useState<EvaluationDataset>(() => evaluationDatasetAdapter.createDefault());
+  const [createDirty, setCreateDirty] = useState(false);
+
+  useUnsavedChangeGuard(createOpen && createDirty, '当前 Dataset 创建表单有未保存改动，确认离开吗？');
 
   const query = useQuery({
     queryKey: ['evaluation-datasets', filters],
@@ -39,16 +46,17 @@ export function EvaluationDatasetsPage() {
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const parsed = parseJson(createText);
-      if (!parsed.ok) {
-        throw new Error(parsed.error ?? 'JSON 格式错误');
+      const parsed = evaluationDatasetAdapter.schema.safeParse(evaluationDatasetAdapter.formToSpec(createSpec));
+      if (!parsed.success) {
+        throw new Error(parsed.error.issues.map((issue) => issue.message).join('；'));
       }
-      return createDataset(client, parsed.value as EvaluationDataset);
+      return createDataset(client, parsed.data);
     },
     onSuccess: async (dataset) => {
       message.success('评测数据集草稿已创建');
       setCreateOpen(false);
-      setCreateText(stringifyPretty(datasetTemplate()));
+      setCreateSpec(evaluationDatasetAdapter.createDefault());
+      setCreateDirty(false);
       await queryClient.invalidateQueries({ queryKey: ['evaluation-datasets'] });
       navigate(`/evaluation/datasets/${encodeURIComponent(dataset.dataset_id)}/versions/${dataset.version}`);
     },
@@ -103,7 +111,16 @@ export function EvaluationDatasetsPage() {
           <p>管理评测 Dataset exact version、Case 和发布 hash。</p>
         </div>
         <Can permission="registry:write">
-          <Button type="primary" data-testid="evaluation-dataset-create" onClick={() => setCreateOpen(true)}>创建 draft</Button>
+          <Button
+            type="primary"
+            data-testid="evaluation-dataset-create"
+            onClick={() => {
+              setCreateOpen(true);
+              setCreateDirty(false);
+            }}
+          >
+            创建 draft
+          </Button>
         </Can>
       </div>
       <ReadOnlyNotice />
@@ -128,15 +145,35 @@ export function EvaluationDatasetsPage() {
           locale={{ emptyText: <EmptyState description="暂无评测数据集" /> }}
         />
       </section>
-      <Drawer title="创建评测数据集草稿" open={createOpen} onClose={() => setCreateOpen(false)} width={760}>
+      <Drawer
+        title="创建评测数据集草稿"
+        open={createOpen}
+        onClose={() => {
+          if (createDirty && !globalThis.confirm('当前 Dataset 创建表单有未保存改动，确认关闭吗？')) {
+            return;
+          }
+          setCreateOpen(false);
+          setCreateDirty(false);
+        }}
+        width={760}
+      >
         {createMutation.error ? <ErrorAlert error={createMutation.error} /> : null}
         <Space direction="vertical" style={{ width: '100%' }}>
+          <FormErrorSummary apiIssues={issuesFromError(createMutation.error)} />
           <Form layout="inline" className="cp-filter-bar">
             <Form.Item label="version">
               <InputNumber value={1} min={1} disabled />
             </Form.Item>
           </Form>
-          <JsonEditor value={createText} onChange={setCreateText} minRows={16} />
+          <EvaluationDatasetVisualEditor
+            value={createSpec}
+            readOnly={false}
+            onChange={(spec) => {
+              setCreateSpec(spec);
+              setCreateDirty(true);
+            }}
+          />
+          <ReadonlyJsonPreview value={evaluationDatasetAdapter.getPreview(createSpec)} filename={`${createSpec.dataset_id}.json`} maxHeight={260} />
           <Button
             type="primary"
             loading={createMutation.isPending}
@@ -149,19 +186,6 @@ export function EvaluationDatasetsPage() {
       </Drawer>
     </div>
   );
-}
-
-function datasetTemplate(): EvaluationDataset {
-  return {
-    dataset_id: `dataset_${Date.now()}`,
-    version: 1,
-    name: '评测数据集',
-    status: 'draft',
-    domain: 'runtime',
-    tags: [],
-    default_weight: 1,
-    revision: 1,
-  };
 }
 
 function clean(values: Record<string, unknown>): DatasetFilters {

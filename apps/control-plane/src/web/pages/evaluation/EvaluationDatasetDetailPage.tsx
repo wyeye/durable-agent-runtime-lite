@@ -7,7 +7,6 @@ import { Link, useNavigate, useParams } from 'react-router';
 import { Can, ReadOnlyNotice } from '../../auth/role-guard.js';
 import { EmptyState } from '../../components/EmptyState.js';
 import { ErrorAlert } from '../../components/ErrorAlert.js';
-import { JsonEditor } from '../../components/JsonEditor.js';
 import { useApiClient } from '../../api/use-api-client.js';
 import {
   cloneDataset,
@@ -23,7 +22,13 @@ import {
   validateDataset,
 } from '../../api/evaluation-api.js';
 import { formatDateTime } from '../../utils/format.js';
-import { parseJson, stringifyPretty } from '../../utils/json.js';
+import { FormErrorSummary } from '../../visual-config/components/FormErrorSummary.js';
+import { ReadonlyJsonPreview } from '../../visual-config/components/ReadonlyJsonPreview.js';
+import { issuesFromError } from '../../visual-config/form-error-mapper.js';
+import { createDefaultEvaluationCase, evaluationCaseAdapter, evaluationDatasetAdapter } from '../../visual-config/registry.js';
+import { EvaluationCaseVisualEditor } from '../../visual-config/editors/EvaluationCaseVisualEditor.js';
+import { EvaluationDatasetVisualEditor } from '../../visual-config/editors/EvaluationDatasetVisualEditor.js';
+import { useUnsavedChangeGuard } from '../../visual-config/useUnsavedChangeGuard.js';
 import { CopyHashButton, EvaluationStatusTag, HashText, SafeJsonPreview } from './evaluation-utils.js';
 
 export function EvaluationDatasetDetailPage() {
@@ -33,11 +38,18 @@ export function EvaluationDatasetDetailPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { message } = App.useApp();
-  const [datasetText, setDatasetText] = useState('');
-  const [caseText, setCaseText] = useState('');
+  const [datasetSpec, setDatasetSpec] = useState<EvaluationDataset>(() => evaluationDatasetAdapter.createDefault());
+  const [caseSpecState, setCaseSpecState] = useState<EvaluationCase>(() => createDefaultEvaluationCase(datasetId ?? 'dataset_id', datasetVersion || 1));
   const [caseDrawerOpen, setCaseDrawerOpen] = useState(false);
   const [editingCaseId, setEditingCaseId] = useState<string | undefined>();
   const [rollbackTarget, setRollbackTarget] = useState<number | undefined>();
+  const [datasetDirty, setDatasetDirty] = useState(false);
+  const [caseDirty, setCaseDirty] = useState(false);
+
+  useUnsavedChangeGuard(
+    (editableFromStatus(datasetSpec.status) && datasetDirty) || (caseDrawerOpen && caseDirty),
+    '当前评测配置有未保存改动，确认离开吗？',
+  );
 
   const datasetQuery = useQuery({
     queryKey: ['evaluation-dataset', datasetId, datasetVersion],
@@ -59,7 +71,8 @@ export function EvaluationDatasetDetailPage() {
 
   useEffect(() => {
     if (datasetQuery.data) {
-      setDatasetText(stringifyPretty(datasetPatchView(datasetQuery.data)));
+      setDatasetSpec(datasetQuery.data);
+      setDatasetDirty(false);
     }
   }, [datasetQuery.data]);
 
@@ -80,17 +93,18 @@ export function EvaluationDatasetDetailPage() {
       if (!datasetQuery.data || !datasetId) {
         throw new Error('Dataset 未加载');
       }
-      const parsed = parseJson(datasetText);
-      if (!parsed.ok) {
-        throw new Error(parsed.error ?? 'JSON 格式错误');
+      const parsed = evaluationDatasetAdapter.schema.safeParse(datasetSpec);
+      if (!parsed.success) {
+        throw new Error(parsed.error.issues.map((issue) => issue.message).join('；'));
       }
       return updateDataset(client, datasetId, datasetVersion, {
-        dataset: parsed.value as Partial<EvaluationDataset>,
+        dataset: datasetPatchView(parsed.data),
         expected_revision: datasetQuery.data.revision,
       });
     },
     onSuccess: async (dataset) => {
       message.success('Dataset draft 已保存');
+      setDatasetDirty(false);
       await refresh(dataset);
     },
   });
@@ -138,11 +152,11 @@ export function EvaluationDatasetDetailPage() {
       if (!datasetId) {
         throw new Error('缺少 dataset_id');
       }
-      const parsed = parseJson(caseText);
-      if (!parsed.ok) {
-        throw new Error(parsed.error ?? 'JSON 格式错误');
+      const parsed = evaluationCaseAdapter.schema.safeParse(caseSpecState);
+      if (!parsed.success) {
+        throw new Error(parsed.error.issues.map((issue) => issue.message).join('；'));
       }
-      const payload = parsed.value as EvaluationCase;
+      const payload = parsed.data;
       return editingCaseId
         ? updateCase(client, editingCaseId, payload)
         : createCase(client, datasetId, datasetVersion, payload);
@@ -151,6 +165,7 @@ export function EvaluationDatasetDetailPage() {
       message.success(editingCaseId ? 'Case 已更新' : 'Case 已创建');
       setCaseDrawerOpen(false);
       setEditingCaseId(undefined);
+      setCaseDirty(false);
       await refresh();
     },
   });
@@ -278,7 +293,16 @@ export function EvaluationDatasetDetailPage() {
                 children: (
                   <section className="cp-section">
                     <Space direction="vertical" style={{ width: '100%' }}>
-                      <JsonEditor value={datasetText} onChange={setDatasetText} readOnly={!editable} minRows={10} />
+                      <FormErrorSummary apiIssues={issuesFromError(updateDatasetMutation.error)} />
+                      <EvaluationDatasetVisualEditor
+                        value={datasetSpec}
+                        onChange={(spec) => {
+                          setDatasetSpec(spec);
+                          setDatasetDirty(true);
+                        }}
+                        readOnly={!editable}
+                      />
+                      <ReadonlyJsonPreview value={datasetPatchView(datasetSpec)} filename={`${datasetSpec.dataset_id}-${datasetSpec.version}.json`} maxHeight={260} />
                       <Can permission="registry:write">
                         <Button
                           type="primary"
@@ -380,12 +404,27 @@ export function EvaluationDatasetDetailPage() {
       <Drawer
         title={editingCaseId ? `编辑 Case ${editingCaseId}` : '创建 Case'}
         open={caseDrawerOpen}
-        onClose={() => setCaseDrawerOpen(false)}
+        onClose={() => {
+          if (caseDirty && !globalThis.confirm('当前 Case 表单有未保存改动，确认关闭吗？')) {
+            return;
+          }
+          setCaseDrawerOpen(false);
+          setCaseDirty(false);
+        }}
         width={820}
       >
         {saveCaseMutation.error ? <ErrorAlert error={saveCaseMutation.error} /> : null}
         <Space direction="vertical" style={{ width: '100%' }}>
-          <JsonEditor value={caseText} onChange={setCaseText} minRows={18} readOnly={!editable} />
+          <FormErrorSummary apiIssues={issuesFromError(saveCaseMutation.error)} />
+          <EvaluationCaseVisualEditor
+            value={caseSpecState}
+            onChange={(spec) => {
+              setCaseSpecState(spec);
+              setCaseDirty(true);
+            }}
+            readOnly={!editable}
+          />
+          <ReadonlyJsonPreview value={caseSpecState} filename={`${caseSpecState.case_id}.json`} maxHeight={260} />
           <SafeJsonPreview value={{ note: '完整 Tool Result、raw Provider Response、hidden reasoning 不应写入 Case 编辑器。' }} maxHeight={120} />
           <Can permission="registry:write">
             <Button
@@ -404,11 +443,16 @@ export function EvaluationDatasetDetailPage() {
   );
 
   function openCaseEditor(row?: EvaluationCase) {
-    const next = row ?? caseTemplate(datasetId ?? 'dataset_id', datasetVersion || 1);
+    const next = row ?? createDefaultEvaluationCase(datasetId ?? 'dataset_id', datasetVersion || 1);
     setEditingCaseId(row?.case_id);
-    setCaseText(stringifyPretty(next));
+    setCaseSpecState(next);
     setCaseDrawerOpen(true);
+    setCaseDirty(false);
   }
+}
+
+function editableFromStatus(status: string | undefined): boolean {
+  return status === 'draft' || status === 'validated';
 }
 
 function datasetPatchView(dataset: EvaluationDataset): Partial<EvaluationDataset> {
@@ -418,25 +462,6 @@ function datasetPatchView(dataset: EvaluationDataset): Partial<EvaluationDataset
     domain: dataset.domain,
     tags: dataset.tags ?? [],
     default_weight: dataset.default_weight,
-  };
-}
-
-function caseTemplate(datasetId: string, version: number): EvaluationCase {
-  return {
-    case_id: `case_${Date.now()}`,
-    dataset_id: datasetId,
-    dataset_version: version,
-    name: '评测 Case',
-    input: { text: '输入文本' },
-    context_refs: [],
-    expected_status: 'completed',
-    expected_tool_calls: [],
-    forbidden_tools: [],
-    final_assertions: [{ type: 'non_empty' }],
-    policy_assertions: [],
-    weight: 1,
-    tags: [],
-    enabled: true,
   };
 }
 
