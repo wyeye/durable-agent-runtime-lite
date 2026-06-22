@@ -6,7 +6,7 @@ R0/AR-2A 状态：
 
 - AR-1 Platform Core 已冻结为 `0.8.0`，见 `docs/PLATFORM_CORE_BASELINE.md`。
 - AR-2A 当前为 `IMPLEMENTATION COMPLETE`：本地容器化 Ollama final/readonly/L3 gate 通过，mock-server 和 deterministic Pi 未参与，远端 `origin/main@27598fe` 的 CI 与 Integration 均通过。没有创建 tag、GitHub Release 或版本晋级，平台版本仍为 `0.8.0`。
-- AR-2B 当前为 `PARTIAL`：Evaluation 数据模型、评分/回归比较、Temporal 评测 runner、Registry Publish Gate、backend Evaluation smoke/replay 脚本、React Evaluation UI 和 Integration 步骤已接入；本轮仍未完成 Ollama Evaluation 和四镜像本地完整 smoke 证据。
+- AR-2B 当前为 `AR-2B DEVELOPMENT COMPLETE`：Evaluation 数据模型、评分/回归比较、Temporal 评测 runner、Registry Publish Gate、backend Evaluation smoke/replay 脚本、React Evaluation UI、Integration 步骤和 self-hosted Ollama Evaluation Gate 均已接入；四镜像容器化 Ollama final/readonly/L3 runtime smoke、真实 Ollama Evaluation smoke、backend Evaluation 回归和 DB 证据已通过。没有创建 tag、GitHub Release 或版本晋级，平台版本仍为 `0.8.0`。
 
 Durable Agent Runtime Lite 是一个四应用通用 Agent Runtime 骨架：
 
@@ -182,6 +182,7 @@ corepack pnpm ollama:probe
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.ollama.yml config
 BUILD_SHA="$(git rev-parse HEAD)" corepack pnpm runtime:assert-containerized
 BUILD_SHA="$(git rev-parse HEAD)" corepack pnpm smoke:ollama-containerized-e2e
+corepack pnpm smoke:evaluation-ollama-e2e
 corepack pnpm smoke:ollama-runtime-final-e2e
 corepack pnpm smoke:ollama-runtime-readonly-e2e
 corepack pnpm smoke:ollama-runtime-l3-e2e
@@ -191,7 +192,9 @@ corepack pnpm smoke:ollama-runtime-l3-e2e
 
 `smoke:ollama-containerized-e2e` 是 AR-2A-RC 的本地人工 release gate。它要求四个生产 app 都来自 Docker 镜像，只有 Ollama 在宿主机运行；它会断言 `/version` 的 build SHA、`runtime-worker` 的 `model_gateway` / `local-ollama` 环境、`mock-server` 未运行，并检查 DB 中 final/readonly/L3 的 ModelCall、ToolCall、HumanTask、Audit 和 Idempotency 证据。未提交工作树本地验证时使用 `BUILD_SHA="$(git rev-parse HEAD)-dirty"`。
 
-Ollama 不会被普通 GitHub Hosted CI 下载或运行。可选 workflow `.github/workflows/ollama-runtime.yml` 仅支持 `workflow_dispatch`，并要求 `runs-on: [self-hosted, ollama]` 的 runner 已安装 Ollama 且已拉取 `qwen2.5:7b-instruct-q4_K_M`。
+`smoke:evaluation-ollama-e2e` 是 AR-2B-FINAL-GATE 的真实 Ollama Evaluation gate。它只运行三个 Evaluation Run：final、readonly 和 L3 sandbox。路径固定为 control-plane API -> Temporal `EvaluationRunWorkflow` / `EvaluationCaseWorkflow` -> Pi Agent Core -> 宿主机 Ollama OpenAI-compatible API -> Tool Gateway -> Evidence Collector -> Scoring -> Gate Decision -> PostgreSQL。它断言 `provider=local-ollama`、exact model `qwen2.5:7b-instruct-q4_K_M`、Evaluation Worker running、无 mock/deterministic 证据、readonly/L3 两轮 ModelCall、readonly Tool 一次、L3 HumanTask 一个且 approved、L3 commit 一次、Evidence complete 和 Gate Decision exact candidate bundle hash。详见 `docs/57_ollama_evaluation_gate.md`。
+
+Ollama 不会被普通 GitHub Hosted CI 下载或运行。可选 workflow `.github/workflows/ollama-runtime.yml` 仅支持 `workflow_dispatch`，并要求 `runs-on: [self-hosted, ollama]` 的 runner 已安装 Ollama 且已拉取 `qwen2.5:7b-instruct-q4_K_M`。该 workflow 保留 runtime final/readonly/L3，并在其后执行真实 Ollama Evaluation gate；失败即 job 失败，不打 tag，不创建 release，不修改版本。
 
 `smoke:pi-worker-crash-resume-e2e` 会真实 `SIGKILL` compose 里的
 `runtime-worker`，在 worker 停止期间通过 runtime-api 写入 waiting-user /
@@ -225,7 +228,7 @@ corepack pnpm test:temporal-replay
 corepack pnpm smoke:evaluation-ui-e2e
 ```
 
-Evaluation UI 路径包括 `/evaluation/datasets`、`/evaluation/runs`、`/evaluation/gates` 和 Registry Prompt/Agent/ModelPolicy Gate Card。页面只调用同源 `/api/v1/*`，不直接访问 runtime-api、tool-gateway 或数据库；smoke 的 setup 仅准备 UI 无法创建的 immutable candidate snapshot / execution plan。该路径仍不运行 Ollama Evaluation。
+Evaluation UI 路径包括 `/evaluation/datasets`、`/evaluation/runs`、`/evaluation/gates` 和 Registry Prompt/Agent/ModelPolicy Gate Card。页面只调用同源 `/api/v1/*`，不直接访问 runtime-api、tool-gateway 或数据库；smoke 的 setup 仅准备 UI 无法创建的 immutable candidate snapshot / execution plan。真实 Ollama Evaluation 由 `smoke:evaluation-ollama-e2e` 和 self-hosted workflow 覆盖。
 
 Tenant Policy production-closure smoke:
 

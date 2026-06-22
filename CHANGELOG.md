@@ -15,3 +15,4 @@
 - Added AR-2B Evaluation control-plane UI for datasets/cases, runs/results/comparison, gate policies/decisions/overrides, registry Gate Cards, and Playwright Evaluation UI smoke command.
 - Added shared fullstack i18n foundation for `zh-CN`, including API messages, Zod issue localization, deployment-level log messages, audit display localization, and control-plane Chinese UI copy.
 - Replaced writable control-plane JSON configuration flows with visual editors for Registry resources, Evaluation Dataset/Case/Gate Policy, read-only JSON preview, exact version selectors, structured value/schema editors, round-trip tests, and `visual-config:check`.
+- Added the AR-2B-FINAL-GATE Ollama Evaluation smoke command for final/readonly/L3 Evaluation Runs, Evaluation Worker compose enablement, self-hosted Ollama workflow gate integration, and DB evidence assertions for ModelCall, ToolCall, HumanTask, Evidence, Scoring, and Gate Decision paths.

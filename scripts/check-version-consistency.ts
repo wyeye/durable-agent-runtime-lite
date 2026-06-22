@@ -35,7 +35,7 @@ async function main() {
   await assertTextIncludes('README.md', `当前平台版本：${version}`);
   await assertTextIncludes('docs/CURRENT_STATUS.md', `Current platform version: ${version}.`);
   await assertTextIncludes('docs/CURRENT_STATUS.md', '**AR-2A IMPLEMENTATION COMPLETE**');
-  await assertTextIncludes('docs/CURRENT_STATUS.md', 'Current AR-2B status: `AR-2B PARTIAL`.');
+  await assertTextIncludes('docs/CURRENT_STATUS.md', 'Current AR-2B status: `AR-2B DEVELOPMENT COMPLETE`.');
   await assertTextIncludes('CHANGELOG.md', `## ${version}`);
   console.log(JSON.stringify({ ok: true, version }, null, 2));
 }

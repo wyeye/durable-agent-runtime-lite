@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-06-22 for CP-VISUAL-CONFIG-1 implementation pass.
+Last updated: 2026-06-22 for AR-2B-FINAL-GATE closure.
 
 ## Platform Version
 
@@ -10,9 +10,9 @@ The root `package.json` version is the authority. `corepack pnpm version:check` 
 
 ## Baseline
 
-- Observed local HEAD and `origin/main` before the FULLSTACK-I18N-1 pass: `deba6fe1762672b8b7c5da928b8973805f491960`.
+- Observed local HEAD and `origin/main` before the AR-2B-FINAL-GATE pass: `dc95bcb6811d576201268205893171ab427ce6c0`.
 - Platform Core Baseline file: `docs/PLATFORM_CORE_BASELINE.md`.
-- Migration head: `016_evaluation_registry_and_tool_safety.sql`.
+- Migration head: `017_evaluation_case_minimum_score.sql`.
 
 ## AR-1 Platform Core
 
@@ -228,7 +228,7 @@ corepack pnpm smoke:model-gateway-live-l3-e2e
 
 The Ollama containerized smoke used Dockerized `runtime-api`, `runtime-worker`, `tool-gateway`, and `control-plane`; only Ollama ran on the host.
 
-## Verification In Current AR-2B-E2E-GATE Pass
+## Verification In Previous AR-2B-E2E-GATE Pass
 
 Passed:
 
@@ -258,7 +258,7 @@ git diff --check
 
 The local `gh` CLI is not installed, but the public GitHub Actions API showed CI and Integration succeeded for `55cac36713a2b658650e432088fdbe62658d3419`. No Docker image build, container startup smoke, live Ollama evaluation smoke, or new evaluation E2E smoke was completed in this pass.
 
-Current AR-2B-E2E-GATE implementation additions:
+Previous AR-2B-E2E-GATE implementation additions:
 
 - Added `scripts/smoke-evaluation-backend-e2e.ts` with `framework`, `regression`, and `publish_gate` scenarios.
 - Framework smoke asserts real TaskRun, AgentRun, ModelCall, ToolCall, Evidence refs, gate decision, audit, Tool Gateway redaction, and PostgreSQL reservation behavior.
@@ -270,7 +270,7 @@ Current AR-2B-E2E-GATE implementation additions:
 
 ## AR-2B UI Closure
 
-Current AR-2B status: `AR-2B PARTIAL`.
+Status at the end of the UI closure pass was `AR-2B PARTIAL`; the current repository status is now closed in the AR-2B-FINAL-GATE section below.
 
 Implemented in this UI closure pass:
 
@@ -311,9 +311,42 @@ Backend AR-2B implementation already includes:
 - Tool Gateway evaluation policy now enforces `maximum_calls_per_case` through logical-call reservations scoped by tenant, evaluation run, case, and tool.
 - Preview and commit with the same `tool_call_id` are counted as one logical evaluation tool call; idempotent retries do not consume additional executed-call capacity.
 
-Still open:
+## AR-2B-FINAL-GATE
 
-- Fresh four-image Docker rebuild evidence from a clean Docker state for this pass.
-- Real Ollama Evaluation E2E.
+Current AR-2B status: `AR-2B DEVELOPMENT COMPLETE`.
+
+This pass adds and verifies the final Ollama Evaluation gate wiring without changing the visual configuration UI, frontend i18n, Dataset/Case/Gate Policy CRUD, Candidate Fidelity, Scoring Engine, Registry Publish Gate, production app count, tag, release, or version.
+
+Implementation additions:
+
+- `infra/docker-compose.ollama.yml` now enables the Evaluation Worker for the local Ollama development/test overlay:
+  - `EVALUATION_WORKER_ENABLED=true`
+  - `EVALUATION_TASK_QUEUE=evaluation-worker-main`
+  - `EVALUATION_MAX_CONCURRENT_RUNS=1`
+  - `EVALUATION_MAX_CONCURRENT_CASES=1`
+  - `EVALUATION_CASE_TIMEOUT_MS=300000`
+- `scripts/smoke-evaluation-ollama-e2e.ts` and root command `corepack pnpm smoke:evaluation-ollama-e2e`.
+- The smoke runs exactly three Evaluation Runs: final, readonly, and L3 sandbox.
+- The smoke requires `runtime-worker` readiness to report `PI_AGENT_MODE=model_gateway`, `MODEL_GATEWAY_PROFILE_ID=local-ollama`, exact model `qwen2.5:7b-instruct-q4_K_M`, and running Evaluation Worker.
+- The smoke asserts PostgreSQL evidence for `evaluation_run`, `evaluation_case_result`, `evaluation_subject_snapshot`, `evaluation_execution_plan`, `task_run`, `agent_run`, `model_call_log`, `model_call_attempt`, `tool_call_log`, `human_task`, `audit_event`, and `idempotency_record`.
+- The smoke fails closed on missing exact provider/model evidence, deterministic/mock model evidence, incomplete Evidence, secret leaks, hidden reasoning leaks, forbidden tools, duplicate tools, duplicate commits, missing Gate Decision, or mismatched Candidate Bundle hash.
+- `.github/workflows/ollama-runtime.yml` now seeds Evaluation datasets and runs `smoke:evaluation-ollama-e2e` after the existing runtime final/readonly/L3 smokes on `[self-hosted, ollama]`.
+- `docs/57_ollama_evaluation_gate.md` documents the gate.
+
+Verified in the final local container run:
+
+- Current SHA four production images rebuilt with `APP_VERSION=0.8.0` and `BUILD_SHA=dc95bcb6811d576201268205893171ab427ce6c0`.
+- Four app containers were healthy from Docker images.
+- `/version` build SHA equaled current HEAD for `control-plane`, `runtime-api`, `runtime-worker`, and `tool-gateway`.
+- `runtime-worker` readiness reported `pi_agent_mode=model_gateway`, `model_gateway_profile=local-ollama`, `evaluation_worker_enabled=true`, `evaluation_worker_status=running`, and task queues including `evaluation-worker-main`.
+- Host Ollama exact model `qwen2.5:7b-instruct-q4_K_M` was available.
+- `corepack pnpm smoke:ollama-containerized-e2e` passed final, readonly, and L3 runtime paths.
+- `corepack pnpm smoke:evaluation-ollama-e2e` passed final, readonly, and L3 Evaluation Runs with PostgreSQL evidence for ModelCall, ToolCall, HumanTask, Evidence, Scoring, Gate Decision, audit, and idempotency records.
+- `corepack pnpm smoke:evaluation-framework-e2e` passed against the Ollama-configured stack.
+- `corepack pnpm lint`, `corepack pnpm typecheck`, `corepack pnpm test`, `corepack pnpm build`, and `corepack pnpm test:temporal-replay` passed after the change.
+- Four-app logs were checked for no secrets, Authorization, hidden chain-of-thought, full prompts, raw provider responses, mock model gateway, or deterministic mode markers.
+- `mock-server` was not running and deterministic Pi was not enabled.
 
 Current version remains `0.8.0`. No tag or release has been created.
+
+No tag, GitHub Release, or version promotion was performed.

@@ -86,7 +86,7 @@ jobs:
         run: pnpm db:migrate
 
       - name: Seed examples with local Ollama policy
-        run: SEED_LOCAL_OLLAMA_MODEL_POLICY=true pnpm seed:examples
+        run: SEED_LOCAL_OLLAMA_MODEL_POLICY=true SEED_EVALUATION_DATASETS=true pnpm seed:examples
 
       - name: Start app containers
         run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.ollama.yml up -d tool-gateway runtime-worker runtime-api control-plane
@@ -105,6 +105,9 @@ jobs:
 
       - name: Containerized Ollama L3
         run: pnpm smoke:ollama-runtime-l3-e2e
+
+      - name: Containerized Ollama Evaluation gate
+        run: pnpm smoke:evaluation-ollama-e2e
 
       - name: Export real Temporal histories
         run: pnpm temporal:export-replay-fixtures

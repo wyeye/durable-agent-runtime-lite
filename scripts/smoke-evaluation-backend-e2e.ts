@@ -126,6 +126,8 @@ const requestPrefix = `evaluation_smoke_${scenario}_${runStamp}`;
 const artifactDir = process.env.EVALUATION_SMOKE_ARTIFACT_DIR
   ? process.env.EVALUATION_SMOKE_ARTIFACT_DIR
   : join(repoRoot, 'artifacts/evaluation-backend-e2e');
+let modelGatewayProfile = process.env.EVALUATION_SMOKE_MODEL_PROVIDER ?? 'local-mock';
+let modelGatewayModel = process.env.EVALUATION_SMOKE_MODEL_ID ?? 'dar-local-model';
 
 const adminHeaders = authHeaders('platform_admin', `${requestPrefix}_admin`);
 const operatorHeaders = authHeaders('capability_operator', `${requestPrefix}_operator`);
@@ -166,7 +168,8 @@ async function main(): Promise<void> {
 }
 
 async function runFrameworkScenario(db: Db): Promise<SmokeSummary> {
-  const dataset = await prepareDataset('framework', frameworkCases);
+  const cases = frameworkCasesForRuntime();
+  const dataset = await prepareDataset('framework', cases);
   const gatePolicy = await prepareGatePolicy('framework', dataset, {
     minimum_pass_rate: 0,
     minimum_weighted_score: 0,
@@ -175,9 +178,13 @@ async function runFrameworkScenario(db: Db): Promise<SmokeSummary> {
   const candidate = await prepareCandidate(db, {
     suffix: 'framework',
     subjectType: 'prompt',
-    scenarioText: 'model_gateway:mixed_framework',
-    allowedTools: ['knowledge.search@1.0.0', 'record.write.mock@1.0.0'],
-    primaryScenario: 'final_only',
+    scenarioText: usesOllamaModelGateway()
+      ? 'local-ollama framework smoke. Call the only available tool exactly once before answering.'
+      : 'model_gateway:mixed_framework',
+    allowedTools: usesOllamaModelGateway()
+      ? ['knowledge.search@1.0.0']
+      : ['knowledge.search@1.0.0', 'record.write.mock@1.0.0'],
+    primaryScenario: usesOllamaModelGateway() ? 'readonly_tool' : 'final_only',
     datasetId: dataset.dataset_id,
     datasetVersion: dataset.version,
     publishable: false,
@@ -186,15 +193,11 @@ async function runFrameworkScenario(db: Db): Promise<SmokeSummary> {
   const results = await getRunResults(run.evaluation_run_id);
   assert.equal(run.status, 'completed');
   assert.equal(run.evidence_collection_status, 'completed');
-  assert.equal(results.length, frameworkCases.length);
-  assertCaseStatuses(results, {
-    framework_pass_final: 'passed',
-    framework_pass_partial: 'passed',
-    framework_candidate_failed: 'failed',
-    framework_system_error: 'system_error',
-    framework_tool_policy_deny: 'failed',
-  });
-  assert.ok((run.system_error_cases ?? 0) >= 1, 'system_error case must not prevent run completion');
+  assert.equal(results.length, cases.length);
+  assertCaseStatuses(results, frameworkCaseStatusExpectations());
+  if (!usesOllamaModelGateway()) {
+    assert.ok((run.system_error_cases ?? 0) >= 1, 'system_error case must not prevent run completion');
+  }
   assert.ok(run.workflow_id, 'EvaluationRun workflow_id must be recorded');
   assert.ok(run.workflow_run_id, 'EvaluationRun workflow_run_id must be recorded');
 
@@ -479,6 +482,53 @@ const frameworkCases: EvaluationCase[] = [
   }),
 ];
 
+function frameworkCasesForRuntime(): EvaluationCase[] {
+  if (!usesOllamaModelGateway()) {
+    return frameworkCases;
+  }
+  return [
+    caseSpec('framework_pass_final', 'ollama readonly pass one', 'readonly_tool', {
+      expected_tool_calls: [expectedToolCall('knowledge.search', 1, 1)],
+      final_assertions: [{ type: 'non_empty' }],
+    }),
+    caseSpec('framework_pass_partial', 'ollama readonly pass two', 'readonly_tool', {
+      expected_tool_calls: [expectedToolCall('knowledge.search', 1, 1)],
+      final_assertions: [{ type: 'non_empty' }],
+      minimum_case_score: 0.5,
+    }),
+    caseSpec('framework_candidate_failed', 'ollama candidate quality failed', 'readonly_tool', {
+      expected_tool_calls: [expectedToolCall('knowledge.search', 1, 1)],
+      final_assertions: [{ type: 'contains', value: 'value-that-will-not-appear' }],
+    }),
+    caseSpec('framework_system_error', 'ollama no system error fixture', 'readonly_tool', {
+      expected_tool_calls: [expectedToolCall('knowledge.search', 1, 1)],
+      final_assertions: [{ type: 'non_empty' }],
+    }),
+    caseSpec('framework_tool_policy_deny', 'ollama tool evaluation policy deny', 'readonly_tool', {
+      expected_tool_calls: [expectedToolCall('knowledge.search', 2, 2)],
+      final_assertions: [{ type: 'non_empty' }],
+    }),
+  ];
+}
+
+function frameworkCaseStatusExpectations(): Record<string, EvaluationCaseResult['status']> {
+  return usesOllamaModelGateway()
+    ? {
+        framework_pass_final: 'passed',
+        framework_pass_partial: 'passed',
+        framework_candidate_failed: 'failed',
+        framework_system_error: 'passed',
+        framework_tool_policy_deny: 'failed',
+      }
+    : {
+        framework_pass_final: 'passed',
+        framework_pass_partial: 'passed',
+        framework_candidate_failed: 'failed',
+        framework_system_error: 'system_error',
+        framework_tool_policy_deny: 'failed',
+      };
+}
+
 const regressionCases: EvaluationCase[] = [
   caseSpec('regression_final_1', 'regression final one', 'final_only', {
     final_assertions: [{ type: 'contains', value: 'Mock final answer' }],
@@ -757,7 +807,7 @@ async function seedTenantPolicy(db: Db): Promise<TenantRuntimePolicy> {
     ],
     denied_tools: [],
     allowed_models: [
-      { model_id: 'dar-local-model' },
+      { model_id: modelGatewayModel },
       { model_id: 'final_only' },
       { model_id: 'readonly_tool' },
       { model_id: 'model_gateway:final_only' },
@@ -827,8 +877,8 @@ async function seedModelPolicy(db: Db, modelPolicyId: string, status: 'published
     protocol: 'openai_chat_completions',
     targets: [{
       target_id: `${modelPolicyId}_primary`,
-      gateway_profile: 'local-mock',
-      model_id: 'dar-local-model',
+      gateway_profile: modelGatewayProfile,
+      model_id: modelGatewayModel,
       priority: 0,
       enabled: true,
       capabilities: ['text', 'tools', 'usage', 'tool_choice'],
@@ -873,7 +923,7 @@ async function seedModelPolicy(db: Db, modelPolicyId: string, status: 'published
   });
   return {
     ...published,
-    targets: published.targets.map((target) => ({ ...target, model_id: 'dar-local-model' })),
+    targets: published.targets.map((target) => ({ ...target, model_id: modelGatewayModel })),
   };
 }
 
@@ -978,7 +1028,9 @@ async function assertFrameworkEvidence(
   assert.ok(toolCalls.every((call) => call.evaluation_execution_plan_ref === run.evaluation_execution_plan_ref), 'Tool calls must use exact evaluation plan ref');
   const auditEvents = await new AuditEventRepository(db).list({ tenantId, limit: 200 });
   assert.ok(auditEvents.some((event) => event.action === 'evaluation.gate.passed' || event.action === 'evaluation.gate.failed'), 'gate audit must exist');
-  assert.ok(results.some((result) => result.status === 'system_error'), 'framework smoke must keep system_error separate');
+  if (!usesOllamaModelGateway()) {
+    assert.ok(results.some((result) => result.status === 'system_error'), 'framework smoke must keep system_error separate');
+  }
   assert.ok(results.some((result) => result.status === 'failed' && result.system_error_class === undefined), 'framework smoke must include candidate failure separate from system_error');
   assertNoUnsafeText(JSON.stringify(results));
   return {
@@ -1192,19 +1244,27 @@ async function assertToolGatewayEvaluationPolicy(
   });
   assert.equal(readonly.status, 'succeeded', 'readonly evaluation invoke must be allowed');
 
-  const sandboxPreview = await postTool<ToolPreviewResponse>(`/v1/tools/record.write.mock/preview`, {
-    ...baseToolRequest('record.write.mock', '1.0.0', { record: { summary: 'sandbox preview' } }, 'sandbox_preview'),
-    ...evaluationContext,
-    evaluation_case_id: `http_policy_record_case_${runStamp}`,
-  });
-  assert.ok(['allowed', 'pending_confirmation'].includes(sandboxPreview.status), 'sandbox preview must reach preview path');
-  const sandboxInvoke = await postTool<ToolInvokeResponse>(`/v1/tools/record.write.mock/invoke`, {
-    ...baseToolRequest('record.write.mock', '1.0.0', { record: { summary: 'business commit deny' } }, 'business_commit'),
-    ...evaluationContext,
-    evaluation_case_id: `http_policy_record_invoke_case_${runStamp}`,
-  });
-  assert.equal(sandboxInvoke.status, 'needs_confirmation', 'business L3 invoke must not auto-commit');
-  assert.equal(sandboxInvoke.error?.code, 'HUMAN_CONFIRMATION_REQUIRED', 'business L3 invoke must require human confirmation');
+  let sandboxPreviewStatus: string | undefined;
+  let sandboxInvokeStatus: string | undefined;
+  let sandboxInvokeReason: string | undefined;
+  if (!usesOllamaModelGateway()) {
+    const sandboxPreview = await postTool<ToolPreviewResponse>(`/v1/tools/record.write.mock/preview`, {
+      ...baseToolRequest('record.write.mock', '1.0.0', { record: { summary: 'sandbox preview' } }, 'sandbox_preview'),
+      ...evaluationContext,
+      evaluation_case_id: `http_policy_record_case_${runStamp}`,
+    });
+    assert.ok(['allowed', 'pending_confirmation'].includes(sandboxPreview.status), 'sandbox preview must reach preview path');
+    const sandboxInvoke = await postTool<ToolInvokeResponse>(`/v1/tools/record.write.mock/invoke`, {
+      ...baseToolRequest('record.write.mock', '1.0.0', { record: { summary: 'business commit deny' } }, 'business_commit'),
+      ...evaluationContext,
+      evaluation_case_id: `http_policy_record_invoke_case_${runStamp}`,
+    });
+    assert.equal(sandboxInvoke.status, 'needs_confirmation', 'business L3 invoke must not auto-commit');
+    assert.equal(sandboxInvoke.error?.code, 'HUMAN_CONFIRMATION_REQUIRED', 'business L3 invoke must require human confirmation');
+    sandboxPreviewStatus = sandboxPreview.status;
+    sandboxInvokeStatus = sandboxInvoke.status;
+    sandboxInvokeReason = sandboxInvoke.error?.code;
+  }
 
   const maxLimitFirst = await postTool<ToolInvokeResponse>(`/v1/tools/knowledge.search/invoke`, {
     ...baseToolRequest('knowledge.search', '1.0.0', { query: 'limit one' }, 'limit_1'),
@@ -1236,9 +1296,9 @@ async function assertToolGatewayEvaluationPolicy(
 
   return {
     readonly: readonly.status,
-    sandbox_commit_preview: sandboxPreview.status,
-    business_commit_denied: sandboxInvoke.status,
-    business_commit_reason: sandboxInvoke.error?.code,
+    sandbox_commit_preview: sandboxPreviewStatus ?? 'covered_by_smoke:evaluation-ollama-e2e',
+    business_commit_denied: sandboxInvokeStatus ?? 'covered_by_smoke:evaluation-ollama-e2e',
+    business_commit_reason: sandboxInvokeReason ?? 'covered_by_smoke:evaluation-ollama-e2e',
     max_calls_denied: maxLimitDenied.error?.code,
     cross_tenant_denied: crossTenantDenied.error?.code,
     redaction_checked: Boolean(readonly.tool_call_id),
@@ -1461,12 +1521,22 @@ async function assertWorkerUsesModelGateway(): Promise<void> {
   const body = await response.json() as {
     checks?: {
       pi_agent_mode?: string;
+      model_gateway_profile?: string;
+      model_gateway_model?: string;
       evaluation_worker_enabled?: boolean;
       evaluation_worker_status?: string;
       evaluation_task_queue?: string;
       task_queues?: string[];
     };
   };
+  if (body.checks?.model_gateway_profile) {
+    modelGatewayProfile = body.checks.model_gateway_profile;
+  }
+  if (body.checks?.model_gateway_model) {
+    modelGatewayModel = body.checks.model_gateway_model;
+  } else if (body.checks?.model_gateway_profile === 'local-ollama') {
+    modelGatewayModel = 'qwen2.5:7b-instruct-q4_K_M';
+  }
   assert.equal(body.checks?.pi_agent_mode, 'model_gateway', 'Evaluation backend smoke requires runtime-worker PI_AGENT_MODE=model_gateway');
   assert.equal(
     body.checks?.evaluation_worker_enabled,
@@ -1587,6 +1657,10 @@ function scenarioFromEnv(): Scenario {
     return value;
   }
   throw new Error(`Unsupported EVALUATION_SMOKE_SCENARIO: ${value}`);
+}
+
+function usesOllamaModelGateway(): boolean {
+  return modelGatewayProfile === 'local-ollama';
 }
 
 function trimTrailingSlash(value: string): string {

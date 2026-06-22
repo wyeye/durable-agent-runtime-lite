@@ -19,6 +19,7 @@ describe('Evaluation workflows', () => {
 
   it('isolates child case system errors and finalizes only after comparison and gate decision', async () => {
     const calls: string[] = [];
+    const taskStatuses: Array<{ task_run_id: string; status: string }> = [];
     const caseResults: EvaluationCaseResult[] = [];
     const aggregate: EvaluationAggregateResult = {
       evaluation_run_id: 'eval_run_workflow',
@@ -70,6 +71,9 @@ describe('Evaluation workflows', () => {
       updateAgentRunActivity: async (input: { agent_run_id: string }) => ({
         agent_run_id: input.agent_run_id,
       }),
+      updateTaskRunStatusActivity: async (input: { task_run_id: string; status: string }) => {
+        taskStatuses.push({ task_run_id: input.task_run_id, status: input.status });
+      },
       updateAgentStepActivity: async () => ({}),
       runPiSegmentActivity: async (input: { agent_run_id: string; request_context?: Record<string, unknown> }) => {
         expect(input.request_context).toMatchObject({
@@ -161,6 +165,9 @@ describe('Evaluation workflows', () => {
       expect(result.cases).toHaveLength(2);
       expect(result.cases.map((entry) => entry.status).sort()).toEqual(['passed', 'system_error']);
       expect(caseResults.some((entry) => entry.status === 'system_error')).toBe(true);
+      expect(taskStatuses).toEqual([
+        { task_run_id: 'task_case_pass', status: 'completed' },
+      ]);
       expect(calls).toEqual(['load', 'running', 'aggregate', 'compare', 'gate', 'complete']);
     });
   }, 30_000);

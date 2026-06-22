@@ -323,7 +323,6 @@ export async function evaluationCaseWorkflow(
         evaluation_case_id: input.case_id,
         evaluation_execution_plan_ref: input.evaluation_execution_plan_ref,
         evaluation_execution_plan_hash: input.evaluation_execution_plan_hash,
-        task_status_owner: false,
         request_id: input.request_id,
         ...(input.trace_id ? { trace_id: input.trace_id } : {}),
       } satisfies PiDurableAgentWorkflowInput],

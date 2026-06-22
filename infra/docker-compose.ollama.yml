@@ -18,3 +18,8 @@ services:
       MODEL_GATEWAY_ALLOW_INSECURE_HTTP: true
       MODEL_GATEWAY_IDEMPOTENCY_HEADER: Idempotency-Key
       MODEL_GATEWAY_USER_AGENT: durable-agent-runtime-lite/runtime-worker-ollama
+      EVALUATION_WORKER_ENABLED: 'true'
+      EVALUATION_TASK_QUEUE: evaluation-worker-main
+      EVALUATION_MAX_CONCURRENT_RUNS: '1'
+      EVALUATION_MAX_CONCURRENT_CASES: '1'
+      EVALUATION_CASE_TIMEOUT_MS: '300000'
