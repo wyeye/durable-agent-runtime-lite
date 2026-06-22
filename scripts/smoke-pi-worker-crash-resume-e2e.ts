@@ -161,6 +161,8 @@ const requestPrefix = `pi_crash_${Date.now()}`;
 const runtimeHeaders = authHeaders(`${requestPrefix}_runtime`);
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const resultFile = process.env.PI_CRASH_RESULT_FILE;
+const dockerCommandTimeoutMs = Number(process.env.PI_CRASH_DOCKER_COMMAND_TIMEOUT_MS ?? 120_000);
+let workerRestartNeeded = false;
 
 async function main(): Promise<void> {
   const db = createDb({ databaseUrl });
@@ -186,7 +188,9 @@ async function main(): Promise<void> {
     await safeDiagnostics(db, error);
     throw error;
   } finally {
-    await ensureWorkerStarted();
+    if (workerRestartNeeded) {
+      await ensureWorkerStarted();
+    }
     await closeDb(db);
   }
 }
@@ -544,11 +548,13 @@ async function createAgentTask(agentExecutionPlanRef: string, scenario: string) 
 }
 
 async function killWorker(): Promise<void> {
+  workerRestartNeeded = true;
   await dockerCompose(['kill', '-s', 'SIGKILL', 'runtime-worker']);
 }
 
 async function startWorker(): Promise<void> {
   await dockerCompose(['up', '-d', 'runtime-worker']);
+  workerRestartNeeded = false;
 }
 
 async function ensureWorkerStarted(): Promise<void> {
@@ -981,7 +987,7 @@ async function dockerCompose(args: string[]): Promise<void> {
   await runCommand(
     'docker',
     ['compose', ...composeFiles.flatMap((file) => ['-f', file]), ...args],
-    { inherit: true },
+    { inherit: true, timeoutMs: dockerCommandTimeoutMs },
   );
 }
 
@@ -989,36 +995,68 @@ async function dockerComposeOutput(args: string[]): Promise<string> {
   return runCommand(
     'docker',
     ['compose', ...composeFiles.flatMap((file) => ['-f', file]), ...args],
-    { inherit: false },
+    { inherit: false, timeoutMs: dockerCommandTimeoutMs },
   );
 }
 
 async function runCommand(
   command: string,
   args: string[],
-  options: { inherit: boolean },
+  options: { inherit: boolean; timeoutMs?: number },
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
     const child = spawn(command, args, {
       cwd: repoRoot,
       stdio: options.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
       env: process.env,
     });
+    const timeout =
+      options.timeoutMs && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            child.kill('SIGTERM');
+            setTimeout(() => child.kill('SIGKILL'), 5_000).unref();
+          }, options.timeoutMs)
+        : undefined;
+    timeout?.unref();
     child.stdout?.on('data', (chunk) => {
       stdout += String(chunk);
     });
     child.stderr?.on('data', (chunk) => {
       stderr += String(chunk);
     });
-    child.on('error', reject);
-    child.on('close', (code) => {
+    child.on('error', (error) => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      reject(error);
+    });
+    child.on('close', (code, signal) => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (timedOut) {
+        reject(
+          new Error(
+            `${command} ${args.join(' ')} timed out after ${options.timeoutMs}ms: ${
+              stderr || stdout
+            }`,
+          ),
+        );
+        return;
+      }
       if (code === 0) {
         resolve(stdout);
         return;
       }
-      reject(new Error(`${command} ${args.join(' ')} failed with ${code}: ${stderr || stdout}`));
+      reject(
+        new Error(
+          `${command} ${args.join(' ')} failed with ${code ?? signal}: ${stderr || stdout}`,
+        ),
+      );
     });
   });
 }
