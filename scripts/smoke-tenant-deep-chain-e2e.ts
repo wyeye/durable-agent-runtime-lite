@@ -222,22 +222,34 @@ async function runPolicyCrashSnapshotScenario(db: Db): Promise<void> {
   });
   const snapshots = await new TenantRuntimePolicySnapshotRepository(db).listByTenant(tenantId, { limit: 50 });
   assert.ok(snapshots.length >= 2, 'Crash smoke should leave tenant policy snapshots for need_user and L3 paths');
-  assert.ok(snapshots.every((snapshot) => snapshot.source_policy_version === 1), 'Crash smoke tasks must stay locked to policy v1 snapshots');
   const taskRuns = await new TaskRunRepository(db).list({ tenantId, limit: 20 });
   const crashTasks = taskRuns.filter((task) => task.user_id === userId && task.tenant_policy_snapshot_ref);
   assert.ok(crashTasks.length >= 2, 'Crash smoke should create policy-locked TaskRun rows');
+  const snapshotByRef = new Map(snapshots.map((snapshot) => [snapshot.snapshot_ref, snapshot]));
+  const referencedSnapshots = crashTasks.map((task) => {
+    assert.ok(task.tenant_policy_snapshot_ref, 'Crash TaskRun should store a tenant policy snapshot ref');
+    assert.ok(task.tenant_policy_hash, 'Crash TaskRun should store a tenant policy hash');
+    const snapshot = snapshotByRef.get(task.tenant_policy_snapshot_ref);
+    assert.ok(snapshot, 'Crash TaskRun snapshot ref should resolve to an immutable snapshot');
+    assert.equal(snapshot.snapshot_hash, task.tenant_policy_hash);
+    return snapshot;
+  });
+  const latestPolicy = await new TenantRuntimePolicyRepository(db).getLatestPublished(tenantId);
+  assert.ok(latestPolicy, 'Crash smoke tenant should keep a latest published tenant policy');
   assert.ok(
-    crashTasks.every((task) =>
-      snapshots.some((snapshot) =>
-        snapshot.snapshot_ref === task.tenant_policy_snapshot_ref
-        && snapshot.snapshot_hash === task.tenant_policy_hash)),
-    'Crash TaskRun rows should reference immutable snapshots by ref/hash',
+    referencedSnapshots.every((snapshot) => snapshot.source_policy_version <= latestPolicy.version),
+    'Crash TaskRun snapshots should come from current or earlier policy versions',
+  );
+  assert.ok(
+    referencedSnapshots.some((snapshot) => snapshot.source_policy_version < latestPolicy.version),
+    'Crash smoke tasks must stay locked to their original snapshots after later policy versions are published',
   );
   console.log(JSON.stringify({
     ok: true,
     scenario,
     locked_snapshot_refs: crashTasks.map((task) => task.tenant_policy_snapshot_ref),
-    source_policy_versions: [...new Set(snapshots.map((snapshot) => snapshot.source_policy_version))],
+    source_policy_versions: [...new Set(referencedSnapshots.map((snapshot) => snapshot.source_policy_version))],
+    latest_policy_version: latestPolicy.version,
   }, null, 2));
 }
 

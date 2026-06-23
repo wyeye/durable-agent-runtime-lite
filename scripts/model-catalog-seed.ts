@@ -34,6 +34,23 @@ export interface EnsureModelCatalogEntryResult {
   model_ref: ModelDefinitionRef;
 }
 
+export function localMockModelCatalogEntryInput(operatorId: string): EnsureModelCatalogEntryInput {
+  return {
+    profileId: 'local-mock',
+    displayName: 'local-mock dar-local-model',
+    baseUrl: process.env.MODEL_GATEWAY_BASE_URL ?? 'http://mock-server:4100',
+    authType: 'none',
+    modelId: 'dar-local-model',
+    upstreamModelId: 'dar-local-model',
+    provider: 'local-mock',
+    capabilities: ['text', 'tools', 'usage', 'tool_choice'],
+    contextWindow: 32768,
+    maxOutputTokens: 4096,
+    tags: ['sample', 'evaluation'],
+    operatorId,
+  };
+}
+
 export async function ensureModelCatalogEntry(
   db: ReturnType<typeof createDb>,
   input: EnsureModelCatalogEntryInput,

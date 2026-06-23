@@ -45,7 +45,7 @@ import {
   upsertAgentSpec,
   upsertPromptDefinition,
 } from '@dar/db';
-import { ensureModelCatalogEntry } from './model-catalog-seed.js';
+import { ensureModelCatalogEntry, localMockModelCatalogEntryInput } from './model-catalog-seed.js';
 
 type Scenario = 'framework' | 'regression' | 'publish_gate';
 type SubjectType = 'prompt' | 'agent' | 'model_policy';
@@ -868,17 +868,22 @@ async function seedTools(
 
 async function seedModelPolicy(db: Db, modelPolicyId: string, status: 'published' | 'validated'): Promise<ModelPolicy> {
   const repository = new ModelPolicyRepository(db);
-  const catalog = await ensureModelCatalogEntry(db, {
-    profileId: modelGatewayProfile,
-    displayName: `${modelGatewayProfile} ${modelGatewayModel}`,
-    baseUrl: modelGatewayBaseUrl,
-    authType: 'none',
-    modelId: modelGatewayModel,
-    upstreamModelId: modelGatewayModel,
-    provider: modelGatewayProfile,
-    capabilities: ['text', 'tools', 'usage', 'tool_choice'],
-    operatorId: userId,
-  });
+  const catalog = await ensureModelCatalogEntry(
+    db,
+    modelGatewayProfile === 'local-mock' && modelGatewayModel === 'dar-local-model'
+      ? localMockModelCatalogEntryInput(userId)
+      : {
+          profileId: modelGatewayProfile,
+          displayName: `${modelGatewayProfile} ${modelGatewayModel}`,
+          baseUrl: modelGatewayBaseUrl,
+          authType: 'none',
+          modelId: modelGatewayModel,
+          upstreamModelId: modelGatewayModel,
+          provider: modelGatewayProfile,
+          capabilities: ['text', 'tools', 'usage', 'tool_choice'],
+          operatorId: userId,
+        },
+  );
   const existing = await repository.getByIdAndVersion(modelPolicyId, 1, { tenantId });
   if (existing?.status === status) {
     return existing;

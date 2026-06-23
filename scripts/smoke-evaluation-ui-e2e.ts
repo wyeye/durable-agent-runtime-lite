@@ -34,7 +34,7 @@ import {
   upsertAgentSpec,
   upsertPromptDefinition,
 } from '@dar/db';
-import { ensureModelCatalogEntry } from './model-catalog-seed.js';
+import { ensureModelCatalogEntry, localMockModelCatalogEntryInput } from './model-catalog-seed.js';
 
 const require = createRequire(import.meta.url);
 const workspaceRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -520,17 +520,7 @@ async function seedTenantPolicy(db: Db): Promise<TenantRuntimePolicy> {
 
 async function seedModelPolicy(db: Db, modelPolicyId: string, status: 'published' | 'validated'): Promise<ModelPolicy> {
   const repository = new ModelPolicyRepository(db);
-  const catalog = await ensureModelCatalogEntry(db, {
-    profileId: 'local-mock',
-    displayName: 'Local mock evaluation UI model',
-    baseUrl: 'http://mock-server:4100',
-    authType: 'none',
-    modelId: 'dar-local-model',
-    upstreamModelId: 'dar-local-model',
-    provider: 'local-mock',
-    capabilities: ['text', 'tools', 'usage', 'tool_choice'],
-    operatorId: userId,
-  });
+  const catalog = await ensureModelCatalogEntry(db, localMockModelCatalogEntryInput(userId));
   await repository.createDraft({
     model_policy_id: modelPolicyId,
     version: 1,

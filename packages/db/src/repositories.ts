@@ -5971,8 +5971,10 @@ export async function resolveModelPolicyRecord(
   db: Kysely<Database>,
   record: ModelPolicy,
   modelPolicyHash = hashModelPolicy(record),
+  options: { allowValidated?: boolean } = {},
 ): Promise<ResolvedModelPolicy> {
-  if (!isDependencyPublishable(record.status)) {
+  const executable = isDependencyPublishable(record.status) || (options.allowValidated === true && record.status === 'validated');
+  if (!executable) {
     throw new Error(
       `ModelPolicy is not executable for plan generation: ${record.model_policy_id}@${record.version}`,
     );

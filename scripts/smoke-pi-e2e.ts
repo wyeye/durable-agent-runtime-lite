@@ -24,7 +24,7 @@ import {
   upsertAgentSpec,
   upsertPromptDefinition,
 } from '@dar/db';
-import { ensureModelCatalogEntry } from './model-catalog-seed.js';
+import { ensureModelCatalogEntry, localMockModelCatalogEntryInput, type EnsureModelCatalogEntryInput } from './model-catalog-seed.js';
 
 const runtimeApiUrl = trimTrailingSlash(process.env.RUNTIME_API_URL ?? 'http://localhost:3000');
 const databaseUrl =
@@ -237,21 +237,24 @@ async function seedModelPolicy(
   displayPolicy: string,
 ) {
   const repository = new ModelPolicyRepository(db);
-  const catalog = await ensureModelCatalogEntry(db, {
-    profileId: mode === 'model_gateway' ? modelGatewayProvider : 'local-deterministic',
-    displayName: mode === 'model_gateway'
-      ? `${modelGatewayProvider} ${modelGatewayModel}`
-      : 'Local deterministic development model gateway',
-    baseUrl: mode === 'model_gateway'
-      ? modelGatewayBaseUrl
-      : process.env.SEED_DETERMINISTIC_MODEL_GATEWAY_BASE_URL ?? 'http://mock-server:4100',
-    authType: 'none',
-    modelId: mode === 'model_gateway' ? modelGatewayModel : displayPolicy,
-    upstreamModelId: mode === 'model_gateway' ? modelGatewayModel : displayPolicy,
-    provider: mode === 'model_gateway' ? modelGatewayProvider : 'local-mock',
-    capabilities: ['text', 'tools', 'usage'],
-    operatorId: 'pi-smoke',
-  });
+  const catalogInput: EnsureModelCatalogEntryInput = mode === 'model_gateway' && modelGatewayProvider === 'local-mock' && modelGatewayModel === 'dar-local-model'
+    ? localMockModelCatalogEntryInput('pi-smoke')
+    : {
+        profileId: mode === 'model_gateway' ? modelGatewayProvider : 'local-deterministic',
+        displayName: mode === 'model_gateway'
+          ? `${modelGatewayProvider} ${modelGatewayModel}`
+          : 'Local deterministic development model gateway',
+        baseUrl: mode === 'model_gateway'
+          ? modelGatewayBaseUrl
+          : process.env.SEED_DETERMINISTIC_MODEL_GATEWAY_BASE_URL ?? 'http://mock-server:4100',
+        authType: 'none' as const,
+        modelId: mode === 'model_gateway' ? modelGatewayModel : displayPolicy,
+        upstreamModelId: mode === 'model_gateway' ? modelGatewayModel : displayPolicy,
+        provider: mode === 'model_gateway' ? modelGatewayProvider : 'local-mock',
+        capabilities: ['text', 'tools', 'usage'],
+        operatorId: 'pi-smoke',
+      };
+  const catalog = await ensureModelCatalogEntry(db, catalogInput);
   const existing = await repository.getByIdAndVersion(modelPolicyId, 1, { tenantId });
   if (existing?.status === 'published' || existing?.status === 'gray') {
     return existing;

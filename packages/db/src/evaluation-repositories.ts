@@ -2282,7 +2282,9 @@ export class EvaluationCandidateResolver {
     });
 
     const allowedTools = await this.resolveAllowedTools(records.agent.spec, input.tenantId);
-    const resolvedModelPolicy = await resolveModelPolicyRecord(this.db, records.modelPolicy, records.modelPolicyHash);
+    const resolvedModelPolicy = await resolveModelPolicyRecord(this.db, records.modelPolicy, records.modelPolicyHash, {
+      allowValidated: input.primarySubjectType === 'model_policy',
+    });
     const plan = buildCandidateAgentExecutionPlan({
       tenantId: input.tenantId,
       agent: records.agent,
