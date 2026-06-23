@@ -98,6 +98,7 @@ const databaseUrl =
 const tenantId = process.env.SMOKE_TENANT_ID ?? 'default';
 const userId = process.env.SMOKE_USER_ID ?? 'cp_ui_smoke_operator';
 const requestPrefix = `cp_ui_smoke_${Date.now()}`;
+const deterministicModelPolicy = 'deterministic:final_only';
 const operatorHeaders = authHeaders('capability_operator', `${requestPrefix}_operator`);
 const adminHeaders = authHeaders('platform_admin', `${requestPrefix}_admin`);
 
@@ -363,7 +364,7 @@ function agentSpec(
     agent_id: ids.agent,
     version,
     prompt_ref: `${ids.prompt}@1`,
-    model_policy: 'deterministic:final_only',
+    model_policy: deterministicModelPolicy,
     model_policy_ref: {
       model_policy_id: modelPolicy.model_policy_id,
       model_policy_version: modelPolicy.version,
@@ -456,6 +457,7 @@ async function publishTenantPolicyForUiSmoke(
     },
     { model_id: modelPolicy.targets[0]?.target_id ?? `${ids.modelPolicy}_primary` },
     { model_id: modelRef.model_id },
+    { model_id: deterministicModelPolicy },
   ];
   const base = latestPublished ?? minimalTenantPolicy(nextVersion);
   const draftPolicy: TenantRuntimePolicy = {
@@ -624,7 +626,20 @@ async function createAgentThroughUi(
   assert.equal(record.spec.prompt_ref, `${ids.prompt}@1`);
   assert.equal(record.spec.model_policy_ref?.model_policy_id, modelPolicy.model_policy_id);
   assert.ok(record.spec.allowed_tools.includes(`${ids.tool}@1.0.0`));
-  return record;
+  if (record.spec.model_policy === deterministicModelPolicy) {
+    return record;
+  }
+  const updated = await updateDraft<AgentSpec>(
+    page,
+    'agents',
+    spec.agent_id,
+    1,
+    { ...record.spec, model_policy: deterministicModelPolicy },
+    record.revision,
+  );
+  assert.equal(updated.spec.model_policy, deterministicModelPolicy);
+  assert.equal(updated.spec.model_policy_ref?.model_policy_id, modelPolicy.model_policy_id);
+  return updated;
 }
 
 async function createFlowThroughUi(
@@ -646,7 +661,7 @@ async function createFlowThroughUi(
   await page.getByTestId('flow-sequence-canvas').waitFor({ timeout: 15_000 });
   await page.getByTestId('draft-submit').click();
   await page.getByText(spec.flow_id).first().waitFor({ timeout: 15_000 });
-  const record = await getRegistryVersion<FlowSpec>(page, 'flows', spec.flow_id, 1);
+  const record = await waitForRegistryVersion<FlowSpec>(page, 'flows', spec.flow_id, 1);
   assert.ok(record.spec.steps.some((step) => step.type === 'tool' && step.tool === ids.tool && step.mode === 'preview_commit'));
   assert.ok(record.spec.steps.some((step) => step.type === 'agent' && step.agent_id === ids.agent));
   return record;
@@ -669,7 +684,7 @@ async function createRouteThroughUi(
   await page.keyboard.press('Enter');
   await page.getByTestId('draft-submit').click();
   await page.getByText(ids.route).first().waitFor({ timeout: 15_000 });
-  const record = await getRegistryVersion<RouteSpec>(page, 'routes', ids.route, 1);
+  const record = await waitForRegistryVersion<RouteSpec>(page, 'routes', ids.route, 1);
   assert.equal(record.spec.flow_id, ids.flow);
   assert.ok(record.spec.route.keywords.includes(keyword));
   assert.ok(record.spec.route.supported_channels.includes('api'));
@@ -720,6 +735,27 @@ async function getRegistryVersion<TSpec>(
     `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}`,
     operatorHeaders,
   );
+}
+
+async function waitForRegistryVersion<TSpec>(
+  page: PageLike,
+  plural: string,
+  resourceId: string,
+  version: number,
+): Promise<RegistryRecord<TSpec>> {
+  const deadline = Date.now() + 15_000;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      return await getRegistryVersion<TSpec>(page, plural, resourceId, version);
+    } catch (error) {
+      lastError = error;
+      await delay(300);
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Timed out waiting for ${plural}:${resourceId}@${version}`);
 }
 
 async function cloneResource<TSpec>(
