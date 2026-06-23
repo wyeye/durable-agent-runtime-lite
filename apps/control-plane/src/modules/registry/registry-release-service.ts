@@ -173,7 +173,19 @@ export class RegistryReleaseService {
     if (!flowValidation.can_publish) {
       throw new Error('Flow validation failed');
     }
-    const routeValidation = await this.validate('route', routeId, routeVersion, tenant(options));
+    const routeRecord = await this.repositories.routes.getByIdAndVersion(routeId, routeVersion, { tenantId: tenant(options) });
+    const routeValidation = routeRecord
+      ? await this.validationService.validateRoute(routeRecord.spec, {
+          tenantId: tenant(options),
+          allowPendingFlowDependency: { flowId, flowVersion },
+        })
+      : {
+          valid: false,
+          can_publish: false,
+          errors: [{ code: 'REGISTRY_VERSION_NOT_FOUND', message: 'Registry version not found', severity: 'error' as const }],
+          warnings: [],
+          dependency_graph: { nodes: [], edges: [] },
+        };
     if (!routeValidation.can_publish) {
       throw new Error('Route validation failed');
     }

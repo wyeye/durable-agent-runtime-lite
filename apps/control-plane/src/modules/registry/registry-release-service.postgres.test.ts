@@ -386,6 +386,49 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
       await closeDb(db);
     }
   });
+
+  it('publishes a draft Flow and draft Route together before the route dependency is published', async () => {
+    const db = createDb({ databaseUrl: process.env.DATABASE_URL as string });
+    const tenantId = `tenant_${randomUUID()}`;
+    const operatorId = 'operator_joint_publish_test';
+    const flowId = `flow_${randomUUID()}`;
+    const routeId = `route_${randomUUID()}`;
+    const flows = new FlowDefinitionRepository(db);
+    const routes = new RouteConfigRepository(db);
+    const tools = new ToolManifestRepository(db);
+    const agents = new AgentSpecRepository(db);
+    const prompts = new PromptDefinitionRepository(db);
+    const validation = new RegistryValidationService({ flows, routes, tools, agents, prompts });
+    const release = new RegistryReleaseService(db, { flows, routes, tools, agents, prompts }, validation);
+
+    try {
+      await flows.createDraft(simpleFlow(flowId, 1), { tenantId, operatorId });
+      await routes.createDraft(simpleRoute(routeId, flowId, 1, {
+        keywords: ['joint-draft-publish'],
+        examples: [],
+      }), { tenantId, operatorId });
+
+      await expect(release.publish('route', routeId, 1, {
+        tenantId,
+        operatorId,
+        releaseNote: 'route should still require a publishable flow',
+      })).rejects.toThrow('Registry validation failed');
+
+      const result = await release.publishFlowWithRoute(flowId, 1, routeId, 1, {
+        tenantId,
+        operatorId,
+        releaseNote: 'joint publish draft flow and route',
+      });
+
+      expect(result.flow_release.action).toBe('publish');
+      expect(result.route_release.action).toBe('publish');
+      expect((await flows.getByIdAndVersion(flowId, 1, { tenantId }))?.status).toBe('published');
+      expect((await routes.getByIdAndVersion(routeId, 1, { tenantId }))?.status).toBe('published');
+      expect(await new FlowExecutionPlanRepository(db).getLatestForFlow(flowId, 1, { tenantId })).not.toBeNull();
+    } finally {
+      await closeDb(db);
+    }
+  });
 });
 
 class FakeRouteEmbeddingIndexService {

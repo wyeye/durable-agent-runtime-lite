@@ -7,6 +7,7 @@ import type {
   RegistryValidationIssue,
   RegistryValidationResult,
   RegistryResourceType,
+  RouteSpec,
   ToolManifest,
 } from '@dar/contracts';
 import {
@@ -34,6 +35,10 @@ export interface RegistryValidationRepositories {
 
 export interface RegistryValidationOptions {
   tenantId?: string;
+  allowPendingFlowDependency?: {
+    flowId: string;
+    flowVersion: number;
+  };
 }
 
 interface ValidationContext {
@@ -125,7 +130,7 @@ export class RegistryValidationService {
     addDependency(context, 'route', routeId, parsed.version, 'flow', parsed.flow_id, parsed.version, flow?.status, 'routes_to_flow');
     if (!flow) {
       addError(context, 'ROUTE_FLOW_NOT_FOUND', `FlowSpec not found: ${parsed.flow_id}@${parsed.version}`, 'flow_id');
-    } else if (!isDependencyPublishable(flow.status)) {
+    } else if (!isDependencyPublishable(flow.status) && !isAllowedPendingFlowDependency(parsed, options)) {
       addError(context, 'ROUTE_FLOW_NOT_PUBLISHABLE', `FlowSpec is not published or gray: ${parsed.flow_id}@${parsed.version}`, 'flow_id');
     }
 
@@ -497,6 +502,11 @@ function addWarning(context: ValidationContext, code: string, message: string, p
 
 function isDependencyPublishable(status: string | undefined): boolean {
   return status === 'published' || status === 'gray';
+}
+
+function isAllowedPendingFlowDependency(route: RouteSpec, options: RegistryValidationOptions): boolean {
+  const pending = options.allowPendingFlowDependency;
+  return pending?.flowId === route.flow_id && pending.flowVersion === route.version;
 }
 
 function tenantOptions(options: RegistryValidationOptions): { tenantId?: string } {

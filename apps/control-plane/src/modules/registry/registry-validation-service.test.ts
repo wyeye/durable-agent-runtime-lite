@@ -166,6 +166,29 @@ describe('RegistryValidationService', () => {
     expect(result.warnings.map((warning: RegistryValidationIssue) => warning.code)).toContain('ROUTE_PUBLISHED_CONFLICT_WARNING');
   });
 
+  it('allows pending Flow dependency only for joint Flow+Route publish validation', async () => {
+    const draftFlow = sampleFlow();
+    const flows = new FakeRepository<FlowSpec>(new Map([[
+      'sample_flow@1',
+      { version: 1, status: 'draft', spec: draftFlow },
+    ]]));
+    const route: RouteSpec = {
+      route_id: 'joint_route',
+      flow_id: 'sample_flow',
+      version: 1,
+      status: 'draft',
+      route: { keywords: ['joint'], examples: [], negative_examples: [], supported_channels: [], role_constraints: [], priority: 50, confidence_threshold: 0.7, ambiguous_threshold: 0.5 },
+    };
+    const blocked = await service({ flows }).validateRoute(route);
+    expect(blocked.errors.map((error: RegistryValidationIssue) => error.code)).toContain('ROUTE_FLOW_NOT_PUBLISHABLE');
+
+    const allowed = await service({ flows }).validateRoute(route, {
+      allowPendingFlowDependency: { flowId: 'sample_flow', flowVersion: 1 },
+    });
+    expect(allowed.errors.map((error: RegistryValidationIssue) => error.code)).not.toContain('ROUTE_FLOW_NOT_PUBLISHABLE');
+    expect(allowed.can_publish).toBe(true);
+  });
+
   it('validates Tool L3/L4 and secret constraints', async () => {
     const l3Invalid = { ...l3Tool, side_effect: false };
     const result = await service().validateTool(l3Invalid);
