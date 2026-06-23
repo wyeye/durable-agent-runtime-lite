@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import type { FlowSpec } from '@dar/contracts';
 import {
@@ -26,16 +25,12 @@ function flow(flowId: string, version: number): FlowSpec {
 }
 
 describePostgres('registry repositories with PostgreSQL', () => {
-  it('supports draft lifecycle, optimistic locking, clone, release history, gray selection, and archived migration compatibility', async () => {
+  it('supports draft lifecycle, optimistic locking, clone, release history, and gray selection', async () => {
     const db = createDb({ databaseUrl: process.env.DATABASE_URL as string });
     const tenantId = `tenant_${randomUUID()}`;
     const flowId = `flow_${randomUUID()}`;
     const routeId = `route_${randomUUID()}`;
     try {
-      const migrationSql = await readFile(new URL('../../../db/migrations/004_control_plane_registry.sql', import.meta.url), 'utf8');
-      expect(migrationSql).toContain("status = 'deprecated'");
-      expect(migrationSql).toContain('capability_release');
-
       const flows = new FlowDefinitionRepository(db);
       const draft = await flows.createDraft(flow(flowId, 1), { tenantId, operatorId: 'tester' });
       expect(draft.status).toBe('draft');

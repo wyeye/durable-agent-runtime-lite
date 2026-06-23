@@ -13,7 +13,7 @@ Valid statuses for new data are:
 - `deprecated`
 - `disabled`
 
-`archived` is not valid for new contract data. Migration `004_control_plane_registry.sql` converts existing `archived` rows and JSON payload status fields to `deprecated`.
+`archived` is not valid for new contract data. Development data is reset through the single baseline migration, so no old `archived` compatibility conversion is maintained.
 
 Allowed transitions:
 
@@ -46,9 +46,9 @@ Rules:
 - Successful draft updates increment `revision`.
 - Published version content is immutable; changes must use `cloneVersion`.
 
-## Migration 004
+## Baseline Schema
 
-`db/migrations/004_control_plane_registry.sql` adds governance columns to:
+`db/migrations/001_baseline.sql` defines governance columns for:
 
 - `flow_definition`
 - `flow_route_config`
@@ -58,13 +58,13 @@ Rules:
 
 Added columns include `updated_by`, `published_by`, `updated_at`, `published_at` where missing, `revision`, and `gray_policy_json`.
 
-The migration also adds:
+The baseline also defines:
 
 - `capability_release`
 - lifecycle indexes for registry resources
 - release history indexes
 
-The repository migration runner wraps each migration file in a transaction, so partial migration application rolls back on failure.
+The repository migration runner wraps the baseline migration in a transaction, so partial application rolls back on failure.
 
 ## Capability Releases
 

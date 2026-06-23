@@ -20,6 +20,8 @@ export function ModelsPage() {
   const { message } = App.useApp();
   const [createOpen, setCreateOpen] = useState(false);
   const [form] = Form.useForm<ModelDefinitionCreateDraftRequest>();
+  const selectedCapabilities = Form.useWatch('capabilities', form) ?? [];
+  const isEmbeddingModel = selectedCapabilities.includes('embeddings');
 
   const modelsQuery = useQuery({
     queryKey: ['models'],
@@ -50,6 +52,7 @@ export function ModelsPage() {
     { title: '模型网关', dataIndex: 'gateway_profile_id', key: 'gateway_profile_id' },
     { title: 'Provider', dataIndex: 'provider', key: 'provider' },
     { title: '能力', dataIndex: 'capabilities', key: 'capabilities', render: (values: string[]) => <Space>{values.map((value) => <Tag key={value}>{value}</Tag>)}</Space> },
+    { title: '向量维度', dataIndex: 'embedding_dimensions', key: 'embedding_dimensions', render: (value?: number) => value ?? '-' },
     { title: '上下文窗口', dataIndex: 'context_window', key: 'context_window' },
     { title: '最大输出', dataIndex: 'max_output_tokens', key: 'max_output_tokens' },
     { title: '状态', dataIndex: 'status', key: 'status', render: (status) => <StatusTag status={String(status)} /> },
@@ -84,9 +87,14 @@ export function ModelsPage() {
           </Form.Item>
           <Form.Item name="upstream_model_id" label="上游 Model ID" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="provider" label="Provider" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="capabilities" label="能力"><Select mode="multiple" options={['text', 'tools', 'usage', 'tool_choice', 'json_schema', 'streaming'].map((value) => ({ value, label: value }))} /></Form.Item>
+          <Form.Item name="capabilities" label="能力"><Select mode="multiple" options={['text', 'tools', 'usage', 'tool_choice', 'json_schema', 'streaming', 'embeddings'].map((value) => ({ value, label: value }))} /></Form.Item>
           <Form.Item name="context_window" label="Context Window"><InputNumber min={1} style={{ width: '100%' }} /></Form.Item>
           <Form.Item name="max_output_tokens" label="Max Output Tokens"><InputNumber min={1} style={{ width: '100%' }} /></Form.Item>
+          {isEmbeddingModel ? (
+            <Form.Item name="embedding_dimensions" label="Embedding Dimensions" rules={[{ required: true }]}>
+              <InputNumber min={1} style={{ width: '100%' }} />
+            </Form.Item>
+          ) : null}
           <Form.Item name="input_cost_per_million" label="输入价格/百万"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
           <Form.Item name="output_cost_per_million" label="输出价格/百万"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
           <Form.Item name="currency" label="Currency"><Input /></Form.Item>

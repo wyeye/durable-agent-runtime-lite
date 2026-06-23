@@ -58,9 +58,19 @@ export interface FlowRouteEmbeddingTable {
   route_id: string;
   flow_id: string;
   flow_version: number;
-  example_text: string;
+  route_config_sha256: string;
+  source_type: string;
+  source_index: number;
+  source_text: string;
+  source_text_hash: string;
   embedding: unknown | null;
+  embedding_model_id: string;
+  embedding_model_version: number;
+  embedding_model_hash: string;
+  embedding_dimensions: number;
+  embedding_hash: string;
   created_at: Timestamp;
+  updated_at: Timestamp;
 }
 
 export interface TaskRunTable {
@@ -389,6 +399,7 @@ export interface ModelDefinitionTable {
   capabilities_json: Json;
   context_window: number;
   max_output_tokens: number;
+  embedding_dimensions: number | null;
   input_cost_per_million: number;
   output_cost_per_million: number;
   currency: string;

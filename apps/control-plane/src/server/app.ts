@@ -21,6 +21,7 @@ import { modelCatalogRoutes } from './routes/model-catalog.js';
 import { EvaluationApiService, type EvaluationApi } from './services/evaluation-api-service.js';
 import { ModelCatalogService, type ModelCatalogApi } from './services/model-catalog-service.js';
 import { RegistryApiService, type RegistryApi } from './services/registry-api-service.js';
+import { RouteEmbeddingIndexService } from '../modules/registry/route-embedding-index-service.js';
 
 export interface ControlPlaneAppOptions {
   config?: RuntimeConfig;
@@ -51,7 +52,10 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
   const app = Fastify({ logger: false });
   const registryService: RegistryApi = options.registryService ?? new RegistryApiService(
     requireDb(db),
-    { evaluationGateMode: config.EVALUATION_GATE_MODE },
+    {
+      evaluationGateMode: config.EVALUATION_GATE_MODE,
+      ...routeEmbeddingIndexServiceOption(config, requireDb(db)),
+    },
   );
   const evaluationService: EvaluationApi = options.evaluationService ?? new EvaluationApiService(requireDb(db));
   const modelCatalogService: ModelCatalogApi = options.modelCatalogService ?? new ModelCatalogService(
@@ -139,6 +143,28 @@ function validateControlPlaneConfig(config: RuntimeConfig): void {
   if (isProduction && !config.MODEL_CREDENTIAL_MASTER_KEY) {
     throw new Error('MODEL_CREDENTIAL_MASTER_KEY is required in production');
   }
+}
+
+function routeEmbeddingIndexServiceOption(
+  config: RuntimeConfig,
+  db: Kysely<Database>,
+): { routeEmbeddingIndexService?: RouteEmbeddingIndexService } {
+  if (!config.ROUTER_SEMANTIC_ENABLED) {
+    return {};
+  }
+  if (!config.ROUTER_EMBEDDING_MODEL_ID || !config.ROUTER_EMBEDDING_MODEL_VERSION) {
+    throw new Error('ROUTER_EMBEDDING_MODEL_ID and ROUTER_EMBEDDING_MODEL_VERSION are required when semantic routing is enabled');
+  }
+  return {
+    routeEmbeddingIndexService: new RouteEmbeddingIndexService(db, {
+      embeddingModelId: config.ROUTER_EMBEDDING_MODEL_ID,
+      embeddingModelVersion: config.ROUTER_EMBEDDING_MODEL_VERSION,
+      credentialMasterKey: config.MODEL_CREDENTIAL_MASTER_KEY,
+      timeoutMs: config.ROUTER_EMBEDDING_TIMEOUT_MS,
+      maxResponseBytes: config.MODEL_GATEWAY_MAX_RESPONSE_BYTES,
+      allowInsecureHttp: config.MODEL_GATEWAY_ALLOW_INSECURE_HTTP,
+    }),
+  };
 }
 
 function defaultStaticRoot(): string {

@@ -4,6 +4,7 @@ import {
   ModelGatewayClient,
   ModelGatewayError,
   ModelToolNameCodec,
+  OpenAICompatibleEmbeddingClient,
   modelGenerateResponseSchema,
 } from '../src/index.js';
 
@@ -383,5 +384,173 @@ describe('Model Gateway contract', () => {
         response_format: 'text',
       }),
     ).rejects.toBeInstanceOf(ModelGatewayError);
+  });
+
+  it('calls OpenAI-compatible embeddings in batch and validates dimensions', async () => {
+    const seen: unknown[] = [];
+    const server = createServer((request, response) => {
+      let body = '';
+      request.on('data', (chunk: Buffer) => {
+        body += chunk.toString('utf8');
+      });
+      request.on('end', () => {
+        const parsed = JSON.parse(body) as { input: string[] };
+        seen.push(parsed);
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({
+          data: parsed.input.map((_text, index) => ({
+            index,
+            embedding: new Array(4).fill(index + 1),
+          })),
+        }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    servers.push(server);
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('test server did not bind to a TCP port');
+    }
+
+    const client = new OpenAICompatibleEmbeddingClient({
+      baseUrl: `http://127.0.0.1:${address.port}/gateway-a`,
+      apiKey: 'secret-key',
+      allowInsecureHttp: true,
+      expectedDimensions: 4,
+      maxRetries: 0,
+    });
+    const vectors = await client.embed('embedding-model', ['text 1', 'text 2']);
+    expect(vectors).toHaveLength(2);
+    expect(vectors[1]).toEqual([2, 2, 2, 2]);
+    expect(seen[0]).toMatchObject({
+      model: 'embedding-model',
+      input: ['text 1', 'text 2'],
+      encoding_format: 'float',
+    });
+  });
+
+  it('retries 429 and 503 embedding responses but not auth failures', async () => {
+    let attempts = 0;
+    const server = createServer((_request, response) => {
+      attempts += 1;
+      response.setHeader('content-type', 'application/json');
+      if (attempts < 3) {
+        response.statusCode = attempts === 1 ? 429 : 503;
+        response.end(JSON.stringify({ error: { message: 'retry me' } }));
+        return;
+      }
+      response.end(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    servers.push(server);
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('test server did not bind to a TCP port');
+    }
+    const client = new OpenAICompatibleEmbeddingClient({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      apiKey: 'secret-key',
+      allowInsecureHttp: true,
+      expectedDimensions: 2,
+      maxRetries: 2,
+      retryBackoffMs: 1,
+    });
+    await expect(client.embed('embedding-model', 'hello')).resolves.toEqual([[1, 0]]);
+    expect(attempts).toBe(3);
+
+    let authAttempts = 0;
+    const authServer = createServer((_request, response) => {
+      authAttempts += 1;
+      response.statusCode = 401;
+      response.end(JSON.stringify({ error: { message: 'bad key' } }));
+    });
+    await new Promise<void>((resolve) => authServer.listen(0, '127.0.0.1', resolve));
+    servers.push(authServer);
+    const authAddress = authServer.address();
+    if (!authAddress || typeof authAddress === 'string') {
+      throw new Error('test server did not bind to a TCP port');
+    }
+    const authClient = new OpenAICompatibleEmbeddingClient({
+      baseUrl: `http://127.0.0.1:${authAddress.port}`,
+      apiKey: 'bad-key',
+      allowInsecureHttp: true,
+      expectedDimensions: 2,
+      maxRetries: 2,
+    });
+    await expect(authClient.embed('embedding-model', 'hello')).rejects.toMatchObject({
+      code: 'MODEL_GATEWAY_AUTH_FAILED',
+      errorClass: 'auth',
+    });
+    expect(authAttempts).toBe(1);
+  });
+
+  it('fails closed for invalid embedding JSON, dimensions, non-finite values, timeout, and AbortSignal', async () => {
+    const invalidServer = createServer((_request, response) => {
+      response.setHeader('content-type', 'application/json');
+      response.end('{not json');
+    });
+    await new Promise<void>((resolve) => invalidServer.listen(0, '127.0.0.1', resolve));
+    servers.push(invalidServer);
+    const invalidAddress = invalidServer.address();
+    if (!invalidAddress || typeof invalidAddress === 'string') {
+      throw new Error('test server did not bind to a TCP port');
+    }
+    const invalidClient = new OpenAICompatibleEmbeddingClient({
+      baseUrl: `http://127.0.0.1:${invalidAddress.port}`,
+      allowInsecureHttp: true,
+      expectedDimensions: 2,
+      maxRetries: 0,
+    });
+    await expect(invalidClient.embed('embedding-model', 'hello')).rejects.toMatchObject({
+      code: 'MODEL_GATEWAY_INVALID_RESPONSE',
+      errorClass: 'validation',
+    });
+
+    const badPayloadServer = createServer((_request, response) => {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ data: [{ index: 0, embedding: [1] }] }));
+    });
+    await new Promise<void>((resolve) => badPayloadServer.listen(0, '127.0.0.1', resolve));
+    servers.push(badPayloadServer);
+    const badPayloadAddress = badPayloadServer.address();
+    if (!badPayloadAddress || typeof badPayloadAddress === 'string') {
+      throw new Error('test server did not bind to a TCP port');
+    }
+    const badPayloadClient = new OpenAICompatibleEmbeddingClient({
+      baseUrl: `http://127.0.0.1:${badPayloadAddress.port}`,
+      allowInsecureHttp: true,
+      expectedDimensions: 2,
+      maxRetries: 0,
+    });
+    await expect(badPayloadClient.embed('embedding-model', 'hello')).rejects.toMatchObject({
+      code: 'MODEL_EMBEDDING_DIMENSIONS_MISMATCH',
+      errorClass: 'validation',
+    });
+
+    const slowServer = createServer((_request, _response) => {
+      // Hold the socket open so timeout and AbortSignal behavior are observable.
+    });
+    await new Promise<void>((resolve) => slowServer.listen(0, '127.0.0.1', resolve));
+    servers.push(slowServer);
+    const slowAddress = slowServer.address();
+    if (!slowAddress || typeof slowAddress === 'string') {
+      throw new Error('test server did not bind to a TCP port');
+    }
+    const timeoutClient = new OpenAICompatibleEmbeddingClient({
+      baseUrl: `http://127.0.0.1:${slowAddress.port}`,
+      allowInsecureHttp: true,
+      expectedDimensions: 2,
+      timeoutMs: 10,
+      maxRetries: 0,
+    });
+    await expect(timeoutClient.embed('embedding-model', 'hello')).rejects.toMatchObject({
+      errorClass: 'timeout',
+    });
+
+    const abort = new AbortController();
+    abort.abort();
+    await expect(timeoutClient.embed('embedding-model', 'hello', { signal: abort.signal })).rejects.toMatchObject({
+      errorClass: 'aborted',
+    });
   });
 });

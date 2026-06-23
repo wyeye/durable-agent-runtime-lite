@@ -32,6 +32,7 @@
     "smoke:evaluation-publish-gate-e2e": "EVALUATION_GATE_MODE=required EVALUATION_SMOKE_SCENARIO=publish_gate tsx scripts/smoke-evaluation-backend-e2e.ts",
     "smoke:temporal-db-e2e": "tsx scripts/smoke-temporal-db-e2e.ts",
     "smoke:control-plane-api-e2e": "tsx scripts/smoke-control-plane-api-e2e.ts",
+    "smoke:semantic-router-e2e": "tsx scripts/smoke-semantic-router-e2e.ts",
     "smoke:control-plane-ui-e2e": "tsx scripts/smoke-control-plane-ui-e2e.ts",
     "smoke:evaluation-ui-e2e": "tsx scripts/smoke-evaluation-ui-e2e.ts",
     "smoke:pi-readonly-e2e": "PI_SMOKE_SCENARIO=readonly_tool PI_SMOKE_MODE=deterministic tsx scripts/smoke-pi-e2e.ts",

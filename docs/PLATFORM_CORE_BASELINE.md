@@ -8,7 +8,7 @@ This file freezes the AR-1 platform core as the R0 baseline for Durable Agent Ru
 - User-provided expected baseline: `ab7cec9` (`完成租户策略生产闭环与全量回归门禁`).
 - Baseline date: 2026-06-19.
 - Version assigned to the frozen platform core: `0.8.0`.
-- Current migration head after AR-2A partial work: `011_model_policy_and_calls.sql`.
+- Development DB schema is now represented by a single baseline migration: `db/migrations/001_baseline.sql`.
 
 ## Frozen Capabilities
 

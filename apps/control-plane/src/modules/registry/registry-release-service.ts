@@ -21,6 +21,7 @@ import {
   withTransaction,
 } from '@dar/db';
 import type { Kysely } from 'kysely';
+import type { PreparedRouteEmbeddingIndex, RouteEmbeddingIndexService } from './route-embedding-index-service.js';
 import { RegistryValidationService, type RegistryValidationRepositories } from './registry-validation-service.js';
 
 export interface RegistryReleaseServiceOptions {
@@ -61,6 +62,7 @@ export class RegistryReleaseService {
     private readonly db: Kysely<Database>,
     private readonly repositories: RegistryValidationRepositories,
     private readonly validationService = new RegistryValidationService(repositories),
+    private readonly routeEmbeddingIndexService?: RouteEmbeddingIndexService,
   ) {}
 
   async validate(resourceType: RegistryResourceType, resourceId: string, version: number, tenantId = 'default'): Promise<RegistryValidationResult> {
@@ -80,12 +82,15 @@ export class RegistryReleaseService {
   async publish(resourceType: RegistryResourceType, resourceId: string, version: number, options: RegistryReleaseServiceOptions): Promise<CapabilityRelease> {
     let publishBlockedAudit: PublishBlockedAuditInput | undefined;
     try {
+      const validation = await this.validate(resourceType, resourceId, version, tenant(options));
+      if (!validation.can_publish) {
+        throw new Error(`Registry validation failed for ${resourceType}:${resourceId}@${version}`);
+      }
+      const preparedRouteIndex = resourceType === 'route'
+        ? await this.prepareRouteIndex(resourceId, version, options)
+        : undefined;
       return await withTransaction(this.db, async (trx) => {
         const service = this.scoped(trx);
-        const validation = await service.validate(resourceType, resourceId, version, tenant(options));
-        if (!validation.can_publish) {
-          throw new Error(`Registry validation failed for ${resourceType}:${resourceId}@${version}`);
-        }
         const repository = service.getRepository(resourceType);
         const previous = await repository.getLatestPublishedVersion(resourceId, { tenantId: tenant(options) });
         const current = await repository.getByIdAndVersion(resourceId, version, { tenantId: tenant(options) });
@@ -113,7 +118,14 @@ export class RegistryReleaseService {
         if (current?.status === 'draft') {
           await repository.markValidated(resourceId, version, { tenantId: tenant(options), operatorId: options.operatorId });
         }
-        await repository.publish(resourceId, version, { tenantId: tenant(options), operatorId: options.operatorId });
+        const published = await repository.publish(resourceId, version, { tenantId: tenant(options), operatorId: options.operatorId });
+        if (preparedRouteIndex) {
+          await service.replaceRouteIndex(
+            withRouteConfigSha256(preparedRouteIndex, published.sha256),
+            options,
+            trx,
+          );
+        }
         const executionPlan = resourceType === 'flow'
           ? await new FlowExecutionPlanRepository(trx).createForFlow({
               flowId: resourceId,
@@ -157,12 +169,17 @@ export class RegistryReleaseService {
     routeVersion: number,
     options: RegistryReleaseServiceOptions,
   ): Promise<{ flow_release: CapabilityRelease; route_release: CapabilityRelease }> {
+    const flowValidation = await this.validate('flow', flowId, flowVersion, tenant(options));
+    if (!flowValidation.can_publish) {
+      throw new Error('Flow validation failed');
+    }
+    const routeValidation = await this.validate('route', routeId, routeVersion, tenant(options));
+    if (!routeValidation.can_publish) {
+      throw new Error('Route validation failed');
+    }
+    const preparedRouteIndex = await this.prepareRouteIndex(routeId, routeVersion, options);
     return withTransaction(this.db, async (trx) => {
       const service = this.scoped(trx);
-      const flowValidation = await service.validate('flow', flowId, flowVersion, tenant(options));
-      if (!flowValidation.can_publish) {
-        throw new Error('Flow validation failed');
-      }
       const previousFlow = await service.repositories.flows.getLatestPublishedVersion(flowId, { tenantId: tenant(options) });
       const previousRoute = await service.repositories.routes.getLatestPublishedVersion(routeId, { tenantId: tenant(options) });
       const currentFlow = await service.repositories.flows.getByIdAndVersion(flowId, flowVersion, { tenantId: tenant(options) });
@@ -176,15 +193,18 @@ export class RegistryReleaseService {
         tenantId: tenant(options),
         operatorId: options.operatorId,
       });
-      const routeValidation = await service.validate('route', routeId, routeVersion, tenant(options));
-      if (!routeValidation.can_publish) {
-        throw new Error('Route validation failed');
-      }
       const currentRoute = await service.repositories.routes.getByIdAndVersion(routeId, routeVersion, { tenantId: tenant(options) });
       if (currentRoute?.status === 'draft') {
         await service.repositories.routes.markValidated(routeId, routeVersion, { tenantId: tenant(options), operatorId: options.operatorId });
       }
-      await service.repositories.routes.publish(routeId, routeVersion, { tenantId: tenant(options), operatorId: options.operatorId });
+      const publishedRoute = await service.repositories.routes.publish(routeId, routeVersion, { tenantId: tenant(options), operatorId: options.operatorId });
+      if (preparedRouteIndex) {
+        await service.replaceRouteIndex(
+          withRouteConfigSha256(preparedRouteIndex, publishedRoute.sha256),
+          options,
+          trx,
+        );
+      }
       const flowRelease = await service.appendRelease({
         resourceType: 'flow',
         resourceId: flowId,
@@ -250,6 +270,9 @@ export class RegistryReleaseService {
       const service = this.scoped(trx);
       const repository = service.getRepository(resourceType);
       const previous = await repository.getLatestVersion(resourceId, { tenantId: tenant(options), status: ['published', 'gray'] });
+      if (resourceType === 'route') {
+        await service.assertRollbackRouteIndexReady(resourceId, targetVersion, options, trx);
+      }
       await repository.rollback(resourceId, targetVersion, {
         tenantId: tenant(options),
         operatorId: options.operatorId,
@@ -354,7 +377,49 @@ export class RegistryReleaseService {
       agents: new AgentSpecRepository(db),
       prompts: new PromptDefinitionRepository(db),
     };
-    return new RegistryReleaseService(db, repositories);
+    return new RegistryReleaseService(db, repositories, undefined, this.routeEmbeddingIndexService);
+  }
+
+  private async prepareRouteIndex(
+    routeId: string,
+    version: number,
+    options: RegistryReleaseServiceOptions,
+  ): Promise<PreparedRouteEmbeddingIndex | undefined> {
+    if (!this.routeEmbeddingIndexService) {
+      return undefined;
+    }
+    const record = await this.repositories.routes.getByIdAndVersion(routeId, version, { tenantId: tenant(options) });
+    if (!record) {
+      throw new Error(`Registry version not found for route:${routeId}@${version}`);
+    }
+    return this.routeEmbeddingIndexService.prepare(record.spec, record.sha256, tenant(options));
+  }
+
+  private async replaceRouteIndex(
+    prepared: PreparedRouteEmbeddingIndex,
+    options: RegistryReleaseServiceOptions,
+    db: Kysely<Database>,
+  ): Promise<void> {
+    await this.routeEmbeddingIndexService?.replacePrepared(prepared, tenant(options), db);
+  }
+
+  private async assertRollbackRouteIndexReady(
+    routeId: string,
+    targetVersion: number,
+    options: RegistryReleaseServiceOptions,
+    db: Kysely<Database>,
+  ): Promise<void> {
+    if (!this.routeEmbeddingIndexService) {
+      return;
+    }
+    const record = await this.repositories.routes.getByIdAndVersion(routeId, targetVersion, { tenantId: tenant(options) });
+    if (!record) {
+      throw new Error(`Registry version not found for route:${routeId}@${targetVersion}`);
+    }
+    const ready = await this.routeEmbeddingIndexService.hasRouteIndex(record.spec, record.sha256, tenant(options), db);
+    if (!ready) {
+      throw new Error('ROUTE_EMBEDDING_NOT_READY: rollback target route embedding index is missing');
+    }
   }
 
   private async appendRelease(input: {
@@ -510,6 +575,20 @@ async function serviceAuditEvaluationPublishBlocked(
 
 function tenant(options: { tenantId?: string }): string {
   return options.tenantId ?? 'default';
+}
+
+function withRouteConfigSha256(
+  index: PreparedRouteEmbeddingIndex,
+  routeConfigSha256: string,
+): PreparedRouteEmbeddingIndex {
+  return {
+    ...index,
+    routeConfigSha256,
+    rows: index.rows.map((row) => ({
+      ...row,
+      routeConfigSha256,
+    })),
+  };
 }
 
 function withGateMetadata(

@@ -15,7 +15,7 @@ async function main(): Promise<void> {
 
   try {
     await client.query(`
-      create table if not exists schema_migration (
+      create table if not exists public.schema_migration (
         version text primary key,
         checksum text not null,
         applied_at timestamptz not null default now()
@@ -29,7 +29,7 @@ async function main(): Promise<void> {
       const migrationSql = await readFile(join(migrationsDir, file), 'utf8');
       const checksum = createHash('sha256').update(migrationSql).digest('hex');
       const applied = await client.query<{ checksum: string }>(
-        'select checksum from schema_migration where version = $1',
+        'select checksum from public.schema_migration where version = $1',
         [version],
       );
 
@@ -44,7 +44,7 @@ async function main(): Promise<void> {
       await client.query('begin');
       try {
         await client.query(migrationSql);
-        await client.query('insert into schema_migration(version, checksum) values ($1, $2)', [
+        await client.query('insert into public.schema_migration(version, checksum) values ($1, $2)', [
           version,
           checksum,
         ]);

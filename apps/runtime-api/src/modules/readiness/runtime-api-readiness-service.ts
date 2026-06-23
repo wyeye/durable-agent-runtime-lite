@@ -1,6 +1,8 @@
 import { Connection } from '@temporalio/client';
 import type { RuntimeConfig } from '@dar/config';
 import {
+  ModelDefinitionRepository,
+  ModelGatewayProfileRepository,
   TenantRuntimePolicyRepository,
   type Database,
   sql,
@@ -8,7 +10,7 @@ import {
 import type { Kysely } from 'kysely';
 import type { RouteSpecSource } from '../router/route-source.js';
 
-export type ReadinessCheckName = 'config' | 'database' | 'route_registry' | 'temporal' | 'tenant_policy' | 'auth';
+export type ReadinessCheckName = 'config' | 'database' | 'route_registry' | 'semantic_router' | 'temporal' | 'tenant_policy' | 'auth';
 export type ReadinessCheckStatus = 'ok' | 'failed' | 'timeout';
 
 export interface ReadinessCheck {
@@ -56,6 +58,7 @@ export class RuntimeApiReadinessService {
       config: await this.runProbe('config', () => this.checkConfig()),
       database: await this.runProbe('database', () => this.checkDatabase()),
       route_registry: await this.runProbe('route_registry', () => this.checkRouteRegistry()),
+      semantic_router: await this.runProbe('semantic_router', () => this.checkSemanticRouter()),
       temporal: await this.runProbe('temporal', () => this.checkTemporal()),
       tenant_policy: await this.runProbe('tenant_policy', () => this.checkTenantPolicy()),
       auth: await this.runProbe('auth', () => this.checkAuth()),
@@ -124,6 +127,35 @@ export class RuntimeApiReadinessService {
       return;
     }
     await this.options.routeSource.listPublished('__readiness__', '__readiness__');
+  }
+
+  private async checkSemanticRouter(): Promise<void> {
+    const { config, db } = this.options;
+    if (!config.ROUTER_SEMANTIC_ENABLED) {
+      return;
+    }
+    if (!config.ROUTER_EMBEDDING_MODEL_ID || !config.ROUTER_EMBEDDING_MODEL_VERSION) {
+      throw new Error('router_embedding_model_not_configured');
+    }
+    if (!db) {
+      throw new Error('semantic_router_database_not_configured');
+    }
+    const model = await new ModelDefinitionRepository(db).get(
+      config.ROUTER_EMBEDDING_MODEL_ID,
+      config.ROUTER_EMBEDDING_MODEL_VERSION,
+    );
+    if (
+      !model ||
+      model.status !== 'published' ||
+      !model.capabilities.includes('embeddings') ||
+      model.embedding_dimensions !== 1536
+    ) {
+      throw new Error('router_embedding_model_invalid');
+    }
+    const profile = await new ModelGatewayProfileRepository(db).get(model.gateway_profile_id);
+    if (!profile || profile.status !== 'published' || profile.config_hash !== model.gateway_profile_config_hash) {
+      throw new Error('router_embedding_gateway_invalid');
+    }
   }
 
   private async checkTemporal(): Promise<void> {

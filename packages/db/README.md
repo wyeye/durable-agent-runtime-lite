@@ -10,4 +10,4 @@
 pnpm db:migrate
 ```
 
-迁移文件位于 `db/migrations/`。生产环境应由发布流水线执行迁移，并保留 checksum 校验。
+开发期迁移已整合为 `db/migrations/001_baseline.sql` 单一基线文件。该基线会重建 `public` schema，开发数据不做旧迁移兼容兜底。

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RuntimeConfig } from '@dar/config';
-import type { EvaluationRun, HumanTask, RouteSpec, TaskRun, WorkflowStartResponse } from '@dar/contracts';
+import type { CandidateFlow, EvaluationRun, HumanTask, RouteSpec, TaskRun, WorkflowStartResponse } from '@dar/contracts';
 import type { HumanTaskDecisionSignalInput, UserInputResponseSignalInput } from '@dar/temporal';
 import { buildServer } from '../src/index.js';
 import {
@@ -9,7 +9,7 @@ import {
   InMemoryHumanTaskStore,
   InMemoryHumanTaskToolCallLogStore,
 } from '../src/modules/human-task/human-task-service.js';
-import { routeByRules } from '../src/modules/router/rule-router.js';
+import { routeByRules, routeWithSemanticRecall, type SemanticRecallAdapter } from '../src/modules/router/rule-router.js';
 import { defaultRouteSpecs } from '../src/modules/router/route-registry.js';
 import type { RouteSpecSource } from '../src/modules/router/route-source.js';
 import { createRuntimeApiTaskService, TaskService } from '../src/modules/task/task-service.js';
@@ -80,6 +80,104 @@ const dbOnlyRoute: RouteSpec = {
     ambiguous_threshold: 0.3,
   },
 };
+
+const expenseRoute: RouteSpec = {
+  route_id: 'expense_route',
+  flow_id: 'expense_flow',
+  version: 1,
+  status: 'published',
+  route: {
+    priority: 80,
+    keywords: ['报销'],
+    examples: ['查询报销政策'],
+    negative_examples: ['不要报销'],
+    supported_channels: [],
+    role_constraints: [],
+    confidence_threshold: 0.7,
+    ambiguous_threshold: 0.5,
+  },
+};
+
+const ticketRoute: RouteSpec = {
+  route_id: 'ticket_route',
+  flow_id: 'ticket_flow',
+  version: 1,
+  status: 'published',
+  route: {
+    priority: 70,
+    keywords: ['工单'],
+    examples: ['提交故障单'],
+    negative_examples: [],
+    supported_channels: [],
+    role_constraints: [],
+    confidence_threshold: 0.7,
+    ambiguous_threshold: 0.5,
+  },
+};
+
+const restrictedRoute: RouteSpec = {
+  route_id: 'restricted_route',
+  flow_id: 'restricted_flow',
+  version: 1,
+  status: 'published',
+  route: {
+    priority: 100,
+    keywords: [],
+    examples: ['差旅费用规则'],
+    negative_examples: [],
+    supported_channels: ['admin-console'],
+    role_constraints: ['finance_admin'],
+    confidence_threshold: 0.7,
+    ambiguous_threshold: 0.5,
+  },
+};
+
+function semanticCandidate(route: RouteSpec, score: number): CandidateFlow {
+  return {
+    route_id: route.route_id ?? `${route.flow_id}@${route.version}`,
+    flow_id: route.flow_id,
+    version: route.version,
+    score,
+    reason: 'semantic_match',
+    matched_source_type: 'example',
+    matched_source_hash: 'a'.repeat(64),
+  };
+}
+
+class FixedSemanticAdapter implements SemanticRecallAdapter {
+  readonly calls: Array<{ routeIds: string[]; tenantId?: string }> = [];
+
+  constructor(private readonly scores: Record<string, number>) {}
+
+  async recall(_input: unknown, routes: RouteSpec[], context: { tenantId?: string } = {}) {
+    this.calls.push({
+      routeIds: routes.map((route) => route.route_id ?? `${route.flow_id}@${route.version}`),
+      ...(context.tenantId ? { tenantId: context.tenantId } : {}),
+    });
+    return {
+      top_k: 5,
+      model_ref: {
+        model_id: 'mock-embedding',
+        version: 1,
+        model_hash: 'b'.repeat(64),
+      },
+      candidates: routes
+        .map((route) => semanticCandidate(route, this.scores[route.route_id ?? `${route.flow_id}@${route.version}`] ?? 0))
+        .filter((candidate) => candidate.score > 0),
+    };
+  }
+}
+
+function semanticOptions(adapter: SemanticRecallAdapter) {
+  return {
+    enabled: true,
+    adapter,
+    topK: 5,
+    matchThreshold: 0.8,
+    clarifyThreshold: 0.65,
+    minMargin: 0.05,
+  };
+}
 
 const headerAuthConfig: RuntimeConfig = {
   NODE_ENV: 'production',
@@ -200,6 +298,158 @@ describe('runtime-api router and task endpoints', () => {
     if (result.route_decision.decision === 'matched') {
       expect(result.route_decision.flow_id).toBe('sample_flow');
     }
+  });
+
+  it('keeps action and high-confidence rules ahead of semantic recall', async () => {
+    const adapter = new FixedSemanticAdapter({
+      ticket_route: 0.98,
+    });
+
+    const action = await routeWithSemanticRecall(
+      {
+        tenantId: 'tenant_1',
+        input: { action_id: 'expense_route', text: '提交故障单' },
+        allowMockFallback: false,
+      },
+      [expenseRoute, ticketRoute],
+      semanticOptions(adapter),
+    );
+    expect(action.decision_stage).toBe('action');
+    expect(action.route_decision).toMatchObject({ decision: 'matched', flow_id: 'expense_flow' });
+
+    const rule = await routeWithSemanticRecall(
+      {
+        tenantId: 'tenant_1',
+        input: { text: '我要创建工单' },
+        allowMockFallback: false,
+      },
+      [expenseRoute, ticketRoute],
+      semanticOptions(adapter),
+    );
+    expect(rule.decision_stage).toBe('rule');
+    expect(rule.route_decision).toMatchObject({ decision: 'matched', flow_id: 'ticket_flow' });
+    expect(adapter.calls).toHaveLength(0);
+  });
+
+  it('uses semantic recall after low-confidence rules and returns safe match metadata', async () => {
+    const adapter = new FixedSemanticAdapter({
+      expense_route: 0.91,
+      ticket_route: 0.72,
+    });
+
+    const result = await routeWithSemanticRecall(
+      {
+        tenantId: 'tenant_1',
+        input: { text: '公司费用怎么申请' },
+        allowMockFallback: false,
+      },
+      [expenseRoute, ticketRoute],
+      semanticOptions(adapter),
+    );
+
+    expect(result.decision_stage).toBe('semantic');
+    expect(result.route_decision).toMatchObject({
+      decision: 'matched',
+      flow_id: 'expense_flow',
+      flow_version: 1,
+    });
+    expect(result.semantic).toMatchObject({
+      model_ref: { model_id: 'mock-embedding', version: 1 },
+      top_k: 5,
+      top_score: 0.91,
+    });
+    expect(result.semantic?.margin).toBeCloseTo(0.19);
+    expect(result.candidates[0]).toMatchObject({
+      route_id: 'expense_route',
+      reason: 'semantic_match',
+      matched_source_type: 'example',
+    });
+    expect(result.candidates[0]).not.toHaveProperty('source_text');
+  });
+
+  it('filters channel and role before semantic recall', async () => {
+    const adapter = new FixedSemanticAdapter({
+      restricted_route: 0.99,
+      expense_route: 0.89,
+    });
+
+    const result = await routeWithSemanticRecall(
+      {
+        tenantId: 'tenant_1',
+        channel: 'web',
+        roles: ['employee'],
+        input: { text: '帮我看看差旅费用怎么走' },
+        allowMockFallback: false,
+      },
+      [restrictedRoute, expenseRoute],
+      semanticOptions(adapter),
+    );
+
+    expect(adapter.calls).toEqual([{ tenantId: 'tenant_1', routeIds: ['expense_route'] }]);
+    expect(result.decision_stage).toBe('semantic');
+    expect(result.route_decision).toMatchObject({ decision: 'matched', flow_id: 'expense_flow' });
+    expect(result.candidates.map((candidate) => candidate.route_id)).not.toContain('restricted_route');
+  });
+
+  it('hard-excludes negative examples before semantic recall', async () => {
+    const adapter = new FixedSemanticAdapter({
+      expense_route: 0.99,
+      ticket_route: 0.88,
+    });
+
+    const result = await routeWithSemanticRecall(
+      {
+        tenantId: 'tenant_1',
+        input: { text: '不要报销，我要提交故障单' },
+        allowMockFallback: false,
+      },
+      [expenseRoute, ticketRoute],
+      semanticOptions(adapter),
+    );
+
+    expect(adapter.calls).toEqual([{ tenantId: 'tenant_1', routeIds: ['ticket_route'] }]);
+    expect(result.route_decision).toMatchObject({ decision: 'matched', flow_id: 'ticket_flow' });
+    expect(result.candidates.map((candidate) => candidate.route_id)).not.toContain('expense_route');
+  });
+
+  it('clarifies or rejects low-confidence semantic recall without mock fallback', async () => {
+    const clarify = await routeWithSemanticRecall(
+      {
+        tenantId: 'tenant_1',
+        input: { text: '费用和维修请求都可能' },
+        allowMockFallback: false,
+      },
+      [expenseRoute, ticketRoute],
+      semanticOptions(new FixedSemanticAdapter({
+        expense_route: 0.82,
+        ticket_route: 0.8,
+      })),
+    );
+    expect(clarify.decision_stage).toBe('clarify');
+    expect(clarify.route_decision).toMatchObject({ decision: 'need_clarify' });
+    if (clarify.route_decision.decision === 'need_clarify') {
+      expect(clarify.route_decision.candidates.map((candidate) => candidate.route_id)).toEqual([
+        'expense_route',
+        'ticket_route',
+      ]);
+    }
+
+    const reject = await routeWithSemanticRecall(
+      {
+        tenantId: 'tenant_1',
+        input: { text: '今天天气怎么样' },
+        allowMockFallback: false,
+      },
+      [expenseRoute, ticketRoute],
+      semanticOptions(new FixedSemanticAdapter({
+        expense_route: 0.4,
+      })),
+    );
+    expect(reject.decision_stage).toBe('reject');
+    expect(reject.route_decision).toMatchObject({
+      decision: 'reject',
+      reason: 'semantic_recall_below_threshold',
+    });
   });
 
   it('creates and queries a mock-started task run', async () => {
@@ -331,9 +581,11 @@ describe('runtime-api router and task endpoints', () => {
 
   it('does not start a default agent workflow when DB routing cannot match', async () => {
     const starts: unknown[] = [];
+    const taskStore = new RecordingTaskRunStore();
     const server = buildServer(
       new TaskService({
         routeSource: new StaticRouteSource([]),
+        taskStore,
         allowMockRouteFallback: false,
         executionPlanResolver: staticExecutionPlanResolver,
         workflowStarter: {
@@ -370,8 +622,49 @@ describe('runtime-api router and task endpoints', () => {
     });
     expect(response.json().data.workflow_start).toBeUndefined();
     expect(starts).toHaveLength(0);
+    expect(taskStore.calls).toEqual([]);
 
     await server.close();
+  });
+
+  it('does not create task_run or workflow when semantic routing needs clarification', async () => {
+    const starts: unknown[] = [];
+    const taskStore = new RecordingTaskRunStore();
+    const service = new TaskService({
+      routeSource: new StaticRouteSource([expenseRoute, ticketRoute]),
+      taskStore,
+      allowMockRouteFallback: false,
+      executionPlanResolver: staticExecutionPlanResolver,
+      semanticRouting: semanticOptions(new FixedSemanticAdapter({
+        expense_route: 0.82,
+        ticket_route: 0.8,
+      })),
+      workflowStarter: {
+        async start(request) {
+          starts.push(request);
+          return {
+            workflow_id: request.workflow_id,
+            task_run_id: request.task_run_id,
+            started: true,
+            mode: 'mock',
+          };
+        },
+      },
+    });
+
+    const response = await service.create({
+      tenant_id: 'tenant_1',
+      user_id: 'user_1',
+      input: { text: '费用和维修请求都可能' },
+    });
+
+    expect(response).toMatchObject({
+      status: 'failed',
+      route_decision: { decision: 'need_clarify' },
+    });
+    expect(response.workflow_start).toBeUndefined();
+    expect(starts).toEqual([]);
+    expect(taskStore.calls).toEqual([]);
   });
 
   it('uses local sample refs only for memory development source', async () => {

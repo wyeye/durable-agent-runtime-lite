@@ -398,6 +398,9 @@ function modelDefinitionPatch(
   if (body.max_output_tokens !== undefined) {
     patch.max_output_tokens = body.max_output_tokens;
   }
+  if (body.embedding_dimensions !== undefined) {
+    patch.embedding_dimensions = body.embedding_dimensions;
+  }
   if (body.input_cost_per_million !== undefined) {
     patch.input_cost_per_million = body.input_cost_per_million;
   }

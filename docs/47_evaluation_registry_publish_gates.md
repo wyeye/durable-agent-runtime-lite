@@ -53,10 +53,10 @@ No default dataset, latest candidate, missing decision fallback, deterministic/m
 
 ## Runtime Closure Slice
 
-The current runtime closure slice adds:
+The current runtime closure slice adds, through the single baseline schema:
 
-- `014_evaluation_runtime_closure.sql` for workflow ids, cancellation request time, evidence collection state, case evidence snapshots, persisted comparisons, and evaluation context columns on `tool_call_log`.
-- `015_evaluation_runtime_state_machine.sql` for explicit run states `queued`, `running`, `cancelling`, `completed`, `failed`, and `cancelled`, plus case state `cancelled`.
+- workflow ids, cancellation request time, evidence collection state, case evidence snapshots, persisted comparisons, and evaluation context columns on `tool_call_log`.
+- explicit run states `queued`, `running`, `cancelling`, `completed`, `failed`, and `cancelled`, plus case state `cancelled`.
 - Deterministic bounded case execution in `evaluationRunWorkflow` using `EVALUATION_MAX_CONCURRENT_CASES`.
 - Per-case `system_error` and `cancelled` result recording when a candidate/Pi child workflow fails or is cancelled.
 - Run finalization order of aggregate, comparison, gate decision, then completed status.

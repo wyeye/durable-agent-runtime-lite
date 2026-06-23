@@ -1,6 +1,6 @@
 # Runtime Audit Taxonomy
 
-Audit events are append-only and use stable `action` names. Logical retry-sensitive events should include `event_key`; migration `010_runtime_audit_and_ops.sql` adds a partial unique index on `audit_event.event_key`.
+Audit events are append-only and use stable `action` names. Logical retry-sensitive events should include `event_key`; the baseline schema adds a partial unique index on `audit_event.event_key`.
 
 ## Implemented Event Families
 

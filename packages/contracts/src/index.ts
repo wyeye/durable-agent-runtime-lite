@@ -76,6 +76,7 @@ export const modelCapabilitySchema = z.enum([
   'streaming',
   'usage',
   'tool_choice',
+  'embeddings',
 ]);
 export const modelToolChoiceModeSchema = z.enum(['auto', 'none', 'required']);
 export const modelResponseFormatSchema = z.enum(['text', 'json_object', 'json_schema']);
@@ -402,6 +403,7 @@ export const modelDefinitionSchema = z.object({
   capabilities: z.array(modelCapabilitySchema).min(1),
   context_window: z.number().int().positive(),
   max_output_tokens: z.number().int().positive(),
+  embedding_dimensions: z.number().int().positive().optional(),
   input_cost_per_million: z.number().nonnegative().default(0),
   output_cost_per_million: z.number().nonnegative().default(0),
   currency: z.string().min(1).default('USD'),
@@ -428,6 +430,7 @@ export const modelDefinitionCreateDraftRequestSchema = z.object({
   capabilities: z.array(modelCapabilitySchema).min(1),
   context_window: z.number().int().positive(),
   max_output_tokens: z.number().int().positive(),
+  embedding_dimensions: z.number().int().positive().optional(),
   input_cost_per_million: z.number().nonnegative().default(0),
   output_cost_per_million: z.number().nonnegative().default(0),
   currency: z.string().min(1).default('USD'),
@@ -474,6 +477,7 @@ export const resolvedModelTargetSchema = modelTargetSchema.extend({
   capabilities: z.array(modelCapabilitySchema).min(1),
   context_window: z.number().int().positive(),
   max_output_tokens: z.number().int().positive(),
+  embedding_dimensions: z.number().int().positive().optional(),
   input_cost_per_million: z.number().nonnegative().optional(),
   output_cost_per_million: z.number().nonnegative().optional(),
   currency: z.string().min(1).optional(),
@@ -1067,10 +1071,13 @@ export const routeSpecSchema = z.object({
 });
 
 export const candidateFlowSchema = z.object({
+  route_id: z.string().min(1).optional(),
   flow_id: z.string().min(1),
   version: z.number().int().positive(),
   score: z.number().min(0).max(1),
   reason: z.string().optional(),
+  matched_source_type: z.enum(['keyword', 'example']).optional(),
+  matched_source_hash: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
 });
 
 export const routeDecisionSchema = z.discriminatedUnion('decision', [
@@ -1097,9 +1104,20 @@ export const routeDecisionSchema = z.discriminatedUnion('decision', [
   }),
 ]);
 
+export const routerDecisionStageSchema = z.enum(['action', 'rule', 'semantic', 'clarify', 'reject']);
+
+export const routerSemanticSummarySchema = z.object({
+  model_ref: modelDefinitionRefSchema.optional(),
+  top_k: z.number().int().positive().optional(),
+  top_score: z.number().min(0).max(1).optional(),
+  margin: z.number().min(0).max(1).optional(),
+});
+
 export const routeResultSchema = z.object({
   route_decision: routeDecisionSchema,
   candidates: z.array(candidateFlowSchema).default([]),
+  decision_stage: routerDecisionStageSchema.optional(),
+  semantic: routerSemanticSummarySchema.optional(),
 });
 
 export const agentSpecSchema = z.object({

@@ -83,6 +83,9 @@ importers:
       '@dar/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      '@dar/model-client':
+        specifier: workspace:*
+        version: link:../../packages/model-client
       '@dar/security':
         specifier: workspace:*
         version: link:../../packages/security
@@ -192,6 +195,9 @@ importers:
       '@dar/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      '@dar/model-client':
+        specifier: workspace:*
+        version: link:../../packages/model-client
       '@dar/security':
         specifier: workspace:*
         version: link:../../packages/security

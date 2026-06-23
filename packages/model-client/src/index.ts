@@ -88,6 +88,27 @@ export type ModelGatewayUsage = z.infer<typeof modelGatewayUsageSchema>;
 export type ModelGenerateRequest = z.infer<typeof modelGenerateRequestSchema>;
 export type ModelGenerateResponse = z.infer<typeof modelGenerateResponseSchema>;
 
+export interface OpenAICompatibleEmbeddingClientOptions {
+  baseUrl: string;
+  apiKey?: string;
+  timeoutMs?: number;
+  maxRetries?: number;
+  maxResponseBytes?: number;
+  retryBackoffMs?: number;
+  allowInsecureHttp?: boolean;
+  userAgent?: string;
+  expectedDimensions?: number;
+}
+
+export interface EmbeddingRequestOptions {
+  signal?: AbortSignal;
+}
+
+export interface EmbeddingVectorResult {
+  embedding: number[];
+  index: number;
+}
+
 export interface ModelGatewayClientOptions {
   baseUrl: string;
   apiKey?: string;
@@ -401,6 +422,112 @@ export class ModelGatewayClient {
   }
 }
 
+export class OpenAICompatibleEmbeddingClient {
+  private readonly baseUrl: URL;
+  private readonly apiKey: string | undefined;
+  private readonly timeoutMs: number;
+  private readonly maxRetries: number;
+  private readonly maxResponseBytes: number;
+  private readonly retryBackoffMs: number;
+  private readonly userAgent: string;
+  private readonly expectedDimensions: number;
+
+  constructor(private readonly options: OpenAICompatibleEmbeddingClientOptions) {
+    this.baseUrl = new URL(options.baseUrl);
+    this.apiKey = options.apiKey;
+    this.timeoutMs = options.timeoutMs ?? 10_000;
+    this.maxRetries = options.maxRetries ?? 1;
+    this.maxResponseBytes = options.maxResponseBytes ?? 2_000_000;
+    this.retryBackoffMs = options.retryBackoffMs ?? 25;
+    this.userAgent = options.userAgent ?? 'durable-agent-runtime-lite/embedding-client';
+    this.expectedDimensions = options.expectedDimensions ?? 1536;
+    assertTransportAllowed(this.baseUrl, options.allowInsecureHttp ?? isLocalHttp(this.baseUrl));
+  }
+
+  async embed(
+    model: string,
+    input: string | string[],
+    options: EmbeddingRequestOptions = {},
+  ): Promise<number[][]> {
+    const inputs = Array.isArray(input) ? input : [input];
+    if (inputs.length === 0 || inputs.some((item) => !item.trim())) {
+      throw new ModelGatewayError(
+        'MODEL_EMBEDDING_INPUT_INVALID',
+        'Embedding input must contain at least one non-empty text value',
+        { errorClass: 'validation' },
+      );
+    }
+
+    let lastError: unknown;
+    for (let attemptIndex = 0; attemptIndex <= this.maxRetries; attemptIndex += 1) {
+      try {
+        const response = await this.postEmbeddings(model, inputs, options.signal);
+        return parseOpenAIEmbeddingResponse(response, inputs.length, this.expectedDimensions);
+      } catch (error) {
+        const normalized = normalizeModelGatewayError(error);
+        lastError = normalized;
+        if (
+          !isRetryableEmbeddingError(normalized) ||
+          attemptIndex >= this.maxRetries ||
+          options.signal?.aborted
+        ) {
+          throw normalized;
+        }
+        await sleep(this.retryBackoffMs * (attemptIndex + 1), options.signal);
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('Embedding request failed');
+  }
+
+  private async postEmbeddings(
+    model: string,
+    input: string[],
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const url = endpointUrl(this.baseUrl, '/v1/embeddings');
+    const timeout = AbortSignal.timeout(this.timeoutMs);
+    const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    try {
+      const response = await request(url, {
+        method: 'POST',
+        headers: {
+          ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
+          'content-type': 'application/json',
+          'user-agent': this.userAgent,
+        },
+        body: JSON.stringify({
+          model,
+          input,
+          encoding_format: 'float',
+        }),
+        signal: requestSignal,
+      });
+      const text = await response.body.text();
+      if (Buffer.byteLength(text, 'utf8') > this.maxResponseBytes) {
+        throw new ModelGatewayError(
+          'MODEL_GATEWAY_RESPONSE_TOO_LARGE',
+          'Embedding response exceeded size limit',
+          { errorClass: 'response_too_large', httpStatus: response.statusCode },
+        );
+      }
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw errorFromStatus(response.statusCode);
+      }
+      try {
+        return text ? JSON.parse(text) : {};
+      } catch {
+        throw new ModelGatewayError(
+          'MODEL_GATEWAY_INVALID_RESPONSE',
+          'Embedding response was not valid JSON',
+          { errorClass: 'validation', httpStatus: response.statusCode },
+        );
+      }
+    } catch (error) {
+      throw normalizeModelGatewayError(error);
+    }
+  }
+}
+
 export class ModelGatewayError extends Error {
   readonly errorClass: ModelGatewayErrorClass;
   readonly httpStatus: number | undefined;
@@ -564,6 +691,61 @@ const openAiChatCompletionResponseSchema = z.object({
     })
     .optional(),
 });
+
+const openAiEmbeddingResponseSchema = z.object({
+  data: z.array(
+    z.object({
+      index: z.number().int().nonnegative(),
+      embedding: z.array(z.number()),
+    }),
+  ),
+});
+
+function parseOpenAIEmbeddingResponse(
+  value: unknown,
+  expectedCount: number,
+  expectedDimensions: number,
+): number[][] {
+  const parsed = openAiEmbeddingResponseSchema.safeParse(value);
+  if (!parsed.success || parsed.data.data.length !== expectedCount) {
+    throw new ModelGatewayError(
+      'MODEL_GATEWAY_INVALID_RESPONSE',
+      'Embedding response did not include the expected data array',
+      { errorClass: 'validation' },
+    );
+  }
+  const byIndex = new Map<number, number[]>();
+  for (const item of parsed.data.data) {
+    if (item.embedding.length !== expectedDimensions) {
+      throw new ModelGatewayError(
+        'MODEL_EMBEDDING_DIMENSIONS_MISMATCH',
+        'Embedding response dimensions did not match the configured ModelDefinition',
+        { errorClass: 'validation' },
+      );
+    }
+    if (item.embedding.some((value) => !Number.isFinite(value))) {
+      throw new ModelGatewayError(
+        'MODEL_EMBEDDING_NON_FINITE_VALUE',
+        'Embedding response contained non-finite values',
+        { errorClass: 'validation' },
+      );
+    }
+    byIndex.set(item.index, item.embedding);
+  }
+  const vectors: number[][] = [];
+  for (let index = 0; index < expectedCount; index += 1) {
+    const vector = byIndex.get(index);
+    if (!vector) {
+      throw new ModelGatewayError(
+        'MODEL_GATEWAY_INVALID_RESPONSE',
+        'Embedding response indexes were incomplete',
+        { errorClass: 'validation' },
+      );
+    }
+    vectors.push(vector);
+  }
+  return vectors;
+}
 
 function openAiMessageFromGatewayMessage(
   message: ModelGatewayRequest['messages'][number],
@@ -857,6 +1039,13 @@ function isRetryableModelGatewayError(
     return options.retryOnNetworkError ?? true;
   }
   return error.errorClass === 'rate_limit' || error.errorClass === 'upstream_5xx';
+}
+
+function isRetryableEmbeddingError(error: ModelGatewayError): boolean {
+  return error.errorClass === 'rate_limit' ||
+    error.errorClass === 'upstream_5xx' ||
+    error.errorClass === 'timeout' ||
+    error.errorClass === 'network';
 }
 
 function assertTransportAllowed(url: URL, allowInsecureHttp: boolean): void {

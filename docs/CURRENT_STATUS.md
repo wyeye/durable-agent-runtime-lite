@@ -12,7 +12,7 @@ The root `package.json` version is the authority. `corepack pnpm version:check` 
 
 - Observed local HEAD and `origin/main` before the AR-2B-FINAL-GATE pass: `dc95bcb6811d576201268205893171ab427ce6c0`.
 - Platform Core Baseline file: `docs/PLATFORM_CORE_BASELINE.md`.
-- Migration head: `017_evaluation_case_minimum_score.sql`.
+- Development migration baseline: `db/migrations/001_baseline.sql` (single-file schema reset; old development data is not preserved).
 
 ## AR-1 Platform Core
 
@@ -116,7 +116,7 @@ This pass keeps the platform version at `0.8.0` and does not create a tag or rel
 
 Implemented in this pass:
 
-- `model_gateway_profile` and `model_definition` registry tables in `018_model_gateway_and_catalog.sql`.
+- `model_gateway_profile` and `model_definition` registry tables in the single baseline migration.
 - `ModelGatewayProfile`, `ModelDefinition`, and exact `ModelDefinitionRef` contracts.
 - `ModelPolicy` targets now select exact published `model_ref` values instead of raw `gateway_profile` and `model_id`.
 - AES-256-GCM credential encryption through `ModelCredentialCipher` with fingerprint and credential revision.
@@ -294,10 +294,7 @@ Implemented in this UI closure pass:
 Backend AR-2B implementation already includes:
 
 - Evaluation dataset, case, subject snapshot, execution plan, run, result, gate policy, gate decision, and override contracts.
-- Forward migration `013_evaluation_and_release_gates.sql`.
-- Forward migration `014_evaluation_runtime_closure.sql`.
-- Forward migration `015_evaluation_runtime_state_machine.sql`.
-- Forward migration `016_evaluation_registry_and_tool_safety.sql`.
+- Evaluation tables and runtime closure columns are represented in the single baseline migration.
 - Evaluation dataset content hash now includes dataset metadata plus all enabled and disabled cases in stable order.
 - Draft case create/update/delete paths refresh the draft dataset content hash and published datasets are immutable at the repository layer.
 - Evaluation execution plan build and evaluation run plan loading verify exact dataset content hash before use.

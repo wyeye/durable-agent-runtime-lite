@@ -57,6 +57,7 @@ import {
   RegistryReleaseService,
   type RegistryReleaseServiceOptions,
 } from '../../modules/registry/registry-release-service.js';
+import type { RouteEmbeddingIndexService } from '../../modules/registry/route-embedding-index-service.js';
 import { RegistryValidationService } from '../../modules/registry/registry-validation-service.js';
 import { ControlPlaneHttpError } from '../utils/http.js';
 
@@ -96,6 +97,7 @@ export interface RegistryApi {
 
 export interface RegistryApiServiceOptions {
   evaluationGateMode?: EvaluationGateMode;
+  routeEmbeddingIndexService?: RouteEmbeddingIndexService;
 }
 
 export class RegistryApiService implements RegistryApi {
@@ -138,7 +140,12 @@ export class RegistryApiService implements RegistryApi {
       prompts: this.prompts,
     };
     this.validation = new RegistryValidationService(repositories);
-    this.release = new RegistryReleaseService(db, repositories, this.validation);
+    this.release = new RegistryReleaseService(
+      db,
+      repositories,
+      this.validation,
+      this.options.routeEmbeddingIndexService,
+    );
   }
 
   async list(

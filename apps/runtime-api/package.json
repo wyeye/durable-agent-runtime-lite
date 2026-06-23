@@ -17,6 +17,7 @@
     "@dar/db": "workspace:*",
     "@dar/i18n": "workspace:*",
     "@dar/logger": "workspace:*",
+    "@dar/model-client": "workspace:*",
     "@dar/security": "workspace:*",
     "@dar/telemetry": "workspace:*",
     "@dar/temporal": "workspace:*",

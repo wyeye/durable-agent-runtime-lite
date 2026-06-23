@@ -1,5 +1,5 @@
 import { pathToFileURL } from 'node:url';
-import Fastify from 'fastify';
+import Fastify, { type FastifyReply } from 'fastify';
 
 interface GenerateRequest {
   model?: string;
@@ -10,6 +10,11 @@ interface OpenAiChatRequest {
   model?: string;
   messages?: MockRequestMessage[];
   tools?: Array<{ function?: { name?: string } }>;
+}
+
+interface OpenAiEmbeddingRequest {
+  model?: string;
+  input?: string | string[];
 }
 
 interface MockRequestMessage {
@@ -105,12 +110,28 @@ export function buildServer() {
     return openAiPrefixedGatewayResponse(body, 'gateway-a');
   });
 
+  server.post('/gateway-a/v1/embeddings', async (request, reply) => {
+    if (!authorized(request.headers.authorization, ['gateway-a-secret'])) {
+      reply.code(401);
+      return { error: { code: 'unauthorized', message: 'Unauthorized' } };
+    }
+    return embeddingResponse(request.body as OpenAiEmbeddingRequest, 'gateway-a', reply);
+  });
+
   server.post('/gateway-b/v1/chat/completions', async (request, reply) => {
     if (!authorized(request.headers.authorization, ['gateway-b-secret', 'gateway-b-secret-v2'])) {
       reply.code(401);
       return { error: { code: 'unauthorized', message: 'Unauthorized' } };
     }
     return openAiPrefixedGatewayResponse(request.body as OpenAiChatRequest, 'gateway-b');
+  });
+
+  server.post('/gateway-b/v1/embeddings', async (request, reply) => {
+    if (!authorized(request.headers.authorization, ['gateway-b-secret', 'gateway-b-secret-v2'])) {
+      reply.code(401);
+      return { error: { code: 'unauthorized', message: 'Unauthorized' } };
+    }
+    return embeddingResponse(request.body as OpenAiEmbeddingRequest, 'gateway-b', reply);
   });
 
   return server;
@@ -269,6 +290,75 @@ function openAiPrefixedGatewayResponse(body: OpenAiChatRequest, gateway: 'gatewa
     ...response,
     id: `${gateway}_${response.id}`,
   };
+}
+
+function embeddingResponse(
+  body: OpenAiEmbeddingRequest,
+  gateway: 'gateway-a' | 'gateway-b',
+  reply: FastifyReply,
+) {
+  const model = body.model ?? `${gateway}-embedding-model`;
+  if (process.env.MOCK_EMBEDDINGS_FORCE_429 === 'true' || model.includes('force_429')) {
+    reply.code(429);
+    return { error: { code: 'rate_limit_exceeded', message: 'deterministic rate limit' } };
+  }
+  if (process.env.MOCK_EMBEDDINGS_FORCE_503 === 'true' || model.includes('force_503')) {
+    reply.code(503);
+    return { error: { code: 'temporarily_unavailable', message: 'Embedding gateway unavailable' } };
+  }
+  const dimensions = process.env.MOCK_EMBEDDINGS_WRONG_DIMENSIONS === 'true' || model.includes('wrong_dimensions')
+    ? 8
+    : 1536;
+  const inputs = Array.isArray(body.input) ? body.input : [body.input ?? ''];
+  return {
+    object: 'list',
+    model,
+    data: inputs.map((text, index) => ({
+      object: 'embedding',
+      index,
+      embedding: deterministicEmbedding(String(text), dimensions),
+    })),
+    usage: {
+      prompt_tokens: inputs.join(' ').length,
+      total_tokens: inputs.join(' ').length,
+    },
+  };
+}
+
+function deterministicEmbedding(text: string, dimensions: number): number[] {
+  const normalized = text.toLowerCase();
+  const vector = new Array<number>(dimensions).fill(0);
+  const cluster = semanticCluster(normalized);
+  for (const [index, value] of cluster.entries()) {
+    if (index < dimensions) {
+      vector[index] = (vector[index] ?? 0) + value;
+    }
+  }
+  for (let index = 0; index < normalized.length; index += 1) {
+    const code = normalized.charCodeAt(index);
+    const position = 32 + ((code * 31 + index * 17) % Math.max(1, dimensions - 32));
+    vector[position] = (vector[position] ?? 0) + ((code % 13) + 1) / 1000;
+  }
+  const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0)) || 1;
+  return vector.map((value) => Number((value / norm).toFixed(8)));
+}
+
+function semanticCluster(text: string): number[] {
+  const expense = /(报销|费用|差旅|发票|申请)/u.test(text);
+  const ticket = /(工单|故障单|报修|维修|提交)/u.test(text);
+  if (expense && ticket) {
+    return [1, 0.98, 0.02, 0, 0, 0, 0, 0];
+  }
+  if (expense) {
+    return [1, 0.05, 0.02, 0, 0, 0, 0, 0];
+  }
+  if (ticket) {
+    return [0.02, 1, 0.05, 0, 0, 0, 0, 0];
+  }
+  if (/(权限|账号|登录|访问)/u.test(text)) {
+    return [0, 0.02, 1, 0.05, 0, 0, 0, 0];
+  }
+  return [0, 0, 0, 1, 0.05, 0.02, 0, 0];
 }
 
 function authorized(header: string | undefined, acceptedTokens: string[]): boolean {

@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import {
   agentSpecSchema,
   flowSpecSchema,
+  type ModelDefinitionRef,
   modelPolicySchema,
   promptDefinitionSchema,
   tenantRuntimePolicySchema,
@@ -49,8 +50,10 @@ export async function seedExamples(databaseUrl = process.env.DATABASE_URL ?? def
     const recordWriteTool = toolManifestSchema.parse(
       await readJson('examples/tools/record-write-mock-tool.json'),
     );
-    const modelPolicy = modelPolicySchema.parse(await readJson('examples/model-policies/sample-model-policy.json'));
-    const agent = agentSpecSchema.parse(await readJson('examples/agents/sample-agent.json'));
+    const modelPolicyTemplate = modelPolicySchema.parse(
+      await readJson('examples/model-policies/sample-model-policy.json'),
+    );
+    const agentTemplate = agentSpecSchema.parse(await readJson('examples/agents/sample-agent.json'));
     const promptContent = await readFile(new URL('examples/prompts/sample-prompt.md', repoRootUrl), 'utf8');
     const prompt = promptDefinitionSchema.parse({
       prompt_id: 'sample_prompt',
@@ -73,12 +76,25 @@ export async function seedExamples(databaseUrl = process.env.DATABASE_URL ?? def
       status: 'published',
       createdBy: 'seed-examples',
     });
-    await seedSampleModelCatalog(db, tenantId);
-    await seedModelPolicy(db, tenantId, modelPolicy);
+    const sampleModelCatalog = await seedSampleModelCatalog(db);
+    await seedMockEmbeddingModelCatalog(db);
+    const sampleModelPolicy = await seedModelPolicy(
+      db,
+      tenantId,
+      withModelPolicyRef(modelPolicyTemplate, sampleModelCatalog.model_ref),
+    );
     if (shouldSeedLocalOllamaModelPolicy) {
       await seedLocalOllamaModelCatalog(db);
       await seedModelPolicy(db, tenantId, localOllamaModelPolicy());
     }
+    const agent = agentSpecSchema.parse({
+      ...agentTemplate,
+      model_policy_ref: {
+        model_policy_id: sampleModelPolicy.model_policy_id,
+        model_policy_version: sampleModelPolicy.version,
+        model_policy_hash: hashModelPolicy(sampleModelPolicy),
+      },
+    });
     await upsertAgentSpec(db, agent, { tenantId, status: 'published', createdBy: 'seed-examples' });
     await upsertPromptDefinition(db, prompt, { tenantId, status: 'published', createdBy: 'seed-examples' });
     await new FlowExecutionPlanRepository(db).createForFlow({
@@ -178,8 +194,20 @@ function localOllamaModelPolicy() {
   });
 }
 
-async function seedSampleModelCatalog(db: ReturnType<typeof createDb>, tenantIdValue: string) {
-  void tenantIdValue;
+function withModelPolicyRef(
+  policy: ReturnType<typeof modelPolicySchema.parse>,
+  modelRef: ModelDefinitionRef,
+): ReturnType<typeof modelPolicySchema.parse> {
+  return modelPolicySchema.parse({
+    ...policy,
+    targets: policy.targets.map((target) => ({
+      ...target,
+      model_ref: modelRef,
+    })),
+  });
+}
+
+async function seedSampleModelCatalog(db: ReturnType<typeof createDb>) {
   return ensureModelCatalogEntry(db, {
     profileId: 'local-deterministic',
     displayName: 'Local deterministic development model gateway',
@@ -192,6 +220,25 @@ async function seedSampleModelCatalog(db: ReturnType<typeof createDb>, tenantIdV
     contextWindow: 32768,
     maxOutputTokens: 4096,
     tags: ['sample'],
+    operatorId: 'seed-examples',
+  });
+}
+
+export async function seedMockEmbeddingModelCatalog(db: ReturnType<typeof createDb>) {
+  return ensureModelCatalogEntry(db, {
+    profileId: 'mock-embedding-gateway-a',
+    displayName: 'Mock OpenAI-compatible embeddings gateway A',
+    baseUrl: process.env.SEED_MOCK_EMBEDDING_GATEWAY_BASE_URL ?? 'http://mock-server:4100/gateway-a',
+    authType: 'bearer',
+    apiKey: process.env.SEED_MOCK_EMBEDDING_GATEWAY_API_KEY ?? 'gateway-a-secret',
+    modelId: 'mock-embedding-1536',
+    upstreamModelId: 'mock-embedding-1536',
+    provider: 'local-mock',
+    capabilities: ['embeddings'],
+    contextWindow: 8192,
+    maxOutputTokens: 1,
+    embeddingDimensions: 1536,
+    tags: ['sample', 'embedding'],
     operatorId: 'seed-examples',
   });
 }

@@ -5,6 +5,7 @@ import {
   ModelGatewayProfileRepository,
   hashModelGatewayProfileConfig,
 } from '@dar/db';
+import { ModelCredentialCipher } from '../packages/security/src/index.js';
 
 export interface EnsureModelCatalogEntryInput {
   profileId: string;
@@ -19,6 +20,7 @@ export interface EnsureModelCatalogEntryInput {
   capabilities?: ModelDefinition['capabilities'];
   contextWindow?: number;
   maxOutputTokens?: number;
+  embeddingDimensions?: number;
   inputCostPerMillion?: number;
   outputCostPerMillion?: number;
   currency?: string;
@@ -52,12 +54,13 @@ export async function ensureModelCatalogEntry(
       throw new Error(`Model Gateway Profile seed mismatch: ${input.profileId}`);
     }
   } else {
-    if (profileBase.auth_type !== 'none') {
-      throw new Error('Bearer seed profiles must be created through control-plane API');
-    }
+    const credential = profileBase.auth_type === 'bearer'
+      ? createSeedCredential(input)
+      : undefined;
     profile = await gateways.createDraft({
       ...profileBase,
       operatorId: input.operatorId,
+      ...(credential ? { credential } : {}),
     });
     profile = await gateways.publish(profile.profile_id, { operatorId: input.operatorId });
   }
@@ -86,6 +89,7 @@ export async function ensureModelCatalogEntry(
         capabilities: input.capabilities ?? ['text', 'tools', 'usage'],
         context_window: input.contextWindow ?? 32768,
         max_output_tokens: input.maxOutputTokens ?? 4096,
+        ...(input.embeddingDimensions ? { embedding_dimensions: input.embeddingDimensions } : {}),
         input_cost_per_million: input.inputCostPerMillion ?? 0,
         output_cost_per_million: input.outputCostPerMillion ?? 0,
         currency: input.currency ?? 'USD',
@@ -102,4 +106,21 @@ export async function ensureModelCatalogEntry(
       model_hash: model.model_hash,
     },
   };
+}
+
+function createSeedCredential(
+  input: EnsureModelCatalogEntryInput,
+): Parameters<ModelGatewayProfileRepository['createDraft']>[0]['credential'] {
+  if (!input.apiKey) {
+    throw new Error(`Bearer seed profile requires apiKey: ${input.profileId}`);
+  }
+  const masterKey = input.masterKey ?? process.env.MODEL_CREDENTIAL_MASTER_KEY;
+  if (!masterKey) {
+    throw new Error('MODEL_CREDENTIAL_MASTER_KEY is required for bearer seed profiles');
+  }
+  return new ModelCredentialCipher(masterKey).encrypt({
+    profile_id: input.profileId,
+    api_key: input.apiKey,
+    credential_revision: 1,
+  });
 }

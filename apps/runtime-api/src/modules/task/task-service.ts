@@ -23,6 +23,7 @@ import {
   createDb,
   FlowExecutionPlanRepository,
   HumanTaskRepository,
+  RouteEmbeddingRepository,
   TenantAgentAdmissionRepository,
   TenantRuntimePolicyResolver,
   TenantRuntimePolicyError,
@@ -34,8 +35,10 @@ import { loadConfig, type RuntimeConfig } from '@dar/config';
 import { buildTaskWorkflowId } from '@dar/temporal';
 import type { Kysely } from 'kysely';
 import { DEFAULT_AGENT_ID } from '../router/route-registry.js';
-import { routeByRules } from '../router/rule-router.js';
+import { routeByRules, routeWithSemanticRecall, type SemanticRoutingOptions } from '../router/rule-router.js';
 import { DbRouteSpecSource, MemoryRouteSpecSource, type RouteSpecSource } from '../router/route-source.js';
+import { RouterEmbeddingModelResolver } from '../router/router-embedding-model-resolver.js';
+import { PgVectorRecallAdapter } from '../router/vector-recall.js';
 import { createWorkflowStarter, TemporalHumanTaskSignalSender, type WorkflowStarter } from '../workflow/workflow-starter.js';
 import { HumanTaskService } from '../human-task/human-task-service.js';
 import { EvaluationRunService } from '../evaluation/evaluation-run-service.js';
@@ -62,6 +65,7 @@ export interface TaskServiceOptions {
   tenantPolicyResolver?: RuntimeTenantPolicyResolver;
   admissionRepository?: TenantAgentAdmissionRepository;
   tenantPolicyMode?: 'required' | 'optional';
+  semanticRouting?: Partial<SemanticRoutingOptions>;
 }
 
 export interface ExecutionPlanResolver {
@@ -104,6 +108,7 @@ export class TaskService {
   private readonly tenantPolicyResolver: RuntimeTenantPolicyResolver | undefined;
   private readonly admissionRepository: TenantAgentAdmissionRepository | undefined;
   private readonly tenantPolicyMode: 'required' | 'optional';
+  private readonly semanticRouting: Partial<SemanticRoutingOptions>;
 
   constructor(options: TaskServiceOptions = {}) {
     this.routeSource = options.routeSource ?? new MemoryRouteSpecSource(options.routes);
@@ -118,25 +123,28 @@ export class TaskService {
     this.tenantPolicyResolver = options.tenantPolicyResolver;
     this.admissionRepository = options.admissionRepository;
     this.tenantPolicyMode = options.tenantPolicyMode ?? 'optional';
+    this.semanticRouting = options.semanticRouting ?? {};
   }
 
   async preview(input: unknown): Promise<RouterPreviewResponse> {
     const normalized = normalizeRunTaskRequest(input);
     const routes = await this.routeSource.listPublished(normalized.tenant_id, normalized.user_id);
-    return previewRoute(input, routes, this.allowMockRouteFallback);
+    return previewRoute(input, routes, this.allowMockRouteFallback, this.semanticRouting);
   }
 
   async create(input: unknown): Promise<RunTaskResponse> {
     const normalized = normalizeRunTaskRequest(input);
     const routes = await this.routeSource.listPublished(normalized.tenant_id, normalized.user_id);
-    const routeResult = routeByRules(
+    const routeResult = await routeWithSemanticRecall(
       {
+        tenantId: normalized.tenant_id,
         input: normalized.input,
         channel: normalized.channel,
         roles: normalized.roles,
         allowMockFallback: this.allowMockRouteFallback,
       },
       routes,
+      this.semanticRouting,
     );
 
     const taskRunId = createTaskRunId();
@@ -170,24 +178,6 @@ export class TaskService {
         status: 'failed',
         route_decision: decision,
       });
-
-      await this.taskStore.create({
-        taskRun: taskRunSchema.parse({
-          task_run_id: taskRunId,
-          tenant_id: normalized.tenant_id,
-          user_id: normalized.user_id,
-          route_type: decision.decision === 'need_clarify' ? 'manual' : 'unknown',
-          workflow_id: workflowId,
-          status: blockedResponse.status,
-          error_code: decision.decision === 'need_clarify' ? 'ROUTE_NEEDS_CLARIFICATION' : 'ROUTE_NOT_MATCHED',
-          error_message: decision.decision === 'need_clarify' ? decision.question : decision.reason,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }),
-        input: normalized.input,
-        routeResult,
-      });
-
       return blockedResponse;
     }
 
@@ -546,20 +536,23 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Workflow failed to start';
 }
 
-export function previewRoute(
+export async function previewRoute(
   input: unknown,
   routes: RouteSpec[],
   allowMockFallback = true,
-): RouterPreviewResponse {
+  semanticRouting: Partial<SemanticRoutingOptions> = {},
+): Promise<RouterPreviewResponse> {
   const normalized = normalizeRunTaskRequest(input);
-  const result = routeByRules(
-    {
-      input: normalized.input,
+  const result = await routeWithSemanticRecall(
+      {
+        tenantId: normalized.tenant_id,
+        input: normalized.input,
       channel: normalized.channel,
       roles: normalized.roles,
       allowMockFallback,
     },
     routes,
+    semanticRouting,
   );
 
   return routerPreviewResponseSchema.parse(result);
@@ -571,8 +564,9 @@ export function createTaskRunPreview(
 ): RunTaskResponse {
   const normalized = normalizeRunTaskRequest(input);
   const routeResult = routeByRules(
-    {
-      input: normalized.input,
+      {
+        tenantId: normalized.tenant_id,
+        input: normalized.input,
       channel: normalized.channel,
       roles: normalized.roles,
     },
@@ -621,6 +615,7 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
   if (config.RUNTIME_API_ROUTE_SOURCE === 'db') {
     const db: Kysely<Database> = createDb({ databaseUrl: config.DATABASE_URL });
     const routeSource = new DbRouteSpecSource(db);
+    const semanticRouting = createSemanticRouting(config, db);
     return {
       taskService: new TaskService({
         routeSource,
@@ -633,6 +628,7 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
         tenantPolicyMode: config.TENANT_RUNTIME_POLICY_MODE,
         allowMockRouteFallback: false,
         buildFlowSnapshotRef: buildDbFlowSnapshotRef,
+        semanticRouting,
       }),
       humanTaskService: new HumanTaskService({
         store: new HumanTaskRepository(db),
@@ -664,6 +660,40 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
     agentRunService: new AgentRunService(),
     routeSource,
     close: async () => undefined,
+  };
+}
+
+function createSemanticRouting(
+  config: RuntimeConfig,
+  db: Kysely<Database>,
+): Partial<SemanticRoutingOptions> {
+  if (!config.ROUTER_SEMANTIC_ENABLED) {
+    return { enabled: false };
+  }
+  if (!config.ROUTER_EMBEDDING_MODEL_ID || !config.ROUTER_EMBEDDING_MODEL_VERSION) {
+    throw new Error('ROUTER_EMBEDDING_MODEL_NOT_CONFIGURED: ROUTER_EMBEDDING_MODEL_ID and ROUTER_EMBEDDING_MODEL_VERSION are required');
+  }
+  const resolver = new RouterEmbeddingModelResolver({
+    db,
+    credentialMasterKey: config.MODEL_CREDENTIAL_MASTER_KEY,
+    modelId: config.ROUTER_EMBEDDING_MODEL_ID,
+    modelVersion: config.ROUTER_EMBEDDING_MODEL_VERSION,
+    timeoutMs: config.ROUTER_EMBEDDING_TIMEOUT_MS,
+    maxResponseBytes: config.MODEL_GATEWAY_MAX_RESPONSE_BYTES,
+    allowInsecureHttp: config.MODEL_GATEWAY_ALLOW_INSECURE_HTTP,
+    userAgent: 'durable-agent-runtime-lite/runtime-api-router',
+  });
+  return {
+    enabled: true,
+    adapter: new PgVectorRecallAdapter({
+      repository: new RouteEmbeddingRepository(db),
+      embeddingResolver: resolver,
+      topK: config.ROUTER_VECTOR_TOP_K,
+    }),
+    topK: config.ROUTER_VECTOR_TOP_K,
+    matchThreshold: config.ROUTER_SEMANTIC_MATCH_THRESHOLD,
+    clarifyThreshold: config.ROUTER_SEMANTIC_CLARIFY_THRESHOLD,
+    minMargin: config.ROUTER_SEMANTIC_MIN_MARGIN,
   };
 }
 

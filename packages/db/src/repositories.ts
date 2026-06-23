@@ -97,6 +97,7 @@ import type {
   Database,
   FlowExecutionPlanTable,
   FlowDefinitionTable,
+  FlowRouteEmbeddingTable,
   FlowRouteConfigTable,
   HumanTaskTable,
   IdempotencyRecordTable,
@@ -163,6 +164,55 @@ export interface ListTaskRunsOptions extends RepositoryTenantOptions {
   workflowId?: string;
   limit?: number;
   offset?: number;
+}
+
+export type RouteEmbeddingSourceType = 'keyword' | 'example';
+
+export interface RouteEmbeddingWriteInput {
+  tenantId?: string;
+  routeId: string;
+  flowId: string;
+  flowVersion: number;
+  routeConfigSha256: string;
+  sourceType: RouteEmbeddingSourceType;
+  sourceIndex: number;
+  sourceText: string;
+  embedding: number[];
+  embeddingModelId: string;
+  embeddingModelVersion: number;
+  embeddingModelHash: string;
+  embeddingDimensions: number;
+}
+
+export interface RouteEmbeddingSearchInput extends RepositoryTenantOptions {
+  queryEmbedding: number[];
+  embeddingModelId: string;
+  embeddingModelVersion: number;
+  embeddingModelHash: string;
+  allowedRoutes: Array<{
+    routeId: string;
+    flowVersion: number;
+  }>;
+  topK: number;
+}
+
+export interface RouteEmbeddingSearchResult {
+  route_id: string;
+  flow_id: string;
+  flow_version: number;
+  score: number;
+  matched_source_type: RouteEmbeddingSourceType;
+  matched_source_hash: string;
+}
+
+export interface RouteEmbeddingCoverage {
+  route_id: string;
+  flow_version: number;
+  route_config_sha256: string;
+  embedding_model_id: string;
+  embedding_model_version: number;
+  embedding_model_hash: string;
+  source_count: number;
 }
 
 export interface IdempotencyReplayInput {
@@ -647,6 +697,27 @@ export interface CreateAgentContextSnapshotInput {
 
 export function hashJson(value: unknown): string {
   return createHash('sha256').update(stableStringify(value)).digest('hex');
+}
+
+function hashString(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+function vectorLiteral(values: number[]): string {
+  if (values.length !== 1536 || values.some((value) => !Number.isFinite(value))) {
+    throw new RegistryRepositoryError(
+      'MODEL_EMBEDDING_DIMENSIONS_MISMATCH',
+      'Route embedding must be a finite 1536-dimension vector',
+    );
+  }
+  return `[${values.join(',')}]`;
+}
+
+function clampScore(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.min(Math.max(value, 0), 1);
 }
 
 export function stableStringify(value: unknown): string {
@@ -1702,6 +1773,242 @@ export class RouteConfigRepository {
   }
 }
 
+export class RouteEmbeddingRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async replaceForRoute(input: {
+    tenantId?: string;
+    routeId: string;
+    flowVersion: number;
+    routeConfigSha256: string;
+    embeddingModelId: string;
+    embeddingModelVersion: number;
+    embeddingModelHash: string;
+    rows: RouteEmbeddingWriteInput[];
+  }): Promise<void> {
+    await this.db
+      .deleteFrom('flow_route_embedding')
+      .where('tenant_id', '=', tenant(input))
+      .where('route_id', '=', input.routeId)
+      .where('flow_version', '=', input.flowVersion)
+      .where('embedding_model_id', '=', input.embeddingModelId)
+      .where('embedding_model_version', '=', input.embeddingModelVersion)
+      .where('embedding_model_hash', '=', input.embeddingModelHash)
+      .execute();
+
+    if (input.rows.length === 0) {
+      return;
+    }
+
+    const now = new Date();
+    await this.db
+      .insertInto('flow_route_embedding')
+      .values(input.rows.map((row): Insertable<FlowRouteEmbeddingTable> => ({
+        tenant_id: row.tenantId ?? tenant(input),
+        route_id: row.routeId,
+        flow_id: row.flowId,
+        flow_version: row.flowVersion,
+        route_config_sha256: row.routeConfigSha256,
+        source_type: row.sourceType,
+        source_index: row.sourceIndex,
+        source_text: row.sourceText,
+        source_text_hash: hashString(row.sourceText),
+        embedding: sql`${vectorLiteral(row.embedding)}::vector`,
+        embedding_model_id: row.embeddingModelId,
+        embedding_model_version: row.embeddingModelVersion,
+        embedding_model_hash: row.embeddingModelHash,
+        embedding_dimensions: row.embeddingDimensions,
+        embedding_hash: hashJson(row.embedding),
+        created_at: now,
+        updated_at: now,
+      })))
+      .onConflict((oc) =>
+        oc.columns([
+          'tenant_id',
+          'route_id',
+          'flow_version',
+          'route_config_sha256',
+          'embedding_model_id',
+          'embedding_model_version',
+          'embedding_model_hash',
+          'source_type',
+          'source_index',
+        ]).doUpdateSet((eb) => ({
+          source_text: eb.ref('excluded.source_text'),
+          source_text_hash: eb.ref('excluded.source_text_hash'),
+          embedding: eb.ref('excluded.embedding'),
+          embedding_dimensions: eb.ref('excluded.embedding_dimensions'),
+          embedding_hash: eb.ref('excluded.embedding_hash'),
+          updated_at: eb.ref('excluded.updated_at'),
+        })),
+      )
+      .execute();
+  }
+
+  async hasExactIndex(input: {
+    tenantId?: string;
+    routeId: string;
+    flowVersion: number;
+    routeConfigSha256: string;
+    embeddingModelId: string;
+    embeddingModelVersion: number;
+    embeddingModelHash: string;
+    expectedSourceCount?: number;
+  }): Promise<boolean> {
+    const row = await this.db
+      .selectFrom('flow_route_embedding')
+      .select((eb) => eb.fn.countAll<number>().as('source_count'))
+      .where('tenant_id', '=', tenant(input))
+      .where('route_id', '=', input.routeId)
+      .where('flow_version', '=', input.flowVersion)
+      .where('route_config_sha256', '=', input.routeConfigSha256)
+      .where('embedding_model_id', '=', input.embeddingModelId)
+      .where('embedding_model_version', '=', input.embeddingModelVersion)
+      .where('embedding_model_hash', '=', input.embeddingModelHash)
+      .executeTakeFirst();
+    const sourceCount = Number(row?.source_count ?? 0);
+    return input.expectedSourceCount === undefined
+      ? sourceCount > 0
+      : sourceCount === input.expectedSourceCount;
+  }
+
+  async deleteForRouteVersion(input: {
+    tenantId?: string;
+    routeId: string;
+    flowVersion: number;
+  }): Promise<void> {
+    await this.db
+      .deleteFrom('flow_route_embedding')
+      .where('tenant_id', '=', tenant(input))
+      .where('route_id', '=', input.routeId)
+      .where('flow_version', '=', input.flowVersion)
+      .execute();
+  }
+
+  async searchTopK(input: RouteEmbeddingSearchInput): Promise<RouteEmbeddingSearchResult[]> {
+    if (input.allowedRoutes.length === 0) {
+      return [];
+    }
+    const topK = Math.min(Math.max(input.topK, 1), 50);
+    const queryVector = vectorLiteral(input.queryEmbedding);
+    const allowedRouteRows = JSON.stringify(input.allowedRoutes.map((route) => ({
+      route_id: route.routeId,
+      flow_version: route.flowVersion,
+    })));
+    const rows = await sql<{
+      route_id: string;
+      flow_id: string;
+      flow_version: number;
+      score: number;
+      matched_source_type: RouteEmbeddingSourceType;
+      matched_source_hash: string;
+      priority: number;
+    }>`
+      with allowed_routes as (
+        select route_id, flow_version
+        from jsonb_to_recordset(${allowedRouteRows}::jsonb) as allowed(route_id text, flow_version int)
+      ),
+      ranked as (
+        select
+          e.route_id,
+          e.flow_id,
+          e.flow_version,
+          greatest(0, least(1, 1 - (e.embedding <=> ${queryVector}::vector)))::float8 as score,
+          e.source_type as matched_source_type,
+          e.source_text_hash as matched_source_hash,
+          c.priority,
+          row_number() over (
+            partition by e.route_id
+            order by
+              (e.embedding <=> ${queryVector}::vector) asc,
+              e.source_type asc,
+              e.source_index asc
+          ) as rn
+        from flow_route_embedding e
+        join flow_route_config c
+          on c.tenant_id = e.tenant_id
+         and c.route_id = e.route_id
+         and c.flow_version = e.flow_version
+        join allowed_routes a
+          on a.route_id = e.route_id
+         and a.flow_version = e.flow_version
+        where e.tenant_id = ${tenant(input)}
+          and e.embedding_model_id = ${input.embeddingModelId}
+          and e.embedding_model_version = ${input.embeddingModelVersion}
+          and e.embedding_model_hash = ${input.embeddingModelHash}
+      )
+      select route_id, flow_id, flow_version, score, matched_source_type, matched_source_hash, priority
+      from ranked
+      where rn = 1
+      order by score desc, priority desc, route_id asc
+      limit ${topK}
+    `.execute(this.db);
+
+    return rows.rows.map((row) => ({
+      route_id: row.route_id,
+      flow_id: row.flow_id,
+      flow_version: row.flow_version,
+      score: clampScore(Number(row.score)),
+      matched_source_type: row.matched_source_type,
+      matched_source_hash: row.matched_source_hash,
+    }));
+  }
+
+  async listCoverage(input: {
+    tenantId?: string;
+    routeIds?: string[];
+    embeddingModelId?: string;
+    embeddingModelVersion?: number;
+    embeddingModelHash?: string;
+  } = {}): Promise<RouteEmbeddingCoverage[]> {
+    let query = this.db
+      .selectFrom('flow_route_embedding')
+      .select([
+        'route_id',
+        'flow_version',
+        'route_config_sha256',
+        'embedding_model_id',
+        'embedding_model_version',
+        'embedding_model_hash',
+      ])
+      .select((eb) => eb.fn.countAll<number>().as('source_count'))
+      .where('tenant_id', '=', tenant(input))
+      .groupBy([
+        'route_id',
+        'flow_version',
+        'route_config_sha256',
+        'embedding_model_id',
+        'embedding_model_version',
+        'embedding_model_hash',
+      ]);
+    if (input.routeIds && input.routeIds.length > 0) {
+      query = query.where('route_id', 'in', input.routeIds);
+    }
+    if (input.embeddingModelId) {
+      query = query.where('embedding_model_id', '=', input.embeddingModelId);
+    }
+    if (input.embeddingModelVersion) {
+      query = query.where('embedding_model_version', '=', input.embeddingModelVersion);
+    }
+    if (input.embeddingModelHash) {
+      query = query.where('embedding_model_hash', '=', input.embeddingModelHash);
+    }
+    const rows = await query
+      .orderBy('route_id', 'asc')
+      .orderBy('flow_version', 'desc')
+      .execute();
+    return rows.map((row) => ({
+      route_id: row.route_id,
+      flow_version: row.flow_version,
+      route_config_sha256: row.route_config_sha256,
+      embedding_model_id: row.embedding_model_id,
+      embedding_model_version: row.embedding_model_version,
+      embedding_model_hash: row.embedding_model_hash,
+      source_count: Number(row.source_count),
+    }));
+  }
+}
+
 export class ToolManifestRepository {
   private readonly registry: VersionedRegistryRepository<ToolManifest>;
 
@@ -2217,6 +2524,7 @@ export class ModelDefinitionRepository {
       capabilities_json: toDbJson(parsed.capabilities),
       context_window: parsed.context_window,
       max_output_tokens: parsed.max_output_tokens,
+      embedding_dimensions: parsed.embedding_dimensions ?? null,
       input_cost_per_million: parsed.input_cost_per_million,
       output_cost_per_million: parsed.output_cost_per_million,
       currency: parsed.currency,
@@ -2280,6 +2588,7 @@ export class ModelDefinitionRepository {
         capabilities_json: toDbJson(next.capabilities),
         context_window: next.context_window,
         max_output_tokens: next.max_output_tokens,
+        embedding_dimensions: next.embedding_dimensions ?? null,
         input_cost_per_million: next.input_cost_per_million,
         output_cost_per_million: next.output_cost_per_million,
         currency: next.currency,
@@ -2321,6 +2630,7 @@ export class ModelDefinitionRepository {
         capabilities: source.capabilities,
         context_window: source.context_window,
         max_output_tokens: source.max_output_tokens,
+        ...(source.embedding_dimensions ? { embedding_dimensions: source.embedding_dimensions } : {}),
         input_cost_per_million: source.input_cost_per_million,
         output_cost_per_million: source.output_cost_per_million,
         currency: source.currency,
@@ -5714,6 +6024,7 @@ export async function resolveModelPolicyRecord(
       capabilities: model.capabilities,
       context_window: model.context_window,
       max_output_tokens: model.max_output_tokens,
+      ...(model.embedding_dimensions ? { embedding_dimensions: model.embedding_dimensions } : {}),
       input_cost_per_million: model.input_cost_per_million,
       output_cost_per_million: model.output_cost_per_million,
       currency: model.currency,
@@ -5762,7 +6073,7 @@ export function hashModelGatewayProfileConfig(input: Pick<ModelGatewayProfile, '
   });
 }
 
-export function hashModelDefinition(input: Pick<ModelDefinition, 'model_id' | 'version' | 'display_name' | 'gateway_profile_id' | 'gateway_profile_config_hash' | 'upstream_model_id' | 'provider' | 'capabilities' | 'context_window' | 'max_output_tokens' | 'input_cost_per_million' | 'output_cost_per_million' | 'currency' | 'tags'>): string {
+export function hashModelDefinition(input: Pick<ModelDefinition, 'model_id' | 'version' | 'display_name' | 'gateway_profile_id' | 'gateway_profile_config_hash' | 'upstream_model_id' | 'provider' | 'capabilities' | 'context_window' | 'max_output_tokens' | 'input_cost_per_million' | 'output_cost_per_million' | 'currency' | 'tags'> & { embedding_dimensions?: number | undefined }): string {
   return hashJson({
     model_id: input.model_id,
     version: input.version,
@@ -5774,6 +6085,7 @@ export function hashModelDefinition(input: Pick<ModelDefinition, 'model_id' | 'v
     capabilities: input.capabilities,
     context_window: input.context_window,
     max_output_tokens: input.max_output_tokens,
+    embedding_dimensions: input.embedding_dimensions,
     input_cost_per_million: input.input_cost_per_million,
     output_cost_per_million: input.output_cost_per_million,
     currency: input.currency,
@@ -6154,6 +6466,7 @@ function mapModelDefinition(row: Selectable<ModelDefinitionTable>): ModelDefinit
     capabilities: jsonArray(row.capabilities_json),
     context_window: row.context_window,
     max_output_tokens: row.max_output_tokens,
+    ...(row.embedding_dimensions ? { embedding_dimensions: row.embedding_dimensions } : {}),
     input_cost_per_million: Number(row.input_cost_per_million),
     output_cost_per_million: Number(row.output_cost_per_million),
     currency: row.currency,

@@ -14,16 +14,21 @@ import {
   createDb,
   FlowDefinitionRepository,
   FlowExecutionPlanRepository,
+  ModelDefinitionRepository,
+  ModelGatewayProfileRepository,
   ModelPolicyRepository,
   PromptDefinitionRepository,
   RouteConfigRepository,
   ToolManifestRepository,
   hashModelPolicy,
+  type Database,
   upsertAgentSpec,
   upsertPromptDefinition,
 } from '@dar/db';
+import type { Kysely } from 'kysely';
 import { RegistryReleaseService } from './registry-release-service.js';
 import { RegistryValidationService } from './registry-validation-service.js';
+import type { PreparedRouteEmbeddingIndex, RouteEmbeddingIndexService } from './route-embedding-index-service.js';
 
 const runPostgres = process.env.RUN_POSTGRES_TESTS === '1' && Boolean(process.env.DATABASE_URL);
 const describePostgres = runPostgres ? describe : describe.skip;
@@ -52,6 +57,38 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
         { flows, routes, tools, agents, prompts },
         validation,
       );
+      const profile = await new ModelGatewayProfileRepository(db).createDraft({
+        profile_id: `gateway_${randomUUID()}`,
+        display_name: 'Release test gateway',
+        protocol: 'openai_chat_completions',
+        base_url: 'https://model.example.test/v1',
+        auth_type: 'none',
+        operatorId,
+      });
+      const publishedProfile = await new ModelGatewayProfileRepository(db).publish(profile.profile_id, {
+        operatorId,
+      });
+      const model = await new ModelDefinitionRepository(db).createDraft({
+        operatorId,
+        model: {
+          model_id: `model_${randomUUID()}`,
+          version: 1,
+          display_name: 'Release test model',
+          gateway_profile_id: publishedProfile.profile_id,
+          upstream_model_id: 'mock-upstream',
+          provider: 'mock',
+          capabilities: ['text', 'tools', 'usage'],
+          context_window: 8192,
+          max_output_tokens: 1024,
+          input_cost_per_million: 0,
+          output_cost_per_million: 0,
+          currency: 'USD',
+          tags: ['test'],
+        },
+      });
+      const publishedModel = await new ModelDefinitionRepository(db).publish(model.model_id, model.version, {
+        operatorId,
+      });
 
       const prompt: PromptDefinition = {
         prompt_id: promptId,
@@ -81,9 +118,9 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
           {
             target_id: `${modelPolicyId}_primary`,
             model_ref: {
-              model_id: 'mock',
-              version: 1,
-              model_hash: 'a'.repeat(64),
+              model_id: publishedModel.model_id,
+              version: publishedModel.version,
+              model_hash: publishedModel.model_hash,
             },
             priority: 0,
             enabled: true,
@@ -247,4 +284,183 @@ describePostgres('RegistryReleaseService with PostgreSQL', () => {
       await closeDb(db);
     }
   });
+
+  it('validates before route indexing, replaces index inside publish transaction, and blocks rollback when target index is missing', async () => {
+    const db = createDb({ databaseUrl: process.env.DATABASE_URL as string });
+    const tenantId = `tenant_${randomUUID()}`;
+    const operatorId = 'operator_route_index_test';
+    const flowId = `flow_${randomUUID()}`;
+    const routeId = `route_${randomUUID()}`;
+    const flows = new FlowDefinitionRepository(db);
+    const routes = new RouteConfigRepository(db);
+    const tools = new ToolManifestRepository(db);
+    const agents = new AgentSpecRepository(db);
+    const prompts = new PromptDefinitionRepository(db);
+    const validation = new RegistryValidationService({ flows, routes, tools, agents, prompts });
+
+    try {
+      await flows.createDraft(simpleFlow(flowId, 1), { tenantId, operatorId });
+      await flows.markValidated(flowId, 1, { tenantId, operatorId });
+      await flows.publish(flowId, 1, { tenantId, operatorId });
+
+      const invalidIndexService = new FakeRouteEmbeddingIndexService();
+      const invalidRelease = new RegistryReleaseService(
+        db,
+        { flows, routes, tools, agents, prompts },
+        validation,
+        invalidIndexService as unknown as RouteEmbeddingIndexService,
+      );
+      await routes.createDraft(simpleRoute(routeId, flowId, 1, {
+        keywords: [],
+        examples: [],
+      }), { tenantId, operatorId });
+      await expect(invalidRelease.publish('route', routeId, 1, {
+        tenantId,
+        operatorId,
+        releaseNote: 'invalid route',
+      })).rejects.toThrow('Registry validation failed');
+      expect(invalidIndexService.calls).toEqual([]);
+
+      await routes.updateDraft(routeId, 1, {
+        tenantId,
+        operatorId,
+        expectedRevision: 1,
+        spec: simpleRoute(routeId, flowId, 1, {
+          keywords: ['route-index'],
+          examples: ['route index example'],
+        }),
+      });
+      const failingIndexService = new FakeRouteEmbeddingIndexService({ prepareError: new Error('embedding gateway unavailable') });
+      const failingRelease = new RegistryReleaseService(
+        db,
+        { flows, routes, tools, agents, prompts },
+        validation,
+        failingIndexService as unknown as RouteEmbeddingIndexService,
+      );
+      await expect(failingRelease.publish('route', routeId, 1, {
+        tenantId,
+        operatorId,
+        releaseNote: 'prepare fails',
+      })).rejects.toThrow('embedding gateway unavailable');
+      expect((await routes.getByIdAndVersion(routeId, 1, { tenantId }))?.status).toBe('draft');
+      expect(failingIndexService.calls).toEqual(['prepare']);
+
+      const indexService = new FakeRouteEmbeddingIndexService({ originalDb: db });
+      const release = new RegistryReleaseService(
+        db,
+        { flows, routes, tools, agents, prompts },
+        validation,
+        indexService as unknown as RouteEmbeddingIndexService,
+      );
+      await release.publish('route', routeId, 1, {
+        tenantId,
+        operatorId,
+        releaseNote: 'publish with index',
+      });
+      expect(indexService.calls).toEqual(['prepare', 'replace']);
+      expect(indexService.preparedRouteConfigSha256).toMatch(/^[a-f0-9]{64}$/u);
+      const routeV1IndexHash = (await routes.getByIdAndVersion(routeId, 1, { tenantId }))?.sha256;
+      expect(routeV1IndexHash).toMatch(/^[a-f0-9]{64}$/u);
+      expect(indexService.replaceUsedOriginalDb).toBe(false);
+      expect(indexService.statusDuringReplace).toBe('published');
+
+      await flows.cloneVersion(flowId, 1, { tenantId, operatorId });
+      await flows.markValidated(flowId, 2, { tenantId, operatorId });
+      await flows.publish(flowId, 2, { tenantId, operatorId });
+      await routes.cloneVersion(routeId, 1, { tenantId, operatorId });
+      await release.publish('route', routeId, 2, {
+        tenantId,
+        operatorId,
+        releaseNote: 'publish v2 with index',
+      });
+      indexService.hasRouteIndexResult = false;
+      await expect(release.rollback('route', routeId, 1, {
+        tenantId,
+        operatorId,
+        releaseNote: 'rollback missing index',
+      })).rejects.toThrow('ROUTE_EMBEDDING_NOT_READY');
+      expect(indexService.checkedRouteConfigSha256).toBe(routeV1IndexHash);
+      expect((await routes.getByIdAndVersion(routeId, 2, { tenantId }))?.status).toBe('published');
+      expect(indexService.calls.at(-1)).toBe('has');
+    } finally {
+      await closeDb(db);
+    }
+  });
 });
+
+class FakeRouteEmbeddingIndexService {
+  readonly calls: string[] = [];
+  preparedRouteConfigSha256: string | undefined;
+  checkedRouteConfigSha256: string | undefined;
+  hasRouteIndexResult = true;
+  replaceUsedOriginalDb: boolean | undefined;
+  statusDuringReplace: string | undefined;
+
+  constructor(private readonly options: { prepareError?: Error; originalDb?: Kysely<Database> } = {}) {}
+
+  async prepare(route: RouteSpec, routeConfigSha256: string): Promise<PreparedRouteEmbeddingIndex> {
+    this.calls.push('prepare');
+    this.preparedRouteConfigSha256 = routeConfigSha256;
+    if (this.options.prepareError) {
+      throw this.options.prepareError;
+    }
+    return {
+      routeId: route.route_id ?? `${route.flow_id}@${route.version}`,
+      flowVersion: route.version,
+      routeConfigSha256,
+      embeddingModelId: 'embedding-model',
+      embeddingModelVersion: 1,
+      embeddingModelHash: 'b'.repeat(64),
+      sourceCount: route.route.keywords.length + route.route.examples.length,
+      rows: [],
+    };
+  }
+
+  async replacePrepared(index: PreparedRouteEmbeddingIndex, tenantId: string, trx: Kysely<Database>): Promise<void> {
+    this.calls.push('replace');
+    this.replaceUsedOriginalDb = trx === this.options.originalDb;
+    this.statusDuringReplace = (await new RouteConfigRepository(trx).getByIdAndVersion(index.routeId, index.flowVersion, {
+      tenantId,
+    }))?.status;
+  }
+
+  async hasRouteIndex(_route: RouteSpec, routeConfigSha256: string): Promise<boolean> {
+    this.calls.push('has');
+    this.checkedRouteConfigSha256 = routeConfigSha256;
+    return this.hasRouteIndexResult;
+  }
+}
+
+function simpleFlow(flowId: string, version: number): FlowSpec {
+  return {
+    flow_id: flowId,
+    version,
+    status: 'draft',
+    runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
+    steps: [{ id: 'activity', type: 'activity', activity: 'noop' }],
+  };
+}
+
+function simpleRoute(
+  routeId: string,
+  flowId: string,
+  version: number,
+  matchSignals: { keywords: string[]; examples: string[] },
+): RouteSpec {
+  return {
+    route_id: routeId,
+    flow_id: flowId,
+    version,
+    status: 'draft',
+    route: {
+      keywords: matchSignals.keywords,
+      examples: matchSignals.examples,
+      negative_examples: [],
+      supported_channels: [],
+      role_constraints: [],
+      priority: 50,
+      confidence_threshold: 0.7,
+      ambiguous_threshold: 0.5,
+    },
+  };
+}

@@ -56,6 +56,16 @@ function toErrorResponse(error: unknown, traceId?: string, locale?: unknown): St
       ...detailsOf(error.details),
     }, responseOptions(traceId, locale)) as StandardErrorResponse;
   }
+  if (error instanceof Error && error.message.startsWith('ROUTER_EMBEDDING_UNAVAILABLE')) {
+    return errorResponse({
+      code: 'ROUTER_EMBEDDING_UNAVAILABLE',
+    }, responseOptions(traceId, locale)) as StandardErrorResponse;
+  }
+  if (error instanceof Error && error.message.startsWith('ROUTER_EMBEDDING_MODEL')) {
+    return errorResponse({
+      code: 'ROUTER_EMBEDDING_MODEL_INVALID',
+    }, responseOptions(traceId, locale)) as StandardErrorResponse;
+  }
 
   return errorResponse({ code: 'INTERNAL_ERROR' }, responseOptions(traceId, locale)) as StandardErrorResponse;
 }
@@ -89,6 +99,12 @@ function errorStatus(error: unknown): number {
       return 400;
     }
     return 409;
+  }
+  if (error instanceof Error && error.message.startsWith('ROUTER_EMBEDDING_UNAVAILABLE')) {
+    return 503;
+  }
+  if (error instanceof Error && error.message.startsWith('ROUTER_EMBEDDING_MODEL')) {
+    return 503;
   }
   return 500;
 }
