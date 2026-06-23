@@ -45,6 +45,59 @@ describe('PiAgentAdapter', () => {
     }
   });
 
+  it('uses authoritative read-only tool result content in deterministic final answer', async () => {
+    const runtime = createDeterministicPiStream('readonly_tool');
+    const executionPlan = plan('deterministic:readonly_tool');
+    try {
+      const first = await runPiAgentSegment({
+        executionPlan,
+        model: runtime.model,
+        streamFn: runtime.streamFn,
+        initialUserInput: 'find policy',
+        segmentIndex: 0,
+        budgetRemaining: executionPlan.budget,
+        maxContextBytes: 262_144,
+      });
+      if (first.segmentResult.status !== 'tool_requested') {
+        throw new Error(`expected tool request, got ${JSON.stringify(first.segmentResult)}`);
+      }
+      const nextContext = replaceDeferredToolResults(
+        first.messages,
+        [
+          {
+            tool_call_id: first.segmentResult.proposed_tool_calls[0]?.call_id ?? 'call_readonly_1',
+            tool_name: 'knowledge.search',
+            tool_version: '1.0.0',
+            result_summary: 'travel reimbursement policy summary',
+            status: 'committed',
+            is_error: false,
+            content: [{ type: 'text', text: 'travel reimbursement policy summary' }],
+            details: { result_ref: 'tool-call:readonly_1' },
+          },
+        ],
+        { maxBytes: 262_144 },
+      );
+
+      const second = await runPiAgentSegment({
+        executionPlan,
+        model: runtime.model,
+        streamFn: runtime.streamFn,
+        contextMessages: nextContext.messages,
+        segmentIndex: 1,
+        budgetRemaining: executionPlan.budget,
+        maxContextBytes: 262_144,
+      });
+
+      expect(second.segmentResult.status).toBe('completed');
+      if (second.segmentResult.status !== 'completed') {
+        throw new Error(`expected final answer, got ${JSON.stringify(second.segmentResult)}`);
+      }
+      expect(second.segmentResult.final_answer).toContain('travel reimbursement policy summary');
+    } finally {
+      runtime.unregister();
+    }
+  });
+
   it('returns cancelled when an AbortSignal is already aborted before the Pi turn starts', async () => {
     const runtime = createDeterministicPiStream('readonly_tool');
     const controller = new AbortController();

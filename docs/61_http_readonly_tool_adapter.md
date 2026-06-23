@@ -121,4 +121,10 @@ docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml 
 corepack pnpm smoke:http-readonly-tool-e2e
 ```
 
-The smoke uses `devtools/mock-server` as an external HTTP API simulator, checks Bearer auth, expects one external request for the success path, and verifies ToolCall, Audit and Idempotency evidence.
+The smoke creates and publishes Prompt, ModelPolicy, Agent, Tool, Flow, Route, and Tenant Runtime Policy through the control-plane API. It first asserts `/v1/router/preview` matched the dedicated Route through semantic recall, then starts `/v1/tasks` and verifies the path:
+
+```text
+semantic route -> Flow -> Agent child workflow -> Pi -> Tool Gateway -> http_readonly -> external mock API -> final answer
+```
+
+It uses `devtools/mock-server` as an external HTTP API simulator, checks Bearer auth, expects one external request for the success path, and verifies ToolCall, Audit, Idempotency, Tenant Policy Snapshot, AgentRun, and FlowExecutionPlan evidence. This is still a development/test mock external API, not a claim that the adapter has been validated against a real public API.

@@ -12,7 +12,7 @@ import {
   fauxToolCall,
   registerFauxProvider,
 } from '@earendil-works/pi-ai';
-import type { StreamFn } from '@earendil-works/pi-agent-core';
+import type { AgentMessage, StreamFn } from '@earendil-works/pi-agent-core';
 import {
   HANDOFF_TO_WORKFLOW_TOOL,
   REQUEST_USER_INPUT_TOOL,
@@ -101,6 +101,14 @@ function responseForScenario(
     return fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'Deterministic stream error' });
   }
   if (toolResults.length > 0) {
+    if (scenario === 'readonly_tool') {
+      return withModel(
+        fauxAssistantMessage(
+          `Final answer after ${toolResults.length} durable boundary result(s). ${toolResultSummary(toolResults)}`
+        ),
+        model,
+      );
+    }
     return withModel(fauxAssistantMessage(`Final answer after ${toolResults.length} durable boundary result(s).`), model);
   }
 
@@ -182,4 +190,24 @@ function firstToolName(context: Context, fallback: string): string {
 
 function preferredToolName(context: Context, preferred: string): string {
   return context.tools?.some((tool) => tool.name === preferred) ? preferred : firstToolName(context, preferred);
+}
+
+function toolResultSummary(toolResults: AgentMessage[]): string {
+  const text = toolResults
+    .flatMap((message) => ('content' in message && Array.isArray(message.content) ? (message.content as unknown[]) : []))
+    .flatMap((block) => (isTextContent(block) ? [block.text] : []))
+    .join(' ')
+    .trim();
+  return text.length > 0 ? text.slice(0, 300) : 'Received readonly tool result.';
+}
+
+function isTextContent(block: unknown): block is { type: 'text'; text: string } {
+  return (
+    typeof block === 'object'
+    && block !== null
+    && 'type' in block
+    && block.type === 'text'
+    && 'text' in block
+    && typeof block.text === 'string'
+  );
 }

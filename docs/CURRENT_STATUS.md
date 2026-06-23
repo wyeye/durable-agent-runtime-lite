@@ -141,7 +141,7 @@ Deployment-level `MODEL_GATEWAY_BASE_URL`, `MODEL_GATEWAY_API_KEY`, `MODEL_GATEW
 
 ## PILOT HTTP Tool MVP
 
-**PILOT-HTTP-TOOL-1 IMPLEMENTED IN WORKING TREE, E2E VERIFICATION IN PROGRESS**
+**PILOT-HTTP-TOOL-1 IMPLEMENTED IN WORKING TREE**
 
 This pass keeps the platform version at `0.8.0` and does not create a tag or release.
 
@@ -152,9 +152,9 @@ Implemented in this pass:
 - The adapter requires `side_effect=false`, risk `L0` / `L1`, explicit Host allowlist, JSON response, bounded timeout/retry, response-size limit, and runtime `env:TOOL_SECRET_*` references.
 - Control-plane Tool visual configuration supports the read-only HTTP adapter without exposing real secrets.
 - `devtools/mock-server` exposes a CI-only external HTTP business API simulation for policy lookup, auth, retry and failure cases.
-- `corepack pnpm smoke:http-readonly-tool-e2e` seeds a dedicated HTTP readonly tool and validates Pi -> Tool Gateway -> external HTTP API -> Tool Result evidence through the running stack.
+- `corepack pnpm smoke:http-readonly-tool-e2e` creates and publishes a dedicated Prompt, ModelPolicy, Agent, Tool, Flow, Route, and Tenant Runtime Policy through control-plane API, then validates semantic route -> `/v1/tasks` -> Flow Agent Step -> Agent Child Workflow -> Pi -> Tool Gateway -> external HTTP API -> Tool Result -> final answer evidence through the running stack.
 
-The current smoke is development/test-only and uses `devtools/mock-server`; it does not add a production app or production container.
+The current smoke is development/test-only and uses `devtools/mock-server` as the external HTTP API simulator; it does not add a production app or production container and does not claim real public API validation.
 
 ## Smoke Commands
 

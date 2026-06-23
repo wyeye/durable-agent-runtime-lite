@@ -167,8 +167,8 @@ corepack pnpm smoke:model-catalog-multi-gateway-e2e
 corepack pnpm smoke:http-readonly-tool-e2e
 ```
 
-这些 smoke 通过 `/v1/agent-tasks` 使用真实 Pi Agent Core。deterministic 模式只替换模型流，不替换 Pi 内循环；model-gateway smoke 使用 `devtools/mock-server` 的 OpenAI-compatible `/v1/chat/completions` 返回结构化 tool call。
-`smoke:http-readonly-tool-e2e` 还会通过 Tool Gateway 的 `http_readonly` adapter 调用 `devtools/mock-server` 中的外部 HTTP 模拟 API，并检查 ToolCall、Audit、Idempotency 和外部 request count。
+Pi smoke 使用真实 Pi Agent Core。deterministic 模式只替换模型流，不替换 Pi 内循环；model-gateway smoke 使用 `devtools/mock-server` 的 OpenAI-compatible `/v1/chat/completions` 返回结构化 tool call。
+`smoke:http-readonly-tool-e2e` 不走 `/v1/agent-tasks`，而是通过 control-plane API 创建并发布 Prompt、ModelPolicy、Agent、Tool、Flow、Route 和 Tenant Runtime Policy，再验证 `/v1/router/preview` 的 semantic match 与 `/v1/tasks -> ConfigDrivenWorkflow -> Agent Child Workflow -> Pi -> Tool Gateway -> http_readonly` 主链路。该 smoke 仍使用 `devtools/mock-server` 作为外部 HTTP API 模拟器，并检查 ToolCall、Audit、Idempotency、Tenant Policy Snapshot 和外部 request count。
 
 受保护 live Model Gateway probe：
 

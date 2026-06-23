@@ -1,22 +1,35 @@
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
-import type { AgentRunRecord, AgentStepRecord, StandardResponse, TaskRun, ToolManifest } from '@dar/contracts';
+import type {
+  AgentRunRecord,
+  AgentStepRecord,
+  AuditEvent,
+  FlowSpec,
+  ModelDefinition,
+  ModelPolicy,
+  RouterPreviewResponse,
+  RunTaskResponse,
+  StandardResponse,
+  TaskRun,
+  TenantRuntimePolicySnapshot,
+  ToolManifest,
+} from '@dar/contracts';
 import { tenantRuntimePolicySchema } from '@dar/contracts';
 import {
-  AgentExecutionPlanRepository,
+  AuditEventRepository,
+  FlowExecutionPlanRepository,
+  HumanTaskRepository,
   IdempotencyRecordRepository,
-  ModelPolicyRepository,
-  TenantRuntimePolicyRepository,
+  RouteEmbeddingRepository,
+  TaskRunRepository,
+  TenantRuntimePolicySnapshotRepository,
   ToolCallLogRepository,
-  ToolManifestRepository,
   closeDb,
   createDb,
   hashModelPolicy,
-  upsertAgentSpec,
-  upsertPromptDefinition,
 } from '@dar/db';
-import { ensureModelCatalogEntry } from './model-catalog-seed.js';
 
+const controlPlaneUrl = trimTrailingSlash(process.env.CONTROL_PLANE_URL ?? 'http://localhost:3100');
 const runtimeApiUrl = trimTrailingSlash(process.env.RUNTIME_API_URL ?? 'http://localhost:3000');
 const mockServerUrl = trimTrailingSlash(process.env.MOCK_SERVER_URL ?? 'http://localhost:4100');
 const databaseUrl =
@@ -32,29 +45,89 @@ const runtimeHeaders = {
   'x-roles': 'capability_operator',
   'x-request-id': requestId,
 };
+const operatorHeaders = authHeaders('capability_operator', `${requestId}_operator`);
+const adminHeaders = authHeaders('platform_admin', `${requestId}_admin`);
+const routeQueryText = '我想了解公司差旅费用怎么申请报销';
+const routeChannel = 'web';
+const routeRoles = ['employee'];
 
 async function main() {
   const db = createDb({ databaseUrl });
   try {
+    assertSemanticEnvironment();
     await resetMockBusinessApi();
-    const executionPlanRef = await seedAgentPlan(db);
+    const resources = await publishSmokeResources(db);
+    const coverage = await new RouteEmbeddingRepository(db).listCoverage({
+      tenantId,
+      routeIds: [resources.routeId],
+      embeddingModelId: process.env.ROUTER_EMBEDDING_MODEL_ID ?? 'mock-embedding-1536',
+      embeddingModelVersion: Number(process.env.ROUTER_EMBEDDING_MODEL_VERSION ?? 1),
+    });
+    assert.equal(coverage.length, 1, `expected published semantic embedding coverage, got ${JSON.stringify(coverage)}`);
+    assert.ok((coverage[0]?.source_count ?? 0) >= 3, 'route embedding index should include keyword and examples');
+
+    await checkHealth(`${controlPlaneUrl}/healthz`, 'control-plane');
     await checkHealth(`${runtimeApiUrl}/healthz`, 'runtime-api');
 
-    const task = await postJson<{ task_run_id: string; workflow_id: string; workflow_start?: { mode: string; started: boolean } }>(
-      `${runtimeApiUrl}/v1/agent-tasks`,
+    const preview = await postRuntimeJson<RouterPreviewResponse>(
+      `${runtimeApiUrl}/v1/router/preview`,
       {
         tenant_id: tenantId,
         user_id: userId,
-        request_id: `${requestId}_task`,
-        agent_execution_plan_ref: executionPlanRef,
-        input: { text: '我想了解公司差旅费用怎么报销' },
+        channel: routeChannel,
+        roles: routeRoles,
+        request_id: `${requestId}_preview`,
+        input: { text: routeQueryText },
       },
     );
+    assert.equal(preview.decision_stage, 'semantic');
+    assert.equal(preview.route_decision.decision, 'matched');
+    assert.equal(preview.route_decision.flow_id, resources.flowId);
+    assert.equal(preview.route_decision.flow_version, 1);
+    assert.equal(preview.candidates[0]?.route_id, resources.routeId);
+    assert.equal(preview.candidates[0]?.reason, 'semantic_match');
+    assert.ok((preview.semantic?.top_score ?? 0) >= Number(process.env.ROUTER_SEMANTIC_MATCH_THRESHOLD ?? 0.8));
+    assert.ok((preview.semantic?.margin ?? 0) >= Number(process.env.ROUTER_SEMANTIC_MIN_MARGIN ?? 0.05));
+
+    const task = await postRuntimeJson<RunTaskResponse>(
+      `${runtimeApiUrl}/v1/tasks`,
+      {
+        tenant_id: tenantId,
+        user_id: userId,
+        channel: routeChannel,
+        roles: routeRoles,
+        request_id: `${requestId}_task`,
+        input: { text: routeQueryText },
+      },
+    );
+    assert.equal(task.status, 'queued');
+    assert.equal(task.route_decision.decision, 'matched');
+    assert.equal(task.route_decision.flow_id, resources.flowId);
+    assert.equal(task.route_decision.flow_version, 1);
+    assert.equal(task.flow_id, resources.flowId);
+    assert.equal(task.flow_version, 1);
+    assert.ok(task.tenant_policy_snapshot_ref, 'runtime task should carry tenant policy snapshot ref');
     assert.equal(task.workflow_start?.started, true);
     assert.equal(task.workflow_start?.mode, 'temporal');
 
     const finalTask = await pollTask(task.task_run_id);
     assert.equal(finalTask.status, 'completed', finalTask.error_message ?? 'HTTP readonly tool task should complete');
+    assert.equal(finalTask.route_type, 'matched');
+    assert.equal(finalTask.flow_id, resources.flowId);
+    assert.equal(finalTask.flow_version, 1);
+    assert.ok(finalTask.execution_plan_ref, 'TaskRun should record FlowExecutionPlan ref');
+    assert.ok(finalTask.tenant_policy_snapshot_ref, 'TaskRun should record tenant policy snapshot ref');
+
+    const storedTask = await new TaskRunRepository(db).get(task.task_run_id);
+    assert.equal(storedTask?.execution_plan_ref, finalTask.execution_plan_ref);
+    assert.equal(storedTask?.tenant_policy_snapshot_ref, finalTask.tenant_policy_snapshot_ref);
+    const flowPlan = await new FlowExecutionPlanRepository(db).getByRef(finalTask.execution_plan_ref, { tenantId });
+    assert.ok(flowPlan, 'FlowExecutionPlan should exist');
+    assert.equal(flowPlan.flow_id, resources.flowId);
+    assert.equal(flowPlan.flow_version, 1);
+    assert.equal(flowPlan.execution_plan_hash.length, 64);
+    assert.equal(flowPlan.agents.length, 1);
+    assert.ok(flowPlan.agents[0]?.agent_execution_plan_ref, 'FlowExecutionPlan should lock AgentExecutionPlan ref');
 
     const agentRuns = await getJson<{ agent_runs: AgentRunRecord[] }>(
       `${runtimeApiUrl}/v1/agent-runs?tenant_id=${encodeURIComponent(tenantId)}&task_run_id=${encodeURIComponent(task.task_run_id)}&page_size=10`,
@@ -62,11 +135,18 @@ async function main() {
     const agentRun = agentRuns.agent_runs[0];
     assert.ok(agentRun, 'AgentRun should exist');
     assert.equal(agentRun.status, 'completed');
+    assert.equal(agentRun.parent_workflow_id, task.workflow_id);
+    assert.equal(agentRun.execution_plan_ref, flowPlan.agents[0]?.agent_execution_plan_ref);
+    assert.equal(agentRun.tool_call_count, 1);
 
     const steps = await getJson<{ agent_steps: AgentStepRecord[] }>(
       `${runtimeApiUrl}/v1/agent-runs/${encodeURIComponent(agentRun.agent_run_id)}/steps?tenant_id=${encodeURIComponent(tenantId)}&page_size=20`,
     );
-    assert.ok(steps.agent_steps.some((step) => step.tool_result_refs.length > 0), 'HTTP tool result ref should be recorded');
+    assert.ok(steps.agent_steps.some((step) => step.proposed_tool_calls.length > 0), 'Pi tool proposal should be recorded');
+    assert.ok(steps.agent_steps.some((step) => step.tool_result_refs.length > 0), 'HTTP tool result should be written back to Pi context');
+    const finalAnswer = steps.agent_steps.find((step) => step.segment_status === 'completed' && step.decision_summary)?.decision_summary;
+    assert.ok(finalAnswer, 'Pi final answer step should exist');
+    assert.match(finalAnswer, /差旅报销政策摘要|差旅费用可按制度提交报销/u);
 
     const toolCalls = await new ToolCallLogRepository(db).list({
       tenantId,
@@ -77,6 +157,9 @@ async function main() {
     assert.equal(toolCalls.length, 1, `expected one logical ToolCall, got ${toolCalls.length}`);
     assert.equal(toolCalls[0]?.status, 'committed');
     assert.equal(toolCalls[0]?.adapter_type, 'http_readonly');
+    assert.equal(toolCalls[0]?.policy_decision, 'allow');
+    assert.equal(toolCalls[0]?.risk_level, 'L1');
+    assert.equal(toolCalls[0]?.tenant_policy_snapshot_ref, agentRun.tenant_policy_snapshot_ref);
     assert.equal((toolCalls[0]?.result_json as { items?: Array<{ id?: string }> } | undefined)?.items?.[0]?.id, 'policy-1');
 
     const toolCall = toolCalls[0];
@@ -93,9 +176,35 @@ async function main() {
     assert.equal(stats.request_count, 1, `external request_count should be 1, got ${stats.request_count}`);
     assert.equal(stats.last_authorization, 'bearer_ok');
 
+    const policySnapshots = await new TenantRuntimePolicySnapshotRepository(db).listByTenant(tenantId, { limit: 20 });
+    assert.ok(policySnapshots.some((snapshot) => snapshot.execution_plan_ref === flowPlan.execution_plan_ref && snapshot.execution_plan_type === 'flow'), 'root flow tenant policy snapshot should exist');
+    assert.ok(policySnapshots.some((snapshot) => snapshot.execution_plan_ref === agentRun.execution_plan_ref && snapshot.execution_plan_type === 'agent' && snapshot.derivation_type === 'flow_agent_child'), 'agent child tenant policy snapshot should exist');
+    assert.ok(policySnapshots.every((snapshot) =>
+      snapshot.resolved_allowed_tools.some((rule) => rule.tool_name === 'company.policy.lookup' && rule.allowed_operations.includes('invoke'))),
+    'tenant policy snapshot should allow the HTTP tool');
+
+    const taskAudits = await new AuditEventRepository(db).list({ tenantId, taskRunId: task.task_run_id, limit: 50 });
+    const planAudits = await new AuditEventRepository(db).list({ tenantId, limit: 50 });
+    assert.ok(planAudits.some((event) =>
+      event.action === 'policy.resolve.allowed'
+      && event.target_type === 'tenant_runtime_policy'
+      && auditPayloadString(event, 'execution_plan_ref') === flowPlan.execution_plan_ref),
+    'tenant policy resolve audit should exist for the FlowExecutionPlan');
+    assert.ok(planAudits.some((event) =>
+      event.action === 'policy.snapshot.derived'
+      && auditPayloadString(event, 'execution_plan_ref') === agentRun.execution_plan_ref),
+    'agent child tenant policy snapshot audit should exist');
+    assert.ok(taskAudits.some((event) => event.action === 'tool.invoke' && event.target_id === 'company.policy.lookup'), 'tool invoke audit should exist');
+
+    const humanTasks = await new HumanTaskRepository(db).list({ tenantId, taskRunId: task.task_run_id, limit: 20 });
+    assert.equal(humanTasks.length, 0, 'L1 HTTP readonly tool should not create HumanTask');
+    assertNoSecrets({ toolCalls, taskAudits, planAudits, policySnapshots });
+
     console.log(JSON.stringify({
       ok: true,
-      semantic_stage: false,
+      semantic_stage: true,
+      flow_started: true,
+      agent_child_started: true,
       http_tool_called: true,
       external_request_count: stats.request_count,
       task_run_id: task.task_run_id,
@@ -107,58 +216,67 @@ async function main() {
   }
 }
 
-async function seedAgentPlan(db: ReturnType<typeof createDb>): Promise<string> {
+async function publishSmokeResources(db: ReturnType<typeof createDb>): Promise<{
+  promptId: string;
+  modelPolicyId: string;
+  agentId: string;
+  flowId: string;
+  routeId: string;
+}> {
   const modelPolicyId = `http_readonly_tool_model_${runId}`;
   const promptId = `http_readonly_tool_prompt_${runId}`;
   const agentId = `http_readonly_tool_agent_${runId}`;
-  const publishedModelPolicy = await seedModelPolicy(db, modelPolicyId);
+  const flowId = `http_readonly_tool_flow_${runId}`;
+  const routeId = `http_readonly_tool_route_${runId}`;
+
+  const publishedModelPolicy = await createAndPublishModelPolicy(modelPolicyId);
   const modelPolicyHash = hashModelPolicy(publishedModelPolicy);
-  await new ToolManifestRepository(db).upsert(httpReadonlyToolManifest(), {
-    tenantId,
-    status: 'published',
-    createdBy: 'http-readonly-smoke',
+  await createAndPublishRegistry('prompts', promptId, 1, {
+    prompt_id: promptId,
+    version: 1,
+    name: 'HTTP readonly tool smoke prompt',
+    content: '你是 HTTP 只读工具烟测智能体。必须调用 company.policy.lookup 工具查询政策。收到工具结果后，用中文总结差旅费用报销政策。',
+    variables: [],
+    status: 'draft',
   });
-  await upsertPromptDefinition(
-    db,
-    {
-      prompt_id: promptId,
-      version: 1,
-      name: 'HTTP readonly tool smoke prompt',
-      content: '你是 HTTP 只读工具烟测智能体。需要使用公司政策查询工具回答用户问题。',
-      variables: [],
-      status: 'published',
+  await createAndPublishRegistry('tools', 'company.policy.lookup', 1, httpReadonlyToolManifest());
+  await createAndPublishRegistry('agents', agentId, 1, {
+    agent_id: agentId,
+    version: 1,
+    prompt_ref: `${promptId}@1`,
+    model_policy: 'deterministic:readonly_tool',
+    model_policy_ref: {
+      model_policy_id: publishedModelPolicy.model_policy_id,
+      model_policy_version: publishedModelPolicy.version,
+      model_policy_hash: modelPolicyHash,
     },
-    { tenantId, status: 'published', createdBy: 'http-readonly-smoke' },
-  );
-  await upsertAgentSpec(
-    db,
-    {
-      agent_id: agentId,
-      version: 1,
-      prompt_ref: `${promptId}@1`,
-      model_policy: 'deterministic:readonly_tool',
-      model_policy_ref: {
-        model_policy_id: publishedModelPolicy.model_policy_id,
-        model_policy_version: publishedModelPolicy.version,
-        model_policy_hash: modelPolicyHash,
-      },
-      allowed_tools: ['company.policy.lookup@1.0.0'],
-      allowed_handoffs: [],
-      max_steps: 4,
-      max_tokens: 2000,
-      output_schema: 'http_readonly_tool_smoke_result_v1',
-      status: 'published',
-    },
-    { tenantId, status: 'published', createdBy: 'http-readonly-smoke' },
-  );
-  await seedTenantPolicy(db);
-  const plan = await new AgentExecutionPlanRepository(db).createForAgent({
-    tenantId,
-    agentId,
-    agentVersion: 1,
-    operatorId: 'http-readonly-smoke',
+    allowed_tools: ['company.policy.lookup@1.0.0'],
+    allowed_handoffs: [],
+    max_steps: 4,
+    max_tokens: 2000,
+    output_schema: 'http_readonly_tool_smoke_result_v1',
+    status: 'draft',
   });
-  return plan.execution_plan_ref;
+  await createRegistryDraft('flows', flowId, flowSpec(flowId, agentId));
+  await createRegistryDraft('routes', routeId, routeSpec(routeId, flowId));
+  await postControlPlaneJson(
+    `${controlPlaneUrl}/api/v1/releases/flow-route`,
+    {
+      flow_id: flowId,
+      flow_version: 1,
+      route_id: routeId,
+      route_version: 1,
+      release_note: 'publish HTTP readonly tool semantic route smoke',
+      metadata_json: { smoke: 'http-readonly-tool-e2e' },
+    },
+    adminHeaders,
+  );
+  await createAndPublishTenantPolicy();
+
+  const plan = await new FlowExecutionPlanRepository(db).getLatestForFlow(flowId, 1, { tenantId });
+  assert.ok(plan, 'Flow publish should create FlowExecutionPlan');
+  assert.ok(plan.agents[0]?.agent_execution_plan_ref, 'FlowExecutionPlan should contain AgentExecutionPlan ref');
+  return { promptId, modelPolicyId, agentId, flowId, routeId };
 }
 
 function httpReadonlyToolManifest(): ToolManifest {
@@ -192,49 +310,60 @@ function httpReadonlyToolManifest(): ToolManifest {
   };
 }
 
-async function seedModelPolicy(db: ReturnType<typeof createDb>, modelPolicyId: string) {
-  const repository = new ModelPolicyRepository(db);
-  const catalog = await ensureModelCatalogEntry(db, {
-    profileId: 'local-deterministic',
-    displayName: 'Local deterministic development model gateway',
-    baseUrl: process.env.SEED_DETERMINISTIC_MODEL_GATEWAY_BASE_URL ?? 'http://mock-server:4100',
-    authType: 'none',
-    modelId: 'deterministic:readonly_tool',
-    upstreamModelId: 'deterministic:readonly_tool',
-    provider: 'local-mock',
-    capabilities: ['text', 'tools', 'usage'],
-    operatorId: 'http-readonly-smoke',
-  });
-  await repository.createDraft(
-    {
-      model_policy_id: modelPolicyId,
-      version: 1,
-      status: 'draft',
-      protocol: 'openai_chat_completions',
-      targets: [{ target_id: `${modelPolicyId}_primary`, model_ref: catalog.model_ref, priority: 0, enabled: true }],
-      retry_policy: {
-        max_attempts_per_target: 2,
-        retryable_status_codes: [429, 500, 502, 503, 504],
-        retry_on_timeout: true,
-        retry_on_network_error: true,
-        backoff_ms: 10,
-        max_backoff_ms: 50,
-      },
-      fallback_policy: { enabled: false, ordered_target_ids: [], eligible_error_classes: [], stop_on_auth_error: true, stop_on_validation_error: true, stop_on_policy_denial: true },
-      request_policy: { temperature: 0, top_p: 1, max_output_tokens: 1000, initial_tool_choice_mode: 'auto', after_tool_result_tool_choice_mode: 'auto', response_format: 'text', allow_parallel_tool_calls: false },
-      revision: 1,
-    },
-    { tenantId, operatorId: 'http-readonly-smoke' },
+async function createAndPublishModelPolicy(modelPolicyId: string): Promise<ModelPolicy> {
+  const model = await getControlPlaneJson<ModelDefinition>(
+    `${controlPlaneUrl}/api/v1/models/deterministic-final-only/versions/1`,
+    operatorHeaders,
   );
-  return repository.publish(modelPolicyId, 1, {
-    tenantId,
-    operatorId: 'http-readonly-smoke',
-    releaseNote: 'HTTP readonly tool smoke model policy',
-  });
+  assert.equal(model.status, 'published', 'deterministic-final-only model definition should be seeded and published');
+  const policy = {
+    model_policy_id: modelPolicyId,
+    version: 1,
+    status: 'draft',
+    protocol: 'openai_chat_completions',
+    targets: [{
+      target_id: `${modelPolicyId}_primary`,
+      model_ref: {
+        model_id: model.model_id,
+        version: model.version,
+        model_hash: model.model_hash,
+      },
+      priority: 0,
+      enabled: true,
+    }],
+    retry_policy: {
+      max_attempts_per_target: 2,
+      retryable_status_codes: [429, 500, 502, 503, 504],
+      retry_on_timeout: true,
+      retry_on_network_error: true,
+      backoff_ms: 10,
+      max_backoff_ms: 50,
+    },
+    fallback_policy: {
+      enabled: false,
+      ordered_target_ids: [],
+      eligible_error_classes: [],
+      stop_on_auth_error: true,
+      stop_on_validation_error: true,
+      stop_on_policy_denial: true,
+    },
+    request_policy: {
+      temperature: 0,
+      top_p: 1,
+      max_output_tokens: 1000,
+      initial_tool_choice_mode: 'auto',
+      after_tool_result_tool_choice_mode: 'auto',
+      response_format: 'text',
+      allow_parallel_tool_calls: false,
+    },
+    revision: 1,
+  };
+  await createRegistryDraft('model-policies', modelPolicyId, policy);
+  await publishRegistry('model-policies', modelPolicyId, 1, adminHeaders);
+  return getRegistryVersion<ModelPolicy>('model-policies', modelPolicyId, 1);
 }
 
-async function seedTenantPolicy(db: ReturnType<typeof createDb>): Promise<void> {
-  const repository = new TenantRuntimePolicyRepository(db);
+async function createAndPublishTenantPolicy(): Promise<void> {
   const policy = tenantRuntimePolicySchema.parse({
     tenant_id: tenantId,
     version: 1,
@@ -261,12 +390,10 @@ async function seedTenantPolicy(db: ReturnType<typeof createDb>): Promise<void> 
     },
     max_concurrent_agent_runs: 2,
   });
-  await repository.createDraft(policy, { tenantId, operatorId: 'http-readonly-smoke' });
-  await repository.publish(tenantId, policy.version, {
-    tenantId,
-    operatorId: 'http-readonly-smoke',
-    releaseNote: 'HTTP readonly tool smoke tenant policy',
-  });
+  await createRegistryDraft('tenant-runtime-policies', tenantId, policy);
+  await publishRegistry('tenant-runtime-policies', tenantId, 1, adminHeaders);
+  const published = await getRegistryVersion<ReturnType<typeof tenantRuntimePolicySchema.parse>>('tenant-runtime-policies', tenantId, 1);
+  assert.equal(published.status, 'published');
 }
 
 async function pollTask(taskRunId: string): Promise<TaskRun> {
@@ -291,7 +418,87 @@ async function checkHealth(url: string, appName: string): Promise<void> {
   assert.equal(response.ok, true, `${appName} healthz failed: ${response.status} ${await response.text()}`);
 }
 
-async function postJson<T = unknown>(url: string, payload: unknown): Promise<T> {
+async function createAndPublishRegistry(
+  plural: string,
+  resourceId: string,
+  version: number,
+  spec: unknown,
+): Promise<void> {
+  await createRegistryDraft(plural, resourceId, spec);
+  await publishRegistry(plural, resourceId, version, adminHeaders);
+}
+
+async function createRegistryDraft(plural: string, _resourceId: string, spec: unknown): Promise<void> {
+  await postControlPlaneJson(`${controlPlaneUrl}/api/v1/${plural}`, { spec }, operatorHeaders);
+}
+
+async function publishRegistry(
+  plural: string,
+  resourceId: string,
+  version: number,
+  headers: Record<string, string>,
+): Promise<void> {
+  await postControlPlaneJson(
+    `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}/publish`,
+    { release_note: `publish ${resourceId}@${version}` },
+    headers,
+  );
+}
+
+async function getRegistryVersion<T>(plural: string, resourceId: string, version: number): Promise<T> {
+  const record = await getControlPlaneJson<{ spec: T }>(
+    `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}`,
+    operatorHeaders,
+  );
+  return record.spec;
+}
+
+function flowSpec(flowId: string, agentId: string): FlowSpec {
+  return {
+    flow_id: flowId,
+    version: 1,
+    name: 'HTTP readonly semantic route flow',
+    status: 'draft',
+    runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
+    input_schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+    steps: [{
+      id: 'policy_agent',
+      type: 'agent',
+      agent_id: agentId,
+      input: {
+        agent_version: 1,
+        text: '${input.text}',
+      },
+    }],
+  };
+}
+
+function routeSpec(routeId: string, flowId: string) {
+  return {
+    route_id: routeId,
+    flow_id: flowId,
+    version: 1,
+    status: 'draft',
+    route: {
+      priority: 80,
+      keywords: ['差旅制度'],
+      examples: ['查询公司费用报销政策', '了解出差费用规则'],
+      negative_examples: ['不要查询报销政策'],
+      supported_channels: [routeChannel],
+      role_constraints: [],
+      confidence_threshold: 0.7,
+      ambiguous_threshold: 0.5,
+    },
+  };
+}
+
+function assertSemanticEnvironment(): void {
+  if ((process.env.ROUTER_SEMANTIC_ENABLED ?? '').toLowerCase() === 'false') {
+    throw new Error('HTTP readonly smoke requires semantic router enabled; use ROUTER_SEMANTIC_ENABLED=true');
+  }
+}
+
+async function postRuntimeJson<T = unknown>(url: string, payload: unknown): Promise<T> {
   const response = await fetch(url, {
     method: 'POST',
     headers: { ...runtimeHeaders, 'content-type': 'application/json' },
@@ -300,6 +507,35 @@ async function postJson<T = unknown>(url: string, payload: unknown): Promise<T> 
   const body = (await response.json()) as StandardResponse<T>;
   if (!response.ok || body.success !== true) {
     throw new Error(`POST ${url} failed: ${response.status} ${JSON.stringify(body)}`);
+  }
+  return body.data;
+}
+
+async function postControlPlaneJson<T = unknown>(
+  url: string,
+  payload: unknown,
+  headers: Record<string, string>,
+): Promise<T> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { ...headers, 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const body = (await response.json()) as StandardResponse<T>;
+  if (!response.ok || body.success !== true) {
+    throw new Error(`POST ${url} failed: ${response.status} ${JSON.stringify(body)}`);
+  }
+  return body.data;
+}
+
+async function getControlPlaneJson<T = unknown>(
+  url: string,
+  headers: Record<string, string>,
+): Promise<T> {
+  const response = await fetch(url, { headers });
+  const body = (await response.json()) as StandardResponse<T>;
+  if (!response.ok || body.success !== true) {
+    throw new Error(`GET ${url} failed: ${response.status} ${JSON.stringify(body)}`);
   }
   return body.data;
 }
@@ -323,6 +559,32 @@ async function getRawJson<T>(url: string): Promise<T> {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, '');
+}
+
+function authHeaders(role: string, traceRequestId: string): Record<string, string> {
+  return {
+    'x-user-id': userId,
+    'x-tenant-id': tenantId,
+    'x-roles': role,
+    'x-request-id': traceRequestId,
+    'accept-language': 'zh-CN',
+  };
+}
+
+function auditPayloadString(event: AuditEvent, key: string): string | undefined {
+  const value = event.payload[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function assertNoSecrets(input: {
+  toolCalls: unknown[];
+  taskAudits: AuditEvent[];
+  planAudits: AuditEvent[];
+  policySnapshots: TenantRuntimePolicySnapshot[];
+}): void {
+  const serialized = JSON.stringify(input);
+  assert.equal(serialized.includes('business-read-secret'), false, 'secret value must not appear in DB evidence');
+  assert.equal(/Bearer\s+business-read-secret/u.test(serialized), false, 'Authorization secret must not appear in DB evidence');
 }
 
 main().catch((error: unknown) => {
