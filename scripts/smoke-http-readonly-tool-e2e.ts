@@ -79,11 +79,15 @@ async function main() {
     assert.equal(toolCalls[0]?.adapter_type, 'http_readonly');
     assert.equal((toolCalls[0]?.result_json as { items?: Array<{ id?: string }> } | undefined)?.items?.[0]?.id, 'policy-1');
 
-    const idempotencyKey = toolCalls[0]?.idempotency_key;
+    const toolCall = toolCalls[0];
+    assert.ok(toolCall, 'ToolCall should exist');
+    const idempotencyKey = toolCall.idempotency_key;
     assert.ok(idempotencyKey, 'ToolCall should record idempotency_key');
-    const idempotency = await new IdempotencyRecordRepository(db).get(idempotencyKey);
-    assert.ok(idempotency, `idempotency record should exist: ${idempotencyKey}`);
+    const idempotencyRecordKey = `${tenantId}:${toolCall.tool_name}:invoke:${idempotencyKey}`;
+    const idempotency = await new IdempotencyRecordRepository(db).get(idempotencyRecordKey);
+    assert.ok(idempotency, `idempotency record should exist: ${idempotencyRecordKey}`);
     assert.equal(idempotency.status, 'succeeded');
+    assert.equal((idempotency.response_json as { idempotency_key?: string } | undefined)?.idempotency_key, idempotencyKey);
 
     const stats = await getRawJson<{ request_count: number; last_authorization: string }>(`${mockServerUrl}/business-api/v1/stats`);
     assert.equal(stats.request_count, 1, `external request_count should be 1, got ${stats.request_count}`);
@@ -192,8 +196,8 @@ async function seedModelPolicy(db: ReturnType<typeof createDb>, modelPolicyId: s
   const repository = new ModelPolicyRepository(db);
   const catalog = await ensureModelCatalogEntry(db, {
     profileId: 'local-deterministic',
-    displayName: 'Local deterministic HTTP readonly smoke model',
-    baseUrl: 'http://mock-server:4100',
+    displayName: 'Local deterministic development model gateway',
+    baseUrl: process.env.SEED_DETERMINISTIC_MODEL_GATEWAY_BASE_URL ?? 'http://mock-server:4100',
     authType: 'none',
     modelId: 'deterministic:readonly_tool',
     upstreamModelId: 'deterministic:readonly_tool',

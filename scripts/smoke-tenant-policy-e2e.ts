@@ -188,8 +188,8 @@ async function seedModelPolicy(
   const repository = new ModelPolicyRepository(db);
   const catalog = await ensureModelCatalogEntry(db, {
     profileId: 'local-deterministic',
-    displayName: `Deterministic ${displayPolicy}`,
-    baseUrl: 'http://mock-server:4100',
+    displayName: 'Local deterministic development model gateway',
+    baseUrl: process.env.SEED_DETERMINISTIC_MODEL_GATEWAY_BASE_URL ?? 'http://mock-server:4100',
     authType: 'none',
     modelId: displayPolicy,
     upstreamModelId: displayPolicy,

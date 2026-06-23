@@ -241,8 +241,10 @@ async function seedModelPolicy(
     profileId: mode === 'model_gateway' ? modelGatewayProvider : 'local-deterministic',
     displayName: mode === 'model_gateway'
       ? `${modelGatewayProvider} ${modelGatewayModel}`
-      : `Deterministic ${displayPolicy}`,
-    baseUrl: mode === 'model_gateway' ? modelGatewayBaseUrl : 'http://mock-server:4100',
+      : 'Local deterministic development model gateway',
+    baseUrl: mode === 'model_gateway'
+      ? modelGatewayBaseUrl
+      : process.env.SEED_DETERMINISTIC_MODEL_GATEWAY_BASE_URL ?? 'http://mock-server:4100',
     authType: 'none',
     modelId: mode === 'model_gateway' ? modelGatewayModel : displayPolicy,
     upstreamModelId: mode === 'model_gateway' ? modelGatewayModel : displayPolicy,
