@@ -181,6 +181,10 @@ export const runtimeConfigSchema = z.object({
   TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED: booleanEnvSchema(false),
   TOOL_GATEWAY_RUNTIME_WORKER_TOKEN: optionalStringSchema,
   TOOL_GATEWAY_CONTROL_PLANE_TOKEN: optionalStringSchema,
+  TOOL_HTTP_ALLOWED_HOSTS: z.preprocess(emptyToUndefined, z.string().default('')),
+  TOOL_HTTP_ALLOW_INSECURE_LOCALHOST: booleanEnvSchema(false),
+  TOOL_HTTP_MAX_TIMEOUT_MS: positiveIntSchema(15_000),
+  TOOL_HTTP_MAX_RESPONSE_BYTES: positiveIntSchema(1_048_576),
   RUNTIME_WORKER_TOOL_GATEWAY_TOKEN: optionalStringSchema,
   CONTROL_PLANE_TOOL_GATEWAY_TOKEN: optionalStringSchema,
   CONTROL_PLANE_AUTH_MODE: z.preprocess(

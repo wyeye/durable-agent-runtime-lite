@@ -7,6 +7,7 @@ import type {
   RegistryValidationIssue,
   RegistryValidationResult,
   RegistryResourceType,
+  ToolManifest,
 } from '@dar/contracts';
 import {
   agentSpecSchema,
@@ -161,7 +162,7 @@ export class RegistryValidationService {
 
     addNode(context, { resource_type: 'tool', resource_id: parsed.tool_name, version: parsed.version, status: parsed.status });
     validateJsonSchema(parsed.input_schema, context, 'TOOL_INPUT_SCHEMA_INVALID', 'input_schema');
-    validateJsonSchema(parsed.output_schema, context, 'TOOL_OUTPUT_SCHEMA_INVALID', 'output_schema');
+  validateJsonSchema(parsed.output_schema, context, 'TOOL_OUTPUT_SCHEMA_INVALID', 'output_schema');
     if (parsed.side_effect && (parsed.risk_level === 'L0' || parsed.risk_level === 'L1')) {
       addError(context, 'TOOL_SIDE_EFFECT_RISK_TOO_LOW', 'Side-effect tools must not use L0/L1 risk', 'risk_level');
     }
@@ -174,6 +175,7 @@ export class RegistryValidationService {
     if (!parsed.adapter.type) {
       addError(context, 'TOOL_ADAPTER_TYPE_REQUIRED', 'adapter.type is required', 'adapter.type');
     }
+    validateHttpReadonlyTool(parsed, context);
     detectSecrets(parsed, context, 'TOOL_MANIFEST_CONTAINS_SECRET', 'manifest');
 
     return buildResult(context);
@@ -341,6 +343,66 @@ function validateSafeStringArray(values: string[], context: ValidationContext, c
     if (!/^[A-Za-z0-9_.:-]+$/u.test(value)) {
       addError(context, code, `Invalid value: ${value}`, path);
     }
+  }
+}
+
+function validateHttpReadonlyTool(tool: ToolManifest, context: ValidationContext): void {
+  if (tool.adapter.type !== 'http_readonly') {
+    return;
+  }
+  if (tool.side_effect) {
+    addError(context, 'TOOL_HTTP_READONLY_SIDE_EFFECT_FORBIDDEN', '只读 HTTP 工具必须 side_effect=false', 'side_effect');
+  }
+  if (tool.risk_level !== 'L0' && tool.risk_level !== 'L1') {
+    addError(context, 'TOOL_HTTP_READONLY_RISK_INVALID', '只读 HTTP 工具仅允许 L0/L1 风险等级', 'risk_level');
+  }
+  if (!tool.output_schema) {
+    addError(context, 'TOOL_HTTP_READONLY_OUTPUT_SCHEMA_REQUIRED', '只读 HTTP 工具必须配置 output_schema', 'output_schema');
+  }
+  const url = parseUrl(tool.adapter.base_url);
+  if (!url || (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== 'mock-server')) {
+    addError(context, 'TOOL_HTTP_URL_INVALID', '只读 HTTP 工具 base_url 必须是 HTTPS，测试环境仅允许 localhost/mock-server', 'adapter.base_url');
+  }
+  if (url && (url.username || url.password || url.hash)) {
+    addError(context, 'TOOL_HTTP_URL_INVALID', '只读 HTTP 工具 URL 不能包含用户名、密码或 fragment', 'adapter.base_url');
+  }
+  if (!tool.adapter.path.startsWith('/')) {
+    addError(context, 'TOOL_HTTP_PATH_INVALID', '只读 HTTP 工具 path 必须以 / 开头', 'adapter.path');
+  }
+  const inputProperties = isRecord(tool.input_schema?.properties)
+    ? Object.keys(tool.input_schema.properties)
+    : [];
+  for (const argumentName of Object.values(tool.adapter.query_mapping ?? {})) {
+    if (!inputProperties.includes(argumentName)) {
+      addError(context, 'TOOL_HTTP_QUERY_MAPPING_INVALID', `Query mapping 引用的入参不存在：${argumentName}`, 'adapter.query_mapping');
+    }
+  }
+  const auth = tool.adapter.auth ?? { type: 'none' as const };
+  if (auth.type !== 'none' && !/^env:TOOL_SECRET_[A-Z0-9_]+$/u.test(auth.secret_ref)) {
+    addError(context, 'TOOL_HTTP_SECRET_REF_INVALID', 'secret_ref 必须形如 env:TOOL_SECRET_NAME', 'adapter.auth.secret_ref');
+  }
+  if (auth.type === 'api_key_env' && !['Authorization', 'X-API-Key', 'X-Api-Key', 'Api-Key', 'X-Auth-Token'].includes(auth.header_name)) {
+    addError(context, 'TOOL_HTTP_HEADER_NAME_INVALID', 'API Key Header 名不在安全白名单内', 'adapter.auth.header_name');
+  }
+  if (tool.adapter.timeout_ms <= 0 || tool.adapter.timeout_ms > 15_000) {
+    addError(context, 'TOOL_HTTP_TIMEOUT_INVALID', 'timeout_ms 必须在 1 到 15000 之间', 'adapter.timeout_ms');
+  }
+  if (tool.adapter.max_response_bytes <= 0 || tool.adapter.max_response_bytes > 1_048_576) {
+    addError(context, 'TOOL_HTTP_RESPONSE_LIMIT_INVALID', 'max_response_bytes 必须在 1 到 1048576 之间', 'adapter.max_response_bytes');
+  }
+  if (tool.adapter.retry.max_attempts <= 0 || tool.adapter.retry.max_attempts > 5) {
+    addError(context, 'TOOL_HTTP_RETRY_INVALID', 'retry.max_attempts 必须在 1 到 5 之间', 'adapter.retry.max_attempts');
+  }
+  if (tool.evaluation_policy?.mode === 'sandbox_commit') {
+    addError(context, 'TOOL_HTTP_EVALUATION_SANDBOX_FORBIDDEN', '只读 HTTP 工具不支持 evaluation sandbox_commit', 'evaluation_policy.mode');
+  }
+}
+
+function parseUrl(value: string): URL | undefined {
+  try {
+    return new URL(value);
+  } catch {
+    return undefined;
   }
 }
 

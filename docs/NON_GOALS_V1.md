@@ -10,6 +10,7 @@ The following remain outside V1 unless explicitly approved:
 - Complex visual flow designer.
 - Full AR-2B Temporal evaluation runner, Ollama evaluation E2E, and evaluation UI pages until explicitly completed.
 - AR-2C semantic routing expansion.
-- Real business-system adapters.
+- Write-side business adapters or domain-specific business adapters.
+- HTTP write tools, MCP tools, OAuth-backed tools, browser automation tools, SQL tools, and dynamic arbitrary-header HTTP tools.
 - Production use of `devtools/mock-server`.
 - Production fallback to memory registry, sample flows, default tools, deterministic Pi, mock Model Gateway, latest model policy, or unrelated data.

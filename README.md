@@ -15,7 +15,7 @@ Durable Agent Runtime Lite 是一个四应用通用 Agent Runtime 骨架：
 | `apps/control-plane`  | 能力运营端，Registry 管理 API、运营查询 BFF、OpenAPI、Vite 静态资源托管                              |
 | `apps/runtime-api`    | 统一运行入口，规则 Router、TaskRun、Workflow Starter                                                 |
 | `apps/runtime-worker` | Temporal Worker 入口、ConfigDrivenWorkflow、GenericAgentWorkflow、Activity、Pi Agent Core 分段运行时 |
-| `apps/tool-gateway`   | 工具唯一出口，Manifest、Schema 校验、幂等、审计、mock adapter                                        |
+| `apps/tool-gateway`   | 工具唯一出口，Manifest、Schema 校验、幂等、审计、mock adapter 与通用只读 HTTP adapter                |
 
 核心约束：生产 app 只能是以上 4 个；工具调用必须经 `tool-gateway`；`runtime-worker` 不直连业务系统；Temporal Workflow 只保留确定性编排。
 
@@ -53,6 +53,8 @@ LOG_LOCALE=zh-CN
 Control-plane 可写配置使用可视化表单作为唯一编辑入口，JSON 仅保留只读查看、复制和下载。Registry、Evaluation Dataset、Case 和 Gate Policy 表单最终仍生成现有 Contract 对象并通过服务端校验；精确版本引用不使用 `latest` 或默认资源兜底。详见 `docs/56_visual_configuration.md`。
 
 Model Catalog MVP 将 OpenAI-compatible 模型网关从单一部署级环境变量迁移为 DB-backed Registry 数据：`control-plane` 管理 `ModelGatewayProfile` 和 `ModelDefinition`，API Key 使用 `MODEL_CREDENTIAL_MASTER_KEY` 做 AES-256-GCM 加密后存 PostgreSQL；`ModelPolicy` 只能选择已发布模型的精确 `model_ref`；`runtime-worker` 在 AgentRun 时从 DB 动态解析网关、模型和当前凭据。新增网关、切换模型、跨网关 fallback 和凭据轮换均不需要重启 worker。详见 `docs/58_model_gateway_mvp.md` 和 `docs/59_model_catalog.md`。
+
+Tool Gateway 支持 `http_readonly` 通用只读 HTTP Tool Adapter。该 adapter 只允许 GET、L0/L1、`side_effect=false`，固定 `base_url` / `path` 来自 ToolManifest，调用参数只能映射为 query；生产默认只允许 HTTPS 和 `TOOL_HTTP_ALLOWED_HOSTS` 中的显式 Host。凭据只通过 `env:TOOL_SECRET_*` 引用读取，不写入 ToolManifest、DB、日志或响应。详见 `docs/61_http_readonly_tool_adapter.md`。
 
 DB-backed registry 模式：
 
@@ -139,6 +141,8 @@ runtime-worker:
 tool-gateway:
   TOOL_GATEWAY_REGISTRY_SOURCE=db
   DATABASE_URL=postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
+  TOOL_HTTP_ALLOWED_HOSTS=
+  TOOL_HTTP_ALLOW_INSECURE_LOCALHOST=false
 
 control-plane:
   CONTROL_PLANE_AUTH_MODE=header
@@ -160,9 +164,11 @@ corepack pnpm smoke:pi-restart-resume-e2e
 corepack pnpm smoke:pi-worker-crash-resume-e2e
 corepack pnpm smoke:pi-model-gateway-e2e
 corepack pnpm smoke:model-catalog-multi-gateway-e2e
+corepack pnpm smoke:http-readonly-tool-e2e
 ```
 
 这些 smoke 通过 `/v1/agent-tasks` 使用真实 Pi Agent Core。deterministic 模式只替换模型流，不替换 Pi 内循环；model-gateway smoke 使用 `devtools/mock-server` 的 OpenAI-compatible `/v1/chat/completions` 返回结构化 tool call。
+`smoke:http-readonly-tool-e2e` 还会通过 Tool Gateway 的 `http_readonly` adapter 调用 `devtools/mock-server` 中的外部 HTTP 模拟 API，并检查 ToolCall、Audit、Idempotency 和外部 request count。
 
 受保护 live Model Gateway probe：
 

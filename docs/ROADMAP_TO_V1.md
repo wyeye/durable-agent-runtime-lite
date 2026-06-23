@@ -19,6 +19,7 @@ Required before first RC:
 - Prove live final, readonly tool, and L3 tool paths through runtime-api, Temporal, runtime-worker, Tool Gateway, and Pi.
 - Add live model workflow dispatch using GitHub environment secrets.
 - Finish local fallback/crash model-gateway smoke coverage for provider response persistence and replay.
+- Finish PILOT-HTTP-TOOL-1 full semantic route -> Flow/Agent -> Pi -> HTTP readonly tool E2E evidence before promoting the pilot beyond MVP status.
 
 ## V1 GA
 

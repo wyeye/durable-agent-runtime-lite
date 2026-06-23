@@ -9,6 +9,8 @@ import {
   InMemoryToolCallLogStore,
   ToolService,
 } from '../src/modules/tool-service.js';
+import { adapterError } from '../src/modules/adapter-errors.js';
+import { ToolAdapterDispatcher } from '../src/modules/tool-adapter-dispatcher.js';
 
 class MutableRegistry implements ToolManifestRegistry {
   readonly calls: Array<{ toolName?: string; tenantId?: string; toolVersion?: string }> = [];
@@ -127,6 +129,36 @@ const l4Tool: ToolManifest = {
   input_schema: {
     type: 'object',
     properties: {},
+  },
+  required_permissions: [],
+  status: 'published',
+};
+
+const httpReadonlyTool: ToolManifest = {
+  tool_name: 'company.policy.lookup',
+  version: '1.0.0',
+  description: 'Readonly company policy lookup',
+  risk_level: 'L1',
+  side_effect: false,
+  adapter: {
+    type: 'http_readonly',
+    base_url: 'http://localhost:4100',
+    path: '/business-api/v1/policies',
+    query_mapping: { keyword: 'keyword' },
+    auth: { type: 'none' },
+    timeout_ms: 1000,
+    max_response_bytes: 4096,
+    retry: { max_attempts: 1, retryable_status_codes: [], backoff_ms: 0 },
+  },
+  input_schema: {
+    type: 'object',
+    required: ['keyword'],
+    properties: { keyword: { type: 'string' } },
+  },
+  output_schema: {
+    type: 'object',
+    required: ['items'],
+    properties: { items: { type: 'array' } },
   },
   required_permissions: [],
   status: 'published',
@@ -327,6 +359,136 @@ describe('tool-gateway invoke', () => {
       policy: { decision: 'require_human_confirm', risk_level: 'L3' },
     });
     expect(response.json().data.result).toBeUndefined();
+    await server.close();
+  });
+
+  it('dispatches http_readonly tools through ToolAdapterDispatcher and records audit/idempotency', async () => {
+    const registry = new MutableRegistry([httpReadonlyTool]);
+    const adapterDispatcher = new ToolAdapterDispatcher({
+      adapters: {
+        http_readonly: {
+          async invoke(input) {
+            expect(input.manifest.tool_name).toBe('company.policy.lookup');
+            expect(input.arguments).toEqual({ keyword: '差旅' });
+            return { items: [{ id: 'policy-1', title: '差旅报销政策' }] };
+          },
+        },
+      },
+    });
+    const server = buildServer(new ToolService({ registry, adapterDispatcher }));
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/company.policy.lookup/invoke',
+      payload: {
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_http_1', workflow_id: 'wf_http_1' },
+        arguments: { keyword: '差旅' },
+        idempotency_key: 'task_http_1:company.policy.lookup',
+        request_id: 'req_http_1',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      status: 'succeeded',
+      result: { items: [{ id: 'policy-1' }] },
+    });
+    const toolCall = await server.inject({ method: 'GET', url: `/v1/tool-calls/${response.json().data.tool_call_id}` });
+    expect(toolCall.json().data).toMatchObject({
+      adapter_type: 'http_readonly',
+      status: 'committed',
+      result_json: { items: [{ id: 'policy-1' }] },
+    });
+    const replay = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/company.policy.lookup/invoke',
+      payload: {
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_http_1', workflow_id: 'wf_http_1' },
+        arguments: { keyword: '差旅' },
+        idempotency_key: 'task_http_1:company.policy.lookup',
+        request_id: 'req_http_1',
+      },
+    });
+    expect(replay.json().data.tool_call_id).toBe(response.json().data.tool_call_id);
+    await server.close();
+  });
+
+  it('denies http_readonly commit and leaves L3 mock path unchanged', async () => {
+    const registry = new MutableRegistry([httpReadonlyTool]);
+    const toolCallLogStore = new InMemoryToolCallLogStore();
+    const previewToolCall = await toolCallLogStore.create({
+      tool_call_id: 'tool_call_http_preview',
+      tenant_id: 'tenant_1',
+      tool_name: 'company.policy.lookup',
+      tool_version: '1.0.0',
+      risk_level: 'L1',
+      policy_decision: 'allow',
+      status: 'previewed',
+      mode: 'preview',
+      idempotency_key: 'task_http_commit:preview',
+      input_hash: 'hash',
+      adapter_type: 'http_readonly',
+    });
+    const server = buildServer(new ToolService({ registry, toolCallLogStore }));
+
+    const denied = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/company.policy.lookup/commit',
+      payload: {
+        tool_call_id: previewToolCall.tool_call_id,
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_http_commit' },
+        arguments: { keyword: '差旅' },
+        idempotency_key: 'task_http_commit:commit',
+      },
+    });
+
+    expect(denied.statusCode).toBe(400);
+    expect(denied.json().error.code).toBe('TOOL_ADAPTER_NOT_SUPPORTED');
+    await server.close();
+  });
+
+  it('maps unsupported adapter failures to stable tool errors with audit', async () => {
+    const registry = new MutableRegistry([httpReadonlyTool]);
+    const adapterDispatcher = new ToolAdapterDispatcher({
+      adapters: {
+        http_readonly: {
+          async invoke() {
+            throw adapterError('TOOL_HTTP_HOST_NOT_ALLOWED', 'HTTP 工具 Host 不在 Allowlist 中');
+          },
+        },
+      },
+    });
+    const server = buildServer(new ToolService({ registry, adapterDispatcher }));
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/tools/company.policy.lookup/invoke',
+      payload: {
+        tool_version: '1.0.0',
+        tenant_id: 'tenant_1',
+        user_context: { user_id: 'user_1' },
+        task_context: { task_run_id: 'task_http_denied' },
+        arguments: { keyword: '差旅' },
+        idempotency_key: 'task_http_denied:company.policy.lookup',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe('TOOL_HTTP_HOST_NOT_ALLOWED');
+    const audit = await server.inject({ method: 'GET', url: '/v1/audit-events' });
+    expect(audit.json().data[0]).toMatchObject({
+      result: 'denied',
+      reason: 'TOOL_HTTP_HOST_NOT_ALLOWED',
+    });
     await server.close();
   });
 

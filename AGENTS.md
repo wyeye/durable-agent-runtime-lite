@@ -244,6 +244,8 @@ Rules:
 - Write audit logs for allowed, denied, failed and idempotent replayed calls.
 - Never expose adapter secrets to Pi, runtime-api or frontend.
 - Do not add domain-specific tool logic directly into generic gateway core; use adapters.
+- The generic `http_readonly` adapter is GET-only, L0/L1-only and requires `side_effect=false`; Host, scheme and path must come from ToolManifest and platform allowlist, not user input.
+- `http_readonly` secrets must use `env:TOOL_SECRET_*` references only; never store real API keys in ToolManifest, DB, audit, logs, Temporal history or UI.
 
 Long-term note:
 

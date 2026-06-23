@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-06-22 for MODEL-CATALOG-MVP-1.
+Last updated: 2026-06-23 for PILOT-HTTP-TOOL-1 working-tree implementation.
 
 ## Platform Version
 
@@ -138,6 +138,23 @@ MODEL_GATEWAY_CLIENT_CACHE_TTL_MS=60000
 ```
 
 Deployment-level `MODEL_GATEWAY_BASE_URL`, `MODEL_GATEWAY_API_KEY`, `MODEL_GATEWAY_MODEL`, and `MODEL_GATEWAY_PROFILE_ID` are no longer production model-call facts for Runtime Worker. New model calls resolve through `model_definition` and `model_gateway_profile`. Development/test mock gateways are still only available through `infra/docker-compose.pi-smoke.yml` and `devtools/mock-server`.
+
+## PILOT HTTP Tool MVP
+
+**PILOT-HTTP-TOOL-1 IMPLEMENTED IN WORKING TREE, E2E VERIFICATION IN PROGRESS**
+
+This pass keeps the platform version at `0.8.0` and does not create a tag or release.
+
+Implemented in this pass:
+
+- `ToolManifest.adapter` is now a discriminated union of `mock` and `http_readonly`.
+- Tool Gateway has a `ToolAdapterDispatcher`, a GET-only `HttpReadonlyAdapter`, URL/SSRF policy, response sanitizer, output-schema validation, stable error codes, and Chinese i18n messages.
+- The adapter requires `side_effect=false`, risk `L0` / `L1`, explicit Host allowlist, JSON response, bounded timeout/retry, response-size limit, and runtime `env:TOOL_SECRET_*` references.
+- Control-plane Tool visual configuration supports the read-only HTTP adapter without exposing real secrets.
+- `devtools/mock-server` exposes a CI-only external HTTP business API simulation for policy lookup, auth, retry and failure cases.
+- `corepack pnpm smoke:http-readonly-tool-e2e` seeds a dedicated HTTP readonly tool and validates Pi -> Tool Gateway -> external HTTP API -> Tool Result evidence through the running stack.
+
+The current smoke is development/test-only and uses `devtools/mock-server`; it does not add a production app or production container.
 
 ## Smoke Commands
 

@@ -42,6 +42,58 @@ export function buildServer() {
 
   server.get('/healthz', async () => ({ status: 'ok', app: 'mock-server' }));
   server.get('/readyz', async () => ({ status: 'ready', app: 'mock-server' }));
+  server.post('/business-api/v1/reset', async () => {
+    businessApiRequestCount = 0;
+    lastBusinessApiAuthorization = undefined;
+    attempts.delete('business_api_rate_limit_then_success');
+    return { ok: true };
+  });
+  server.get('/business-api/v1/stats', async () => ({
+    request_count: businessApiRequestCount,
+    last_authorization: lastBusinessApiAuthorization === 'Bearer business-read-secret' ? 'bearer_ok' : 'invalid_or_missing',
+  }));
+  server.get('/business-api/v1/policies', async (request, reply) => {
+    businessApiRequestCount += 1;
+    lastBusinessApiAuthorization = request.headers.authorization;
+    if (!authorized(request.headers.authorization, ['business-read-secret'])) {
+      reply.code(401);
+      return { error: { code: 'unauthorized', message: 'Unauthorized' } };
+    }
+    const query = request.query as { keyword?: string; scenario?: string };
+    const scenario = query.scenario ?? query.keyword;
+    if (scenario === 'rate_limit_then_success') {
+      const count = incrementAttempt('business_api_rate_limit_then_success');
+      if (count === 1) {
+        reply.code(429);
+        return { error: { code: 'rate_limited', message: 'deterministic rate limit' } };
+      }
+    }
+    if (scenario === '503') {
+      reply.code(503);
+      return { error: { code: 'temporarily_unavailable', message: 'Business API unavailable' } };
+    }
+    if (scenario === 'timeout') {
+      await new Promise((resolve) => setTimeout(resolve, 60_000));
+    }
+    if (scenario === 'invalid_json') {
+      reply.hijack();
+      reply.raw.writeHead(200, { 'content-type': 'application/json' });
+      reply.raw.end('{not-json');
+      return reply;
+    }
+    if (scenario === 'oversized') {
+      return { items: [{ id: 'policy-big', title: '超大政策', summary: 'x'.repeat(2_000_000) }] };
+    }
+    return {
+      items: [
+        {
+          id: 'policy-1',
+          title: '差旅报销政策',
+          summary: `差旅费用可按制度提交报销，关键词：${query.keyword ?? ''}`,
+        },
+      ],
+    };
+  });
 
   server.post('/v1/generate', async (request, reply) => {
     const body = request.body as GenerateRequest;
@@ -138,6 +190,8 @@ export function buildServer() {
 }
 
 const attempts = new Map<string, number>();
+let businessApiRequestCount = 0;
+let lastBusinessApiAuthorization: string | undefined;
 
 function incrementAttempt(key: string): number {
   const next = (attempts.get(key) ?? 0) + 1;

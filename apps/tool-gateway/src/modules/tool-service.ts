@@ -42,8 +42,9 @@ import {
   assertSnapshotAllowsTool,
 } from '@dar/db';
 import { InMemoryAuditStore, type AuditStore } from './audit.js';
-import { invokeMockAdapter } from './mock-adapter.js';
+import { ToolAdapterError } from './adapter-errors.js';
 import { validateArguments } from './schema-validator.js';
+import { ToolAdapterDispatcher } from './tool-adapter-dispatcher.js';
 import { InMemoryToolManifestRegistry, type ToolManifestRegistry } from './tool-registry.js';
 
 export interface HumanTaskLookupStore {
@@ -94,6 +95,7 @@ export interface ToolServiceOptions {
   humanTaskStore?: HumanTaskLookupStore;
   tenantPolicySnapshotStore?: TenantPolicySnapshotLookupStore;
   tenantPolicyMode?: 'required' | 'optional';
+  adapterDispatcher?: ToolAdapterDispatcher;
 }
 
 export class InMemoryToolCallLogStore implements ToolCallLogStore {
@@ -242,6 +244,7 @@ export class ToolService {
   private readonly humanTaskStore: HumanTaskLookupStore;
   private readonly tenantPolicySnapshotStore: TenantPolicySnapshotLookupStore | undefined;
   private readonly tenantPolicyMode: 'required' | 'optional';
+  private readonly adapterDispatcher: ToolAdapterDispatcher;
   private readonly idempotency = new Map<
     string,
     { requestHash: string; response: ToolInvokeResponse | ToolCommitResponse }
@@ -255,6 +258,7 @@ export class ToolService {
     this.humanTaskStore = options.humanTaskStore ?? new InMemoryHumanTaskLookupStore();
     this.tenantPolicySnapshotStore = options.tenantPolicySnapshotStore;
     this.tenantPolicyMode = options.tenantPolicyMode ?? 'optional';
+    this.adapterDispatcher = options.adapterDispatcher ?? new ToolAdapterDispatcher();
   }
 
   async listTools(tenantId?: string): Promise<ToolManifest[]> {
@@ -509,8 +513,27 @@ export class ToolService {
       return this.auditAndReturnCommitDenied(request, reservation.reasonCode, reservation.message);
     }
 
+    try {
+      this.adapterDispatcher.assertCommitSupported(manifest);
+    } catch (error) {
+      const adapterError = error instanceof ToolAdapterError
+        ? error
+        : new ToolAdapterError('TOOL_ADAPTER_NOT_SUPPORTED', '当前工具 Adapter 不支持 commit');
+      await this.toolCallLogStore.update(request.tool_call_id, {
+        status: 'denied',
+        mode: 'commit',
+        error_code: adapterError.code,
+        policy_decision_code: adapterError.code,
+      });
+      return this.auditAndReturnCommitDenied(request, adapterError.code, adapterError.message);
+    }
+
     const startedAt = Date.now();
-    const result = await invokeMockAdapter({ toolName: request.tool_name, args: request.arguments });
+    const result = await this.adapterDispatcher.invoke({
+      manifest,
+      arguments: request.arguments,
+      requestContext: safeToolContext(request),
+    });
     const durationMs = Math.max(0, Date.now() - startedAt);
     const outputHash = hashJson(result);
     const updated = await this.toolCallLogStore.update(request.tool_call_id, {
@@ -660,13 +683,51 @@ export class ToolService {
       );
     }
 
-    const startedAt = Date.now();
-    const result = await invokeMockAdapter({ toolName, args: request.arguments });
-    const durationMs = Math.max(0, Date.now() - startedAt);
     const inputHash = hashJson(request.arguments);
-    const outputHash = hashJson(result);
     const taskRunId = getTaskRunId(request.task_context);
     const workflowId = getWorkflowId(request.task_context);
+    const startedAt = Date.now();
+    let result: unknown;
+    try {
+      result = await this.adapterDispatcher.invoke({
+        manifest,
+        arguments: request.arguments,
+        requestContext: safeToolContext(request),
+      });
+    } catch (error) {
+      const durationMs = Math.max(0, Date.now() - startedAt);
+      const adapterError = error instanceof ToolAdapterError
+        ? error
+        : new ToolAdapterError('TOOL_FAILED', '工具 Adapter 执行失败');
+      const toolCall = await this.toolCallLogStore.create({
+        tool_call_id: toolCallId,
+        ...(taskRunId ? { task_run_id: taskRunId } : {}),
+        ...(workflowId ? { workflow_id: workflowId } : {}),
+        tenant_id: request.tenant_id,
+        user_id: getUserId(request.user_context),
+        tool_name: toolName,
+        tool_version: request.tool_version,
+        risk_level: manifest.risk_level,
+        policy_decision: 'deny',
+        status: isAdapterDenyCode(adapterError.code) ? 'denied' : 'failed',
+        mode: 'commit',
+        execution_context_type: request.execution_context_type,
+        ...(request.evaluation_run_id ? { evaluation_run_id: request.evaluation_run_id } : {}),
+        ...(request.evaluation_case_id ? { evaluation_case_id: request.evaluation_case_id } : {}),
+        ...(request.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: request.evaluation_execution_plan_ref } : {}),
+        ...(request.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: request.evaluation_execution_plan_hash } : {}),
+        duration_ms: durationMs,
+        idempotency_key: request.idempotency_key,
+        input_hash: inputHash,
+        adapter_type: manifest.adapter.type,
+        error_code: adapterError.code,
+        ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
+        policy_decision_code: adapterError.code,
+      });
+      return this.auditAndReturnAdapterFailure(request, toolCall.tool_call_id, adapterError);
+    }
+    const durationMs = Math.max(0, Date.now() - startedAt);
+    const outputHash = hashJson(result);
     const toolCall = await this.toolCallLogStore.create({
       tool_call_id: toolCallId,
       ...(taskRunId ? { task_run_id: taskRunId } : {}),
@@ -976,6 +1037,49 @@ export class ToolService {
       tool_version: request.tool_version,
       status: 'denied',
       error: { code, message },
+      audit_event_id: auditEvent.event_id,
+      idempotency_key: request.idempotency_key,
+      policy,
+    });
+  }
+
+  private async auditAndReturnAdapterFailure(
+    request: ToolInvokeRequest,
+    toolCallId: string,
+    error: ToolAdapterError,
+  ): Promise<ToolInvokeResponse> {
+    const policy = deniedPolicy(requestRiskLevel(request), error.code, error.message);
+    const auditEvent = await this.appendAuditEvent({
+      tenant_id: request.tenant_id,
+      actor_id: getUserId(request.user_context),
+      action: 'tool.invoke',
+      target_type: 'tool',
+      target_id: request.tool_name,
+      result: isAdapterDenyCode(error.code) ? 'denied' : 'failed',
+      reason: error.code,
+      trace_id: request.request_id,
+      payload: {
+        tool_call_id: toolCallId,
+        tool_name: request.tool_name,
+        tool_version: request.tool_version,
+        ...(request.tool_sha256 ? { tool_sha256: request.tool_sha256 } : {}),
+        task_run_id: getTaskRunId(request.task_context),
+        execution_context_type: request.execution_context_type,
+        ...(request.evaluation_run_id ? { evaluation_run_id: request.evaluation_run_id } : {}),
+        ...(request.evaluation_case_id ? { evaluation_case_id: request.evaluation_case_id } : {}),
+        ...(request.evaluation_execution_plan_ref ? { evaluation_execution_plan_ref: request.evaluation_execution_plan_ref } : {}),
+        ...(request.evaluation_execution_plan_hash ? { evaluation_execution_plan_hash: request.evaluation_execution_plan_hash } : {}),
+        ...(request.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: request.tenant_policy_snapshot_ref } : {}),
+        policy_decision_code: error.code,
+      },
+    });
+
+    return toolInvokeResponseSchema.parse({
+      tool_name: request.tool_name,
+      tool_version: request.tool_version,
+      status: isAdapterDenyCode(error.code) ? 'denied' : 'failed',
+      error: { code: error.code, message: error.message },
+      tool_call_id: toolCallId,
       audit_event_id: auditEvent.event_id,
       idempotency_key: request.idempotency_key,
       policy,
@@ -1324,6 +1428,36 @@ function sortJson(value: unknown): unknown {
 
 function asObject(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};
+}
+
+function safeToolContext(request: ToolInvokeRequest | ToolCommitRequest): {
+  request_id?: string;
+  tenant_id: string;
+  user_id?: string;
+  task_run_id?: string;
+  workflow_id?: string;
+  tool_name: string;
+} {
+  const userId = getUserId(request.user_context);
+  const taskRunId = getTaskRunId(request.task_context);
+  const workflowId = getWorkflowId(request.task_context);
+  return {
+    ...(request.request_id ? { request_id: request.request_id } : {}),
+    tenant_id: request.tenant_id,
+    ...(userId ? { user_id: userId } : {}),
+    ...(taskRunId ? { task_run_id: taskRunId } : {}),
+    ...(workflowId ? { workflow_id: workflowId } : {}),
+    tool_name: request.tool_name,
+  };
+}
+
+function isAdapterDenyCode(code: string): boolean {
+  return code === 'TOOL_ADAPTER_NOT_SUPPORTED'
+    || code === 'TOOL_HTTP_HOST_NOT_ALLOWED'
+    || code === 'TOOL_HTTP_INSECURE_URL'
+    || code === 'TOOL_HTTP_SECRET_NOT_CONFIGURED'
+    || code === 'TOOL_HTTP_OUTPUT_SCHEMA_INVALID'
+    || code === 'TOOL_ARGUMENT_VALIDATION_FAILED';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

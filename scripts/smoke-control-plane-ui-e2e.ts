@@ -566,6 +566,7 @@ async function createToolThroughUi(page: PageLike, ids: { tool: string }): Promi
   await page.getByTestId('vc-tool-name').fill(spec.tool_name);
   await selectByTestId(page, 'vc-tool-risk-level', spec.risk_level);
   await page.getByTestId('vc-tool-side-effect').click();
+  assert.equal(spec.adapter.type, 'mock');
   await page.getByTestId('vc-tool-endpoint-ref').fill(spec.adapter.endpoint_ref ?? '');
   await page.getByTestId('draft-submit').click();
   await page.getByText(spec.tool_name).first().waitFor({ timeout: 15_000 });

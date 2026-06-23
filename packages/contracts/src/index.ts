@@ -1145,11 +1145,54 @@ export const promptDefinitionSchema = z.object({
   sha256: z.string().optional(),
 });
 
-export const toolAdapterSchema = z.object({
-  type: z.enum(['http', 'mcp', 'mock', 'internal-api', 'db']),
+export const mockToolAdapterSchema = z.object({
+  type: z.literal('mock'),
   endpoint_ref: z.string().optional(),
   config: jsonObjectSchema.optional(),
 });
+
+export const httpToolSecretRefSchema = z.string().regex(/^env:TOOL_SECRET_[A-Z0-9_]+$/u);
+export const httpToolSafeHeaderNameSchema = z.enum([
+  'Authorization',
+  'X-API-Key',
+  'X-Api-Key',
+  'Api-Key',
+  'X-Auth-Token',
+]);
+export const httpToolAuthSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('none') }).strict(),
+  z.object({
+    type: z.literal('bearer_env'),
+    secret_ref: httpToolSecretRefSchema,
+  }).strict(),
+  z.object({
+    type: z.literal('api_key_env'),
+    secret_ref: httpToolSecretRefSchema,
+    header_name: httpToolSafeHeaderNameSchema,
+  }).strict(),
+]);
+export const httpReadonlyToolAdapterSchema = z.object({
+  type: z.literal('http_readonly'),
+  base_url: z.string().url(),
+  path: z.string().min(1),
+  query_mapping: z.record(z.string().min(1), z.string().min(1)).default({}),
+  static_query: z.record(z.string().min(1), z.union([z.string(), z.number(), z.boolean()])).optional(),
+  auth: httpToolAuthSchema.default({ type: 'none' }),
+  timeout_ms: z.number().int().positive(),
+  max_response_bytes: z.number().int().positive(),
+  retry: z.object({
+    max_attempts: z.number().int().positive(),
+    retryable_status_codes: z.array(z.number().int().min(100).max(599)).default([]),
+    backoff_ms: z.number().int().nonnegative(),
+  }).strict(),
+  response_body_path: z.string().min(1).optional(),
+  response_headers_allowlist: z.array(httpToolSafeHeaderNameSchema).default([]),
+}).strict();
+
+export const toolAdapterSchema = z.discriminatedUnion('type', [
+  mockToolAdapterSchema,
+  httpReadonlyToolAdapterSchema,
+]);
 
 export const toolEvaluationModeSchema = z.enum(['deny', 'preview_only', 'sandbox_commit']);
 export const toolResultRedactionPolicySchema = z.enum(['none', 'mask_sensitive', 'summary_only']);

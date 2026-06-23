@@ -79,6 +79,7 @@ x-request-id
 - Flow 可视化 canvas 只表达现有 `steps` 数组顺序执行语义，不保存节点坐标，也不引入任意 DAG。
 - ModelPolicy target 必须使用精确已发布 ModelDefinition 选择器生成 `model_ref`；不显示或提交旧 `gateway_profile` / `model_id` 手工输入。
 - JSON 视图只读，不允许通过粘贴 JSON 绕过模型选择器。
+- Tool 可视化编辑器支持 `mock` 与 `http_readonly` adapter；选择 `http_readonly` 时只展示 GET 所需字段，risk 限制为 `L0` / `L1`，`side_effect=false`，secret 只填写 `env:TOOL_SECRET_*` 引用并展示 Host Allowlist 提示，不收集真实 Key。
 
 ## Model Catalog UI 规则
 
@@ -134,6 +135,7 @@ corepack pnpm smoke:control-plane-api-e2e
 corepack pnpm smoke:control-plane-ui-e2e
 corepack pnpm smoke:evaluation-ui-e2e
 corepack pnpm smoke:model-catalog-multi-gateway-e2e
+corepack pnpm smoke:http-readonly-tool-e2e
 ```
 
 UI smoke 需要 control-plane、runtime-api、runtime-worker、tool-gateway、PostgreSQL、Temporal 已运行。它会在浏览器中设置开发身份，验证页面渲染，创建并发布 Registry 资源和 Model Catalog 资源，执行 router preview、rollback，并通过 Human Task 页面 approve 一个 L3 pending task。

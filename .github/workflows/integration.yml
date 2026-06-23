@@ -30,6 +30,9 @@ jobs:
       TEMPORAL_REPLAY_FIXTURE_DIR: tests/temporal-replay/histories
       COMPOSE_PARALLEL_LIMIT: 1
       APP_VERSION: 0.8.0
+      TOOL_HTTP_ALLOWED_HOSTS: mock-server,localhost,127.0.0.1
+      TOOL_HTTP_ALLOW_INSECURE_LOCALHOST: "true"
+      TOOL_SECRET_BUSINESS_API: business-read-secret
 
     steps:
       - uses: actions/checkout@v7
@@ -136,6 +139,12 @@ jobs:
 
       - name: Smoke control-plane UI E2E
         run: pnpm smoke:control-plane-ui-e2e
+
+      - name: Semantic router smoke
+        run: pnpm smoke:semantic-router-e2e
+
+      - name: HTTP readonly tool smoke
+        run: pnpm smoke:http-readonly-tool-e2e
 
       - name: Pi readonly deterministic smoke
         run: pnpm smoke:pi-readonly-e2e

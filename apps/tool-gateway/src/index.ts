@@ -39,6 +39,7 @@ import { DbAuditStore } from './modules/audit.js';
 import { DbToolManifestRegistry, type ToolManifestRegistry } from './modules/tool-registry.js';
 import { DbHumanTaskLookupStore, ToolService, type TenantPolicySnapshotLookupStore } from './modules/tool-service.js';
 import { ToolGatewayReadinessService, type ToolGatewayReadinessResult } from './modules/readiness/tool-gateway-readiness-service.js';
+import { ToolAdapterDispatcher } from './modules/tool-adapter-dispatcher.js';
 
 const appName = 'tool-gateway' as const;
 const logger = createLogger(appName);
@@ -403,6 +404,7 @@ export function createToolGatewayService(config: RuntimeConfig = loadConfig()): 
         humanTaskStore: new DbHumanTaskLookupStore(new HumanTaskRepository(db)),
         tenantPolicySnapshotStore,
         tenantPolicyMode: config.TENANT_RUNTIME_POLICY_MODE,
+        adapterDispatcher: ToolAdapterDispatcher.fromConfig(config),
       }),
       db,
       registry,
@@ -412,7 +414,7 @@ export function createToolGatewayService(config: RuntimeConfig = loadConfig()): 
   }
 
   return {
-    toolService: new ToolService(),
+    toolService: new ToolService({ adapterDispatcher: ToolAdapterDispatcher.fromConfig(config) }),
     close: async () => undefined,
   };
 }

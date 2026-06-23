@@ -173,9 +173,68 @@ describe('RegistryValidationService', () => {
 
     const secretResult = await service().validateTool({
       ...knowledgeTool,
-      adapter: { type: 'http', config: { api_key: 'sk_test_secret_value' } },
+      adapter: { type: 'mock', config: { api_key: 'sk_test_secret_value' } },
     });
     expect(secretResult.errors.map((error: RegistryValidationIssue) => error.code)).toContain('TOOL_MANIFEST_CONTAINS_SECRET');
+  });
+
+  it('validates http_readonly tool constraints', async () => {
+    const validHttpTool: ToolManifest = {
+      tool_name: 'company.policy.lookup',
+      version: '1.0.0',
+      risk_level: 'L1',
+      side_effect: false,
+      adapter: {
+        type: 'http_readonly',
+        base_url: 'https://policy.example.com',
+        path: '/business-api/v1/policies',
+        query_mapping: { keyword: 'keyword' },
+        auth: { type: 'bearer_env', secret_ref: 'env:TOOL_SECRET_BUSINESS_API' },
+        timeout_ms: 5000,
+        max_response_bytes: 65536,
+        retry: { max_attempts: 2, retryable_status_codes: [429, 503], backoff_ms: 100 },
+      },
+      input_schema: { type: 'object', required: ['keyword'], properties: { keyword: { type: 'string' } } },
+      output_schema: { type: 'object', required: ['items'], properties: { items: { type: 'array' } } },
+      required_permissions: [],
+      evaluation_policy: { allowed_in_evaluation: true, mode: 'preview_only', allowed_tenants: ['default'], result_redaction_policy: 'mask_sensitive' },
+      status: 'published',
+    };
+
+    expect((await service().validateTool(validHttpTool)).errors).toHaveLength(0);
+    const invalid = await service().validateTool({
+      ...validHttpTool,
+      risk_level: 'L2',
+      side_effect: true,
+      adapter: {
+        ...validHttpTool.adapter as Extract<ToolManifest['adapter'], { type: 'http_readonly' }>,
+        base_url: 'https://user:pass@169.254.169.254',
+        path: 'business-api/v1/policies',
+        query_mapping: { keyword: 'missing' },
+        timeout_ms: 20000,
+        max_response_bytes: 2_000_000,
+        retry: { max_attempts: 9, retryable_status_codes: [], backoff_ms: 0 },
+      },
+      evaluation_policy: { allowed_in_evaluation: true, mode: 'sandbox_commit', allowed_tenants: ['default'], result_redaction_policy: 'mask_sensitive' },
+    });
+    const codes = invalid.errors.map((error: RegistryValidationIssue) => error.code);
+    expect(codes).toEqual(expect.arrayContaining([
+      'TOOL_HTTP_READONLY_SIDE_EFFECT_FORBIDDEN',
+      'TOOL_HTTP_READONLY_RISK_INVALID',
+      'TOOL_HTTP_URL_INVALID',
+      'TOOL_HTTP_PATH_INVALID',
+      'TOOL_HTTP_QUERY_MAPPING_INVALID',
+      'TOOL_HTTP_TIMEOUT_INVALID',
+      'TOOL_HTTP_RESPONSE_LIMIT_INVALID',
+      'TOOL_HTTP_RETRY_INVALID',
+      'TOOL_HTTP_EVALUATION_SANDBOX_FORBIDDEN',
+    ]));
+
+    const missingOutput = await service().validateTool({
+      ...validHttpTool,
+      output_schema: undefined,
+    });
+    expect(missingOutput.errors.map((error: RegistryValidationIssue) => error.code)).toContain('TOOL_HTTP_READONLY_OUTPUT_SCHEMA_REQUIRED');
   });
 
   it('validates Agent and Prompt dependencies', async () => {

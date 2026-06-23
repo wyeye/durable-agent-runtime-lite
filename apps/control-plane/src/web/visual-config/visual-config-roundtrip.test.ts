@@ -30,6 +30,7 @@ describe('visual config adapter round-trip', () => {
     ['flow', flowFixture()],
     ['route', routeFixture()],
     ['tool', toolFixture()],
+    ['tool', httpReadonlyToolFixture()],
     ['agent', agentFixture()],
     ['model_policy', modelPolicyFixture()],
     ['prompt', promptFixture()],
@@ -131,6 +132,39 @@ function toolFixture(): ToolManifest {
     adapter: { type: 'mock', endpoint_ref: 'mock/roundtrip', config: { mode: 'safe' } },
     input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], $ref: '#/advanced' },
     output_schema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+    required_permissions: ['tool:invoke'],
+    evaluation_policy: {
+      allowed_in_evaluation: true,
+      mode: 'preview_only',
+      allowed_tenants: ['default'],
+      result_redaction_policy: 'mask_sensitive',
+      maximum_calls_per_case: 1,
+    },
+  };
+}
+
+function httpReadonlyToolFixture(): ToolManifest {
+  return {
+    tool_name: 'company.policy.lookup',
+    version: '1.0.0',
+    description: 'HTTP readonly roundtrip tool',
+    risk_level: 'L1',
+    side_effect: false,
+    adapter: {
+      type: 'http_readonly',
+      base_url: 'https://policy.example.com',
+      path: '/business-api/v1/policies',
+      query_mapping: { keyword: 'keyword' },
+      static_query: { locale: 'zh-CN' },
+      auth: { type: 'bearer_env', secret_ref: 'env:TOOL_SECRET_BUSINESS_API' },
+      timeout_ms: 5000,
+      max_response_bytes: 65536,
+      retry: { max_attempts: 2, retryable_status_codes: [429, 503], backoff_ms: 100 },
+      response_body_path: 'data',
+      response_headers_allowlist: ['X-API-Key'],
+    },
+    input_schema: { type: 'object', properties: { keyword: { type: 'string' } }, required: ['keyword'] },
+    output_schema: { type: 'object', properties: { items: { type: 'array' } }, required: ['items'] },
     required_permissions: ['tool:invoke'],
     evaluation_policy: {
       allowed_in_evaluation: true,

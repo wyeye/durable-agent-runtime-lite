@@ -42,6 +42,16 @@ services:
       MODEL_GATEWAY_USER_AGENT: durable-agent-runtime-lite/runtime-worker-smoke
       PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW: ${PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW:-2}
 
+  tool-gateway:
+    environment:
+      NODE_ENV: development
+      APP_ENV: development
+      TOOL_HTTP_ALLOWED_HOSTS: ${TOOL_HTTP_ALLOWED_HOSTS:-mock-server,localhost,127.0.0.1}
+      TOOL_HTTP_ALLOW_INSECURE_LOCALHOST: "true"
+      TOOL_HTTP_MAX_TIMEOUT_MS: ${TOOL_HTTP_MAX_TIMEOUT_MS:-15000}
+      TOOL_HTTP_MAX_RESPONSE_BYTES: ${TOOL_HTTP_MAX_RESPONSE_BYTES:-1048576}
+      TOOL_SECRET_BUSINESS_API: ${TOOL_SECRET_BUSINESS_API:-business-read-secret}
+
   control-plane:
     environment:
       NODE_ENV: development
