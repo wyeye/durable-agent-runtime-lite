@@ -432,6 +432,31 @@ importers:
         version: 3.2.6(@types/node@24.13.2)(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0)
 
   devtools/repo-cli:
+    dependencies:
+      '@dar/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@dar/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@dar/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@dar/i18n':
+        specifier: workspace:*
+        version: link:../../packages/i18n
+      '@dar/logger':
+        specifier: workspace:*
+        version: link:../../packages/logger
+      '@dar/model-client':
+        specifier: workspace:*
+        version: link:../../packages/model-client
+      '@dar/security':
+        specifier: workspace:*
+        version: link:../../packages/security
+      '@dar/temporal':
+        specifier: workspace:*
+        version: link:../../packages/temporal
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

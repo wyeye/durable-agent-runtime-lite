@@ -9,7 +9,16 @@
     "test": "vitest run tests --passWithNoTests",
     "lint": "eslint ."
   },
-  "dependencies": {},
+  "dependencies": {
+    "@dar/config": "workspace:*",
+    "@dar/contracts": "workspace:*",
+    "@dar/db": "workspace:*",
+    "@dar/i18n": "workspace:*",
+    "@dar/logger": "workspace:*",
+    "@dar/model-client": "workspace:*",
+    "@dar/security": "workspace:*",
+    "@dar/temporal": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "tsx": "^4.0.0",
