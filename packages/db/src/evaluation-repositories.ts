@@ -2283,7 +2283,10 @@ export class EvaluationCandidateResolver {
 
     const allowedTools = await this.resolveAllowedTools(records.agent.spec, input.tenantId);
     const resolvedModelPolicy = await resolveModelPolicyRecord(this.db, records.modelPolicy, records.modelPolicyHash, {
+      // Publish-gate candidates must be able to evaluate an exact draft model policy
+      // before the eventual release path marks it validated/published.
       allowValidated: input.primarySubjectType === 'model_policy',
+      allowDraft: input.primarySubjectType === 'model_policy',
     });
     const plan = buildCandidateAgentExecutionPlan({
       tenantId: input.tenantId,

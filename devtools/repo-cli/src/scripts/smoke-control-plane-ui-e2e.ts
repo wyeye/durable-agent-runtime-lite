@@ -5,10 +5,16 @@ import { resolve } from 'node:path';
 import type {
   AgentSpec,
   CapabilityRelease,
+  EvaluationCase,
+  EvaluationExecutionPlan,
+  EvaluationGateDecision,
+  EvaluationGatePolicy,
+  EvaluationRun,
+  EvaluationSubjectSnapshot,
   FlowSpec,
+  ModelPolicy,
   HumanTaskListResponse,
   ModelDefinitionRef,
-  ModelPolicy,
   PromptDefinition,
   RouteSpec,
   RouterPreviewResponse,
@@ -19,7 +25,7 @@ import type {
   TaskRun,
   ToolManifest,
 } from '@dar/contracts';
-import { closeDb, createDb, hashModelPolicy } from '@dar/db';
+import { closeDb, createDb, hashModelPolicy, EvaluationExecutionPlanBuilder, EvaluationExecutionPlanRepository, EvaluationGateDecisionRepository, EvaluationSubjectSnapshotBuilder, EvaluationSubjectSnapshotRepository, ModelPolicyRepository, upsertAgentSpec } from '@dar/db';
 import { ensureModelCatalogEntry } from './model-catalog-seed.js';
 
 const require = createRequire(import.meta.url);
@@ -94,11 +100,34 @@ interface NetworkResponseLike extends ApiResponseLike {
 }
 
 interface RegistryRecord<TSpec> {
+  tenant_id?: string;
+  resource_type?: string;
   resource_id: string;
   version: number;
   status: string;
+  sha256?: string;
   revision: number;
   spec: TSpec;
+}
+
+type Db = ReturnType<typeof createDb>;
+
+type GatedResourceType = 'prompt' | 'agent' | 'model_policy';
+
+interface RequiredHashDataset {
+  dataset_id: string;
+  version: number;
+  dataset_hash: string;
+}
+
+interface PublishGateMetadata {
+  evaluation_candidate_bundle_hash: string;
+  evaluation_gate_decision_id: string;
+}
+
+interface PublishGateCandidate {
+  subjectSnapshot: EvaluationSubjectSnapshot;
+  executionPlan: EvaluationExecutionPlan;
 }
 
 const controlPlaneUrl = trimTrailingSlash(process.env.CONTROL_PLANE_URL ?? 'http://localhost:3100');
@@ -116,6 +145,7 @@ const adminHeaders = authHeaders('platform_admin', `${requestPrefix}_admin`);
 async function main(): Promise<void> {
   const browser = await chromium.launch({ headless: process.env.HEADLESS !== 'false' });
   const page = await browser.newPage();
+  const db = createDb({ databaseUrl });
   try {
     const ids = {
       prompt: `${requestPrefix}_prompt`,
@@ -127,7 +157,6 @@ async function main(): Promise<void> {
       keywordV1: `${requestPrefix}-keyword-v1`,
       keywordV2: `${requestPrefix}-keyword-v2`,
     };
-    const db = createDb({ databaseUrl });
     const catalog = await ensureModelCatalogEntry(db, {
       profileId: `${requestPrefix}_profile`,
       displayName: `Control-plane UI smoke model ${requestPrefix}`,
@@ -138,7 +167,7 @@ async function main(): Promise<void> {
       provider: 'local-mock',
       capabilities: ['text', 'tools', 'usage'],
       operatorId: 'cp-ui-smoke',
-    }).finally(async () => closeDb(db));
+    });
 
     await page.goto(controlPlaneUrl);
     await page.waitForLoadState('networkidle');
@@ -153,6 +182,9 @@ async function main(): Promise<void> {
     await expectChineseShell(page);
     await page.getByText('运营总览').first().waitFor({ timeout: 15_000 });
 
+    const dataset = await prepareEvaluationDataset(page);
+    await preparePublishGatePolicy(page, dataset);
+
     const prompt = await createPromptThroughUi(page, ids);
     const tool = await createToolThroughUi(page, ids);
     const modelPolicySpecV1 = modelPolicySpec(ids, 1, catalog.model_ref);
@@ -160,19 +192,46 @@ async function main(): Promise<void> {
     await validateResource(page, 'prompts', ids.prompt, 1);
     await validateResource(page, 'tools', ids.tool, 1);
     await validateResource(page, 'model-policies', ids.modelPolicy, 1);
-    await publishResource(page, 'prompts', ids.prompt, 1, 'ui smoke publish prompt');
     await publishResource(page, 'tools', ids.tool, 1, 'ui smoke publish tool');
-    await publishResource(
-      page,
-      'model-policies',
-      ids.modelPolicy,
-      1,
-      'ui smoke publish model policy',
-    );
+
+    await publishTenantPolicyForUiSmoke(page, ids, catalog.model_ref, modelPolicySpecV1);
+
+    const modelPolicyGate = await preparePublishGateForResource(page, db, {
+      resourceType: 'model_policy',
+      resourceId: ids.modelPolicy,
+      version: 1,
+      prompt,
+      modelPolicy,
+      dataset,
+      requestSuffix: 'model_policy_gate',
+    });
+    await publishResource(page, 'model-policies', ids.modelPolicy, 1, 'ui smoke publish model policy', modelPolicyGate);
+
+    const publishedModelPolicy = await getRegistryVersion<ModelPolicy>(page, 'model-policies', ids.modelPolicy, 1);
+    const promptGate = await preparePublishGateForResource(page, db, {
+      resourceType: 'prompt',
+      resourceId: ids.prompt,
+      version: 1,
+      prompt,
+      modelPolicy: publishedModelPolicy,
+      dataset,
+      requestSuffix: 'prompt_gate',
+    });
+    await publishResource(page, 'prompts', ids.prompt, 1, 'ui smoke publish prompt', promptGate);
 
     const agent = await createAgentThroughUi(page, ids, modelPolicySpecV1);
     await validateResource(page, 'agents', ids.agent, 1);
-    await publishResource(page, 'agents', ids.agent, 1, 'ui smoke publish agent');
+    const agentGate = await preparePublishGateForResource(page, db, {
+      resourceType: 'agent',
+      resourceId: ids.agent,
+      version: 1,
+      prompt: await getRegistryVersion<PromptDefinition>(page, 'prompts', ids.prompt, 1),
+      agent: await getRegistryVersion<AgentSpec>(page, 'agents', ids.agent, 1),
+      modelPolicy: publishedModelPolicy,
+      dataset,
+      requestSuffix: 'agent_gate',
+    });
+    await publishResource(page, 'agents', ids.agent, 1, 'ui smoke publish agent', agentGate);
 
     const flow = await createFlowThroughUi(page, ids);
     const route = await createRouteThroughUi(page, ids, ids.keywordV1);
@@ -189,8 +248,6 @@ async function main(): Promise<void> {
       },
       adminHeaders,
     );
-    await publishTenantPolicyForUiSmoke(page, ids, catalog.model_ref, modelPolicySpecV1);
-
     await page.goto(`${controlPlaneUrl}/registry/flows`);
     await page.getByTestId('registry-keyword').fill(ids.flow);
     await page.getByTestId('registry-search').click();
@@ -289,6 +346,7 @@ async function main(): Promise<void> {
       ),
     );
   } finally {
+    await closeDb(db);
     await browser.close();
   }
 }
@@ -848,15 +906,403 @@ async function publishResource(
   resourceId: string,
   version: number,
   releaseNote: string,
+  gate?: PublishGateMetadata,
 ): Promise<CapabilityRelease> {
   return postJson<CapabilityRelease>(
     page,
     `${controlPlaneUrl}/api/v1/${plural}/${encodeURIComponent(resourceId)}/versions/${version}/publish`,
     {
       release_note: releaseNote,
+      ...(gate ?? {}),
     },
     adminHeaders,
   );
+}
+
+async function prepareEvaluationDataset(page: PageLike): Promise<RequiredHashDataset> {
+  const datasetId = `${requestPrefix}_publish_gate_dataset`;
+  await postJson<RequiredHashDataset>(
+    page,
+    `${controlPlaneUrl}/api/v1/evaluation-datasets`,
+    {
+      dataset_id: datasetId,
+      version: 1,
+      name: `Control-plane UI publish gate ${requestPrefix}`,
+      status: 'draft',
+      tags: ['control-plane-ui', 'publish-gate'],
+      default_weight: 1,
+      revision: 1,
+    },
+    operatorHeaders,
+  );
+  const baseCase: EvaluationCase = {
+    case_id: `${datasetId}_final`,
+    dataset_id: datasetId,
+    dataset_version: 1,
+    name: 'control-plane ui publish gate final',
+    input: { text: `final_only control-plane ui publish gate ${requestPrefix}` },
+    expected_status: 'completed',
+    expected_tool_calls: [],
+    forbidden_tools: [],
+    final_assertions: [{ type: 'contains', value: 'Mock final answer' }],
+    policy_assertions: [],
+    context_refs: [],
+    weight: 1,
+    tags: ['control-plane-ui', 'final_only'],
+    enabled: true,
+  };
+  await postJson<EvaluationCase>(
+    page,
+    `${controlPlaneUrl}/api/v1/evaluation-datasets/${encodeURIComponent(datasetId)}/versions/1/cases`,
+    baseCase,
+    operatorHeaders,
+  );
+  await postJson<RequiredHashDataset>(
+    page,
+    `${controlPlaneUrl}/api/v1/evaluation-datasets/${encodeURIComponent(datasetId)}/versions/1/validate`,
+    {},
+    operatorHeaders,
+  );
+  return postJson<RequiredHashDataset>(
+    page,
+    `${controlPlaneUrl}/api/v1/evaluation-datasets/${encodeURIComponent(datasetId)}/versions/1/publish`,
+    {},
+    adminHeaders,
+  );
+}
+
+async function preparePublishGatePolicy(page: PageLike, dataset: RequiredHashDataset): Promise<EvaluationGatePolicy> {
+  const gatePolicyId = `zzz_control_plane_ui_gate_${requestPrefix}`;
+  await postJson<EvaluationGatePolicy>(
+    page,
+    `${controlPlaneUrl}/api/v1/evaluation-gate-policies`,
+    {
+      policy: {
+        gate_policy_id: gatePolicyId,
+        version: 1,
+        status: 'draft',
+        resource_types: ['prompt', 'agent', 'model_policy'],
+        required_dataset_refs: [{
+          dataset_id: dataset.dataset_id,
+          version: dataset.version,
+          dataset_hash: dataset.dataset_hash,
+        }],
+        thresholds: {
+          minimum_pass_rate: 1,
+          minimum_weighted_score: 1,
+          maximum_system_error_rate: 0,
+        },
+        regression_rules: {
+          maximum_score_regression: 0,
+          maximum_pass_rate_regression: 0,
+          block_newly_failed_cases: true,
+          block_safety_regression: true,
+          block_tool_regression: true,
+          require_same_dataset: true,
+        },
+        required_case_tags: [],
+        allow_override: true,
+      },
+    },
+    operatorHeaders,
+  );
+  await postJson<EvaluationGatePolicy>(
+    page,
+    `${controlPlaneUrl}/api/v1/evaluation-gate-policies/${encodeURIComponent(gatePolicyId)}/versions/1/validate`,
+    {},
+    operatorHeaders,
+  );
+  return postJson<EvaluationGatePolicy>(
+    page,
+    `${controlPlaneUrl}/api/v1/evaluation-gate-policies/${encodeURIComponent(gatePolicyId)}/versions/1/publish`,
+    {},
+    adminHeaders,
+  );
+}
+
+async function preparePublishGateForResource(
+  page: PageLike,
+  db: Db,
+  input: {
+    resourceType: GatedResourceType;
+    resourceId: string;
+    version: number;
+    prompt: RegistryRecord<PromptDefinition>;
+    dataset: RequiredHashDataset;
+    requestSuffix: string;
+    agent?: RegistryRecord<AgentSpec>;
+    modelPolicy?: RegistryRecord<ModelPolicy>;
+  },
+): Promise<PublishGateMetadata> {
+  const candidate = await buildPublishGateCandidate(db, input);
+  const created = await postJson<{ evaluation_run: EvaluationRun; workflow_start: Record<string, unknown> }>(
+    page,
+    `${controlPlaneUrl}/api/v1/evaluation-runs`,
+    {
+      dataset_id: input.dataset.dataset_id,
+      dataset_version: input.dataset.version,
+      dataset_hash: input.dataset.dataset_hash,
+      subject_snapshot_ref: candidate.subjectSnapshot.subject_snapshot_ref,
+      subject_snapshot_hash: candidate.executionPlan.subject_snapshot_hash,
+      evaluation_execution_plan_ref: candidate.executionPlan.evaluation_execution_plan_ref,
+      evaluation_execution_plan_hash: candidate.executionPlan.plan_hash,
+      trigger_type: 'publish_gate',
+    },
+    adminHeaders,
+  );
+  const run = await waitForEvaluationRun(page, created.evaluation_run.evaluation_run_id);
+  assert.equal(run.status, 'completed');
+  const decision = await waitForGateDecision(
+    db,
+    input.resourceType,
+    input.resourceId,
+    input.version,
+    candidate.subjectSnapshot.candidate_bundle_hash,
+  );
+  assert.equal(decision.decision, 'passed');
+  return {
+    evaluation_candidate_bundle_hash: decision.candidate_bundle_hash,
+    evaluation_gate_decision_id: decision.gate_decision_id,
+  };
+}
+
+async function buildPublishGateCandidate(
+  db: Db,
+  input: {
+    resourceType: GatedResourceType;
+    resourceId: string;
+    version: number;
+    prompt: RegistryRecord<PromptDefinition>;
+    dataset: RequiredHashDataset;
+    requestSuffix: string;
+    agent?: RegistryRecord<AgentSpec>;
+    modelPolicy?: RegistryRecord<ModelPolicy>;
+  },
+): Promise<PublishGateCandidate> {
+  const promptRecord = input.prompt;
+  const modelPolicyRecord = input.modelPolicy
+    ?? await seedEvaluationModelPolicy(db, `${requestPrefix}_${input.requestSuffix}_policy`);
+  const agentRecord = input.agent
+    ? await mustGetRegistryRecord(db, 'agent', input.agent.resource_id, input.agent.version)
+    : await seedEvaluationAgent(db, {
+      agentId: `${requestPrefix}_${input.requestSuffix}_agent`,
+      promptId: promptRecord.resource_id,
+      promptVersion: promptRecord.version,
+      promptHash: mustHash(promptRecord.sha256, `prompt ${promptRecord.resource_id}@${promptRecord.version}`),
+      modelPolicy: modelPolicyRecord,
+    });
+
+  const primarySubjectHash = input.resourceType === 'prompt'
+    ? mustHash(promptRecord.sha256, `prompt ${promptRecord.resource_id}@${promptRecord.version}`)
+    : input.resourceType === 'agent'
+      ? mustHash(agentRecord.sha256, `agent ${agentRecord.resource_id}@${agentRecord.version}`)
+      : hashModelPolicy(modelPolicyRecord.spec);
+
+  const subjectSnapshot = await new EvaluationSubjectSnapshotRepository(db).create(
+    await new EvaluationSubjectSnapshotBuilder(db).build({
+      tenantId,
+      userId,
+      requestId: `${requestPrefix}_${input.requestSuffix}_subject`,
+      primarySubjectType: input.resourceType,
+      primarySubjectId: input.resourceId,
+      primarySubjectVersion: input.version,
+      primarySubjectHash,
+      agentId: agentRecord.resource_id,
+      agentVersion: agentRecord.version,
+      agentHash: mustHash(agentRecord.sha256, `agent ${agentRecord.resource_id}@${agentRecord.version}`),
+      promptId: promptRecord.resource_id,
+      promptVersion: promptRecord.version,
+      promptHash: mustHash(promptRecord.sha256, `prompt ${promptRecord.resource_id}@${promptRecord.version}`),
+      modelPolicyId: modelPolicyRecord.spec.model_policy_id,
+      modelPolicyVersion: modelPolicyRecord.spec.version,
+      modelPolicyHash: hashModelPolicy(modelPolicyRecord.spec),
+    }),
+  );
+  const executionPlan = await new EvaluationExecutionPlanRepository(db).create(
+    await new EvaluationExecutionPlanBuilder(db).build({
+      tenantId,
+      datasetId: input.dataset.dataset_id,
+      datasetVersion: input.dataset.version,
+      subjectSnapshot,
+      evaluationMode: 'model_gateway',
+    }),
+  );
+  return { subjectSnapshot, executionPlan };
+}
+
+async function waitForEvaluationRun(page: PageLike, runId: string): Promise<EvaluationRun> {
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    const run = await getJson<EvaluationRun>(
+      page,
+      `${controlPlaneUrl}/api/v1/evaluation-runs/${encodeURIComponent(runId)}`,
+      auditorHeaders(),
+    );
+    if (['completed', 'failed', 'cancelled'].includes(run.status)) {
+      return run;
+    }
+    await delay(1_000);
+  }
+  throw new Error(`Timed out waiting for EvaluationRun ${runId}`);
+}
+
+async function waitForGateDecision(
+  db: Db,
+  resourceType: GatedResourceType,
+  resourceId: string,
+  version: number,
+  candidateBundleHash: string,
+): Promise<EvaluationGateDecision> {
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    const decisions = await new EvaluationGateDecisionRepository(db).listForResource({
+      resourceType,
+      resourceId,
+      resourceVersion: version,
+      limit: 20,
+    });
+    const decision = decisions.find((entry) => entry.candidate_bundle_hash === candidateBundleHash);
+    if (decision) {
+      return decision;
+    }
+    await delay(1_000);
+  }
+  throw new Error(`Timed out waiting for gate decision ${resourceType}:${resourceId}@${version}`);
+}
+
+async function mustGetRegistryRecord(
+  db: Db,
+  resourceType: 'prompt' | 'agent',
+  resourceId: string,
+  version: number,
+): Promise<RegistryRecord<PromptDefinition> | RegistryRecord<AgentSpec>> {
+  if (resourceType === 'prompt') {
+    const prompt = await db
+      .selectFrom('prompt_definition')
+      .select(['tenant_id', 'spec_id as resource_id', 'version', 'status', 'sha256', 'revision', 'spec_json as spec'])
+      .where('tenant_id', '=', tenantId)
+      .where('spec_id', '=', resourceId)
+      .where('version', '=', version)
+      .executeTakeFirst();
+    if (!prompt) {
+      throw new Error(`PromptDefinition not found: ${resourceId}@${version}`);
+    }
+    return prompt as RegistryRecord<PromptDefinition>;
+  }
+  const agent = await db
+    .selectFrom('agent_spec')
+    .select(['tenant_id', 'spec_id as resource_id', 'version', 'status', 'sha256', 'revision', 'spec_json as spec'])
+    .where('tenant_id', '=', tenantId)
+    .where('spec_id', '=', resourceId)
+    .where('version', '=', version)
+    .executeTakeFirst();
+  if (!agent) {
+    throw new Error(`AgentSpec not found: ${resourceId}@${version}`);
+  }
+  return agent as RegistryRecord<AgentSpec>;
+}
+
+async function seedEvaluationModelPolicy(
+  db: Db,
+  modelPolicyId: string,
+): Promise<{ spec: ModelPolicy }> {
+  const repository = new ModelPolicyRepository(db);
+  const catalog = await ensureModelCatalogEntry(db, {
+    profileId: `${modelPolicyId}_profile`,
+    displayName: `Control-plane UI gate seed ${modelPolicyId}`,
+    baseUrl: 'http://mock-server:4100',
+    authType: 'none',
+    modelId: `${modelPolicyId}_model`,
+    upstreamModelId: 'dar-local-model',
+    provider: 'local-mock',
+    capabilities: ['text', 'tools', 'usage'],
+    operatorId: 'cp-ui-smoke',
+  });
+  await repository.createDraft({
+    model_policy_id: modelPolicyId,
+    version: 1,
+    status: 'draft',
+    protocol: 'openai_chat_completions',
+    targets: [{
+      target_id: `${modelPolicyId}_primary`,
+      model_ref: catalog.model_ref,
+      priority: 0,
+      enabled: true,
+    }],
+    retry_policy: {
+      max_attempts_per_target: 1,
+      retryable_status_codes: [429, 500, 502, 503, 504],
+      retry_on_timeout: true,
+      retry_on_network_error: true,
+      backoff_ms: 10,
+      max_backoff_ms: 50,
+    },
+    fallback_policy: {
+      enabled: false,
+      ordered_target_ids: [],
+      eligible_error_classes: ['rate_limit', 'timeout', 'network', 'upstream_5xx'],
+      stop_on_auth_error: true,
+      stop_on_validation_error: true,
+      stop_on_policy_denial: true,
+    },
+    request_policy: {
+      temperature: 0,
+      top_p: 1,
+      max_output_tokens: 1000,
+      initial_tool_choice_mode: 'auto',
+      after_tool_result_tool_choice_mode: 'none',
+      response_format: 'text',
+      allow_parallel_tool_calls: false,
+    },
+    revision: 1,
+  }, { tenantId, operatorId: userId });
+  const policy = await repository.publish(modelPolicyId, 1, {
+    tenantId,
+    operatorId: userId,
+    releaseNote: `Control-plane UI gate seed ${modelPolicyId}`,
+  });
+  return { spec: policy };
+}
+
+async function seedEvaluationAgent(
+  db: Db,
+  input: {
+    agentId: string;
+    promptId: string;
+    promptVersion: number;
+    promptHash: string;
+    modelPolicy: { spec: ModelPolicy };
+  },
+): Promise<RegistryRecord<AgentSpec>> {
+  await upsertAgentSpec(db, {
+    agent_id: input.agentId,
+    version: 1,
+    prompt_ref: `${input.promptId}@${input.promptVersion}`,
+    model_policy: 'model_gateway:final_only',
+    model_policy_ref: {
+      model_policy_id: input.modelPolicy.spec.model_policy_id,
+      model_policy_version: input.modelPolicy.spec.version,
+      model_policy_hash: hashModelPolicy(input.modelPolicy.spec),
+    },
+    allowed_tools: [],
+    allowed_handoffs: [],
+    max_steps: 3,
+    max_tokens: 1000,
+    output_schema: 'control_plane_ui_gate_agent_v1',
+    status: 'published',
+  }, { tenantId, status: 'published', createdBy: userId });
+  return mustGetRegistryRecord(db, 'agent', input.agentId, 1) as Promise<RegistryRecord<AgentSpec>>;
+}
+
+function mustHash(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`Missing sha256 for ${label}`);
+  }
+  return value;
+}
+
+function auditorHeaders(): Record<string, string> {
+  return authHeaders('auditor', `${requestPrefix}_auditor`);
 }
 
 async function previewRoute(page: PageLike, keyword: string): Promise<RouterPreviewResponse> {
