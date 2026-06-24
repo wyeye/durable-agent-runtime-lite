@@ -118,6 +118,7 @@ jobs:
         run: |
           node - <<'NODE'
           const targets = [
+            ['mock-server', 'http://localhost:4100/readyz'],
             ['runtime-api', 'http://localhost:3000/readyz'],
             ['tool-gateway', 'http://localhost:3200/readyz'],
             ['runtime-worker', 'http://localhost:3300/readyz'],

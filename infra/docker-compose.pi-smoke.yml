@@ -13,12 +13,18 @@ services:
       LOG_LEVEL: info
     ports:
       - "${MOCK_SERVER_HOST_PORT:-4100}:4100"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4100/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   runtime-worker:
     restart: "no"
     depends_on:
       mock-server:
-        condition: service_started
+        condition: service_healthy
     environment:
       NODE_ENV: development
       APP_ENV: development
