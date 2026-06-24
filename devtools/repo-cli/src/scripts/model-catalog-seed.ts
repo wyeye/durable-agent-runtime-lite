@@ -34,7 +34,32 @@ export interface EnsureModelCatalogEntryResult {
   model_ref: ModelDefinitionRef;
 }
 
+export interface SmokeModelGatewaySeedState {
+  profile: string;
+  model: string;
+  baseUrl: string;
+}
+
+export interface RuntimeWorkerReadinessChecks {
+  model_gateway_profile?: string;
+  model_gateway_model?: string;
+}
+
 export const LOCAL_OLLAMA_MODEL_ID = 'qwen2.5:7b-instruct-q4_K_M';
+
+export function applySmokeModelGatewayReadiness(
+  current: SmokeModelGatewaySeedState,
+  checks: RuntimeWorkerReadinessChecks | undefined,
+): SmokeModelGatewaySeedState {
+  if (checks?.model_gateway_profile !== 'local-ollama') {
+    return current;
+  }
+  return {
+    profile: 'local-ollama',
+    model: checks.model_gateway_model ?? LOCAL_OLLAMA_MODEL_ID,
+    baseUrl: 'http://host.docker.internal:11434/v1',
+  };
+}
 
 export function localOllamaModelCatalogEntryInput(operatorId: string): EnsureModelCatalogEntryInput {
   return {

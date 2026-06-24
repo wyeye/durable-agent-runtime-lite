@@ -345,11 +345,15 @@ async function createPublishedModelPolicy(
     `ModelPolicy should validate: ${JSON.stringify(validation.validation.errors)}`,
   );
   await postJson<CapabilityRelease>(
-    `${controlPlaneUrl}/api/v1/model-policies/${encodeURIComponent(modelPolicyId)}/versions/${version}/publish`,
-    { release_note: `model catalog smoke policy v${version}` },
+    `${controlPlaneUrl}/api/v1/model-policies/${encodeURIComponent(modelPolicyId)}/versions/${version}/gray`,
+    {
+      release_note: `model catalog smoke policy v${version}`,
+      tenant_allowlist: [],
+      user_allowlist: [],
+    },
     adminHeaders,
   );
-  return { ...spec, status: 'published' };
+  return { ...spec, status: 'gray' };
 }
 
 async function createAgentPlan(

@@ -47,6 +47,7 @@ import {
 } from '@dar/db';
 import {
   LOCAL_OLLAMA_MODEL_ID,
+  applySmokeModelGatewayReadiness,
   ensureModelCatalogEntry,
   localMockModelCatalogEntryInput,
   localOllamaModelCatalogEntryInput,
@@ -1549,17 +1550,18 @@ async function assertWorkerUsesModelGateway(): Promise<void> {
       task_queues?: string[];
     };
   };
-  if (body.checks?.model_gateway_profile) {
-    modelGatewayProfile = body.checks.model_gateway_profile;
-    modelGatewayBaseUrl = body.checks.model_gateway_profile === 'local-ollama'
-      ? 'http://host.docker.internal:11434/v1'
-      : modelGatewayBaseUrl;
-  }
-  if (body.checks?.model_gateway_model) {
-    modelGatewayModel = body.checks.model_gateway_model;
-  } else if (body.checks?.model_gateway_profile === 'local-ollama') {
-    modelGatewayModel = 'qwen2.5:7b-instruct-q4_K_M';
-  }
+  ({
+    profile: modelGatewayProfile,
+    model: modelGatewayModel,
+    baseUrl: modelGatewayBaseUrl,
+  } = applySmokeModelGatewayReadiness(
+    {
+      profile: modelGatewayProfile,
+      model: modelGatewayModel,
+      baseUrl: modelGatewayBaseUrl,
+    },
+    body.checks,
+  ));
   assert.equal(body.checks?.pi_agent_mode, 'model_gateway', 'Evaluation backend smoke requires runtime-worker PI_AGENT_MODE=model_gateway');
   assert.equal(
     body.checks?.evaluation_worker_enabled,
