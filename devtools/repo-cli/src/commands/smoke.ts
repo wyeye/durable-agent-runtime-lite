@@ -90,8 +90,7 @@ async function runScenario(
 ): Promise<SmokeResult> {
   const started = Date.now();
   for (const artifact of scenario.artifacts ?? [`artifacts/smoke/${scenario.id}`]) {
-    await mkdir(fromRepo(artifact), { recursive: true }).catch(() => undefined);
-    await mkdir(dirname(fromRepo(artifact)), { recursive: true }).catch(() => undefined);
+    await prepareArtifactPath(fromRepo(artifact));
   }
   const [command, ...args] = scenario.command;
   if (!command) {
@@ -126,6 +125,15 @@ async function runScenario(
     },
     artifacts: scenario.artifacts ?? [`${repoRoot}/artifacts/smoke/${scenario.id}`],
   };
+}
+
+export async function prepareArtifactPath(targetPath: string): Promise<void> {
+  const directory = artifactDirectory(targetPath);
+  await mkdir(directory, { recursive: true });
+}
+
+export function artifactDirectory(targetPath: string): string {
+  return /\.[A-Za-z0-9_-]+$/u.test(targetPath) ? dirname(targetPath) : targetPath;
 }
 
 function parseSmokeOptions(args: string[]) {
