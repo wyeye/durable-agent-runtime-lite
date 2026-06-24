@@ -80,20 +80,20 @@ describe('docker deployment files', () => {
     expect(compose).toContain('TOOL_GATEWAY_URL: http://tool-gateway:3200');
   });
 
-  it('provides the real Temporal DB smoke script command target', async () => {
+  it('provides unified repo-cli smoke command targets', async () => {
     const rootPackage = await readFile('package.json', 'utf8');
-    expect(rootPackage).toContain('"smoke:temporal-db-e2e": "tsx scripts/smoke-temporal-db-e2e.ts"');
-    expect(rootPackage).toContain('"smoke:control-plane-api-e2e": "tsx scripts/smoke-control-plane-api-e2e.ts"');
-    expect(rootPackage).toContain('"runtime:assert-containerized": "tsx scripts/assert-containerized-runtime.ts"');
-    expect(rootPackage).toContain('"smoke:ollama-containerized-e2e": "tsx scripts/smoke-ollama-containerized-e2e.ts"');
-    await access('scripts/smoke-temporal-db-e2e.ts', constants.R_OK);
-    await access('scripts/smoke-control-plane-api-e2e.ts', constants.R_OK);
-    await access('scripts/assert-containerized-runtime.ts', constants.R_OK);
-    await access('scripts/smoke-ollama-containerized-e2e.ts', constants.R_OK);
+    expect(rootPackage).toContain('"dar": "tsx devtools/repo-cli/src/cli.ts"');
+    expect(rootPackage).toContain('"smoke:core": "pnpm dar smoke suite core"');
+    expect(rootPackage).toContain('"smoke:agent": "pnpm dar smoke suite agent"');
+    expect(rootPackage).toContain('"runtime:assert-containerized": "tsx devtools/repo-cli/src/scripts/assert-containerized-runtime.ts"');
+    await access('devtools/repo-cli/src/scripts/smoke-temporal-db-e2e.ts', constants.R_OK);
+    await access('devtools/repo-cli/src/scripts/smoke-control-plane-api-e2e.ts', constants.R_OK);
+    await access('devtools/repo-cli/src/scripts/assert-containerized-runtime.ts', constants.R_OK);
+    await access('devtools/repo-cli/src/scripts/smoke-ollama-containerized-e2e.ts', constants.R_OK);
   });
 
   it('lets example seeding target the local compose database without extra env', async () => {
-    const seedScript = await readFile('scripts/seed-examples.ts', 'utf8');
+    const seedScript = await readFile('devtools/repo-cli/src/scripts/seed-examples.ts', 'utf8');
     expect(seedScript).toContain('postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime');
   });
 });

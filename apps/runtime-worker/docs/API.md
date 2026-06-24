@@ -30,10 +30,9 @@ supervises segment boundaries and `runPiSegmentActivity` creates/restores the Pi
 Runtime modes:
 
 - `PI_AGENT_MODE=disabled`：不执行 agent。
-- `PI_AGENT_MODE=deterministic`：development/test only，仍走真实 Pi Core，只替换模型流。
 - `PI_AGENT_MODE=model_gateway`：生产模式，通过 `packages/model-client` 调本地/外部 Model Gateway。
 
-Production rejects deterministic mode.
+Production rejects non-`model_gateway` agent execution. Deterministic Pi response streams are only test-local support code and are not implemented inside production app source.
 
 ## Endpoints
 

@@ -188,6 +188,33 @@ describe('runtime-worker readiness', () => {
 
     await server.close();
   });
+
+  it('exposes model gateway profile readiness without exposing credentials', async () => {
+    const server = buildServer({
+      mode: 'temporal',
+      state: { status: 'running', ready: true },
+    }, {
+      ...config(),
+      PI_AGENT_MODE: 'model_gateway',
+      MODEL_GATEWAY_CONFIG_SOURCE: 'db',
+      MODEL_GATEWAY_PROFILE_ID: 'local-ollama',
+      MODEL_GATEWAY_API_KEY: 'secret-should-not-render',
+    });
+
+    const response = await server.inject({ method: 'GET', url: '/readyz' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: 'ready',
+      checks: {
+        pi_agent_mode: 'model_gateway',
+        model_gateway_config_source: 'db',
+        model_gateway_profile: 'local-ollama',
+      },
+    });
+    expect(response.body).not.toContain('secret-should-not-render');
+
+    await server.close();
+  });
 });
 
 function config(): RuntimeConfig {

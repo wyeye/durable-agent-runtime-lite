@@ -1,770 +1,117 @@
 # AGENTS.md
 
-## 1. Project Identity
+## 1. 作用与使用方式
 
-**Project name:** Durable Agent Runtime Lite
+本文件定义 Durable Agent Runtime Lite 的长期工程规则、架构边界和协作约束。
 
-This repository implements a compact, production-oriented Agent Runtime platform with a strict four-app architecture:
+本文件不是：
 
-1. `control-plane`
-2. `runtime-api`
-3. `runtime-worker`
-4. `tool-gateway`
+- 当前进度日报；
+- 阶段验收记录；
+- Smoke 命令清单；
+- Migration 版本清单；
+- Git 提交历史；
+- 产品路线图全文。
 
-The system provides:
-
-- Config-driven preset workflow orchestration.
-- Temporal-based durable execution.
-- Pi-based bounded Agent Loop.
-- Tool Gateway as the only tool invocation and side-effect boundary.
-- Flow, Route, Tool, Agent, Prompt, Policy, Human Task and Audit management.
-- Ability operation console for publishing, gray release, rollback, evaluation and runtime observation.
-- Generic architecture without business-domain coupling.
-
-This repository must remain a **generic runtime platform**. Do not introduce domain-specific business concepts unless the task explicitly requests it.
-
----
-
-## 2. Architecture Principles
-
-The intended runtime path is:
+这些信息分别维护在：
 
 ```text
-User / Frontend / API / Webhook
-  -> runtime-api
-  -> Intent Router / Flow Router
-  -> Temporal Workflow
-  -> runtime-worker
-  -> Pi Agent Loop, when needed
-  -> tool-gateway
-  -> External tools / APIs / MCP servers / Mock systems
+docs/project/current-status.md
+docs/project/roadmap-and-release.md
+docs/operations/testing-replay-and-recovery.md
+CHANGELOG.md
 ```
 
-Core rules:
+除非架构规则发生变化，不要因为单次功能开发频繁修改本文件。
 
-- `runtime-api` is the only public runtime entry point.
-- `runtime-worker` owns Temporal Workflow and Activity execution.
-- Pi is a bounded Agent Loop, not the system controller.
-- Pi must not directly call external business systems.
-- All tool calls must go through `tool-gateway`.
-- `tool-gateway` is the only external tool and side-effect boundary.
-- Temporal Workflow code must remain deterministic.
-- External calls, database calls, HTTP calls, LLM calls, Pi calls and tool calls must be implemented as Activities or service calls outside deterministic Workflow logic.
-- FlowSpec version must be locked when a workflow starts.
-- Running workflow instances must not be affected by newer FlowSpec versions.
-- Medium-risk and high-risk side-effect actions must support preview, human confirmation, idempotency and audit.
-
-Internationalization rules:
-
-- First-version locale support is `zh-CN` only; do not add empty `en-US` resource files or a language switcher until real English copy is implemented.
-- Keep machine fields stable and untranslated: error codes, event codes, event types, status enums, resource types, API paths, JSON field names, ids, hashes, model ids, tool names and provider ids.
-- Localize only display text such as API `message`, UI labels, status labels, safe error explanations, log messages, audit display messages, OpenAPI descriptions, validation messages and health/readiness descriptions.
-- API responses use request `Accept-Language` and set `Content-Language` plus `Vary: Accept-Language`; unsupported languages fall back to `zh-CN`.
-- Runtime logs use deployment-level `LOG_LOCALE`, not per-request locale.
-- Audit facts must remain `event_type`, `message_key` and `message_params`; `display_message` is a render result, not the source of truth.
-- Locale must not affect Workflow branching, policy decisions, idempotency keys, hashes, signatures or authorization.
+任务提示词可以收窄本次工作范围，但不得默认突破本文件中的安全、确定性、租户隔离和四应用架构边界。
 
 ---
 
-## 3. Production Apps
+## 2. 项目定位
 
-### 3.1 `apps/control-plane`
-
-**Purpose:** Ability operation console and control plane.
-
-Responsibilities:
-
-- FlowSpec management.
-- RouteSpec management.
-- ToolManifest management.
-- AgentSpec management.
-- Prompt management.
-- Model Gateway Profile and Model Definition management.
-- Policy configuration.
-- Publish, gray release, rollback and disable operations.
-- Route examples and negative examples management.
-- Human task console.
-- Audit query UI.
-- Runtime dashboard and evaluation views.
-- Read-only Tenant Policy Snapshot and Tenant Agent Admission operations views.
-
-Default stack:
-
-- React 19.
-- Vite.
-- Ant Design.
-- TypeScript.
-- Shared contracts from `packages/contracts`.
-
-Rules:
-
-- Do not implement runtime execution logic here.
-- Do not call tools directly from the frontend.
-- Do not expose, echo, log, or render model API keys or encrypted credential fields; model gateway API keys are write-only inputs.
-- Do not duplicate schemas in the frontend; import or generate from shared contracts.
-- Writable Registry and Evaluation configuration uses visual forms; JSON views are read-only only.
-- ModelPolicy editing uses exact published ModelDefinition selection and must not reintroduce raw `gateway_profile` / `model_id` manual target entry.
-- Flow editing uses the visual sequence builder for the existing ordered `steps` array semantics; do not introduce arbitrary DAG semantics unless explicitly requested.
-- Tenant Policy Snapshot and Tenant Agent Admission are runtime operations resources, not editable Registry resources; control-plane may read them but must not create, update or delete them.
-
----
-
-### 3.2 `apps/runtime-api`
-
-**Purpose:** Unified runtime entry, session layer, intent routing and workflow starter.
-
-Responsibilities:
-
-- Public API entry.
-- Tenant, user and request context normalization.
-- Authentication and authorization placeholders.
-- Session handling.
-- Intent Router.
-- Flow Router.
-- Rule-based route matching.
-- Vector recall integration placeholder.
-- Pi or LLM Top-K classification adapter placeholder.
-- Workflow starter through Temporal Client.
-- Task creation and status query.
-- Streaming response placeholder.
-
-Default stack:
-
-- Node.js 24 LTS.
-- TypeScript 5.x.
-- Fastify 5.x.
-- Zod 4.
-- OpenAPI 3.1.
-- Temporal Client.
-- PostgreSQL 17 and pgvector through shared DB package.
-- Valkey where needed.
-
-Rules:
-
-- Do not call external business systems from `runtime-api`.
-- Do not execute tools directly.
-- Do not run Pi directly here.
-- Only start workflows or return route previews.
-- Route results must be explicit and auditable.
-- Low-confidence routing must return clarification, fallback to GenericAgentWorkflow or escalate according to policy.
-
----
-
-### 3.3 `apps/runtime-worker`
-
-**Purpose:** Durable execution layer with Temporal Worker, Activity Worker and Pi Runner wrapper.
-
-Responsibilities:
-
-- Temporal Worker bootstrap.
-- Temporal Workflow definitions.
-- Temporal Activity implementations.
-- `ConfigDrivenWorkflow`.
-- `GenericAgentWorkflow`.
-- Human task wait and Signal handling.
-- FlowSpec snapshot loading through Activity.
-- Tool invocation through Tool Gateway client.
-- Pi Runner wrapper.
-- Model Gateway adapter placeholder.
-- DB-backed Model Gateway Profile / Model Definition resolution and credential decryption outside deterministic Workflow code.
-- Workflow tests.
-
-Default stack:
-
-- Node.js 24 LTS.
-- TypeScript 5.x.
-- Temporal TypeScript SDK.
-- Pi Agent Loop.
-- Zod 4.
-- OpenTelemetry.
-- Pino.
-
-Temporal rules:
-
-- Workflow code must be deterministic.
-- Do not call databases, HTTP APIs, LLMs, Pi, random functions or current time directly in Workflow code.
-- Put external calls in Activities.
-- Use deterministic timers and Temporal APIs.
-- Use stable Workflow inputs and immutable FlowSpec versions.
-- Use idempotency keys for side-effect Activities.
-- Keep large documents, long prompts, large tool results and attachments outside Temporal history; store references instead.
-
-Pi rules:
-
-- Pi can plan, summarize, classify, generate text and propose tool calls.
-- Pi must not directly call external systems.
-- Pi must not receive Tool Gateway, DB, Temporal Client, filesystem, shell, MCP or business API capabilities.
-- Pi Deferred Tools may only emit proposals; real tool invocation must be mediated by Workflow -> Activity -> Tool Gateway.
-- Pi should return structured results.
-- In mediated mode, Pi returns proposed tool calls; Workflow and Tool Gateway decide whether to execute them.
-- Pi output statuses should be limited to known states such as `final`, `need_tool`, `need_user`, `handoff_to_workflow` and `failed`.
-- `PI_AGENT_MODE=deterministic` is development/test only; production must use `PI_AGENT_MODE=model_gateway`.
-- In `model_gateway` mode, runtime-worker must use ModelDefinition and ModelGatewayProfile data as the model-call source of truth; production model calls must not fall back to deployment-level `MODEL_GATEWAY_BASE_URL`, `MODEL_GATEWAY_API_KEY`, `MODEL_GATEWAY_MODEL`, or default/latest models.
-- Model gateway credentials must never be exposed to Pi, Workflow code, runtime-api, tool-gateway, frontend, logs, audit payloads, traces, or Temporal history.
-- `handoff_to_workflow` may only start an allowed exact `FlowExecutionPlan` child workflow.
-
----
-
-### 3.4 `apps/tool-gateway`
-
-**Purpose:** Single tool invocation gateway and side-effect safety boundary.
-
-Responsibilities:
-
-- Tool registry read APIs.
-- Tool invocation APIs.
-- Tool input and output schema validation.
-- Permission and policy checks.
-- Risk level handling.
-- Human confirmation decision support.
-- Idempotency.
-- Rate limiting placeholder.
-- Audit log.
-- Tool adapters.
-- HTTP, MCP and mock adapter abstraction.
-
-Default stack:
-
-- Node.js 24 LTS.
-- TypeScript 5.x.
-- Fastify 5.x.
-- Zod 4.
-- PostgreSQL 17.
-- Valkey.
-- Kysely.
-- OpenTelemetry.
-- Pino.
-
-Rules:
-
-- All tool invocations must pass through `tool-gateway`.
-- Every tool call must include tenant context, user context, task context, tool name, tool version, arguments, idempotency key and risk metadata.
-- Validate all tool arguments against registered schema before invoking adapters.
-- Apply policy before invocation.
-- Write audit logs for allowed, denied, failed and idempotent replayed calls.
-- Never expose adapter secrets to Pi, runtime-api or frontend.
-- Do not add domain-specific tool logic directly into generic gateway core; use adapters.
-- The generic `http_readonly` adapter is GET-only, L0/L1-only and requires `side_effect=false`; Host, scheme and path must come from ToolManifest and platform allowlist, not user input.
-- `http_readonly` secrets must use `env:TOOL_SECRET_*` references only; never store real API keys in ToolManifest, DB, audit, logs, Temporal history or UI.
-
-Long-term note:
-
-- `tool-gateway` may be replaced by Go or Java in a later phase if throughput, enterprise integration or security isolation requirements increase. For the MVP, keep it in Node.js to share contracts and speed up delivery.
-
----
-
-## 4. Non-Production App
-
-### `devtools/mock-server`
-
-**Purpose:** Local development and integration testing only.
-
-Responsibilities:
-
-- Mock external business systems.
-- Mock tools.
-- Mock MCP-like endpoints.
-- Provide deterministic test responses.
-
-Rules:
-
-- Do not treat this as a production app.
-- Do not put production logic here.
-- Do not let production services depend on mock-only behavior.
-
----
-
-## 5. Shared Packages
-
-Use shared packages under `packages/`:
+项目名称：
 
 ```text
-packages/
-  contracts/
-  config/
-  db/
-  logger/
-  telemetry/
-  security/
-  temporal/
+Durable Agent Runtime Lite
 ```
 
-### 5.1 `packages/contracts`
+项目目标：
 
-Must contain shared DTOs, schemas, enums and API contracts:
+构建一个通用、可持久执行、可治理、可评测的 Agent Runtime 平台，同时支持：
 
-- `FlowSpec`.
-- `RouteSpec`.
-- `AgentSpec`.
-- `ToolManifest`.
-- `TaskRun`.
-- `RouteResult`.
-- `ToolInvokeRequest`.
-- `ToolInvokeResponse`.
-- `HumanTask`.
-- `AuditEvent`.
-- `RuntimeError`.
-- Common enums and status codes.
+- 配置驱动的预置流程；
+- Temporal 持久工作流；
+- Pi 有界 Agent Loop；
+- 规则与语义路由；
+- 模型目录与模型策略；
+- Tool Gateway 统一工具出口；
+- L3 人工确认；
+- Tenant Runtime Policy；
+- Evaluation 与 Registry Publish Gate；
+- 能力运营控制台；
+- 审计、幂等、崩溃恢复和 Replay。
 
-Rules:
+项目必须保持通用平台属性。
 
-- Use Zod for external input schemas.
-- Export TypeScript types from Zod schemas.
-- Do not duplicate DTOs inside apps.
-- API contracts must be versioned when changed incompatibly.
-
-### 5.2 `packages/config`
-
-Responsibilities:
-
-- Environment loading.
-- Typed configuration.
-- Shared config validation.
-
-Rules:
-
-- Do not access raw `process.env` throughout apps except inside this package or app bootstrap.
-- Validate required environment variables.
-- Never commit real secrets.
-
-### 5.3 `packages/db`
-
-Responsibilities:
-
-- Kysely database client.
-- Database type definitions.
-- Migration helpers.
-- Transaction helpers.
-
-Rules:
-
-- Database schemas must be changed through migrations under `db/migrations`.
-- Do not make ad hoc schema changes.
-- Keep vector index tables separate from main FlowSpec tables.
-
-### 5.4 `packages/logger`
-
-Responsibilities:
-
-- Shared structured logger.
-- Request context log bindings.
-- Standard log fields.
-
-Required log fields when available:
-
-- `request_id`.
-- `tenant_id`.
-- `user_id`.
-- `task_run_id`.
-- `workflow_id`.
-- `flow_id`.
-- `flow_version`.
-- `tool_name`.
-
-### 5.5 `packages/telemetry`
-
-Responsibilities:
-
-- OpenTelemetry bootstrap.
-- Trace propagation helpers.
-- Common span attributes.
-- Metrics naming conventions.
-
-### 5.6 `packages/security`
-
-Responsibilities:
-
-- Auth context parsing.
-- Permission placeholder.
-- Policy helper types.
-- Sensitive data masking helpers.
-
-### 5.7 `packages/temporal`
-
-Responsibilities:
-
-- Shared Temporal client creation.
-- Task queue names.
-- Workflow IDs and idempotency key helpers.
-- Temporal-related shared types.
+除非任务明确要求，不得把特定行业、客户或业务系统的概念写入通用 Runtime、Contract 或 Registry 核心。
 
 ---
 
-## 6. Technology Baseline
+## 3. 事实源优先级
 
-Use the documented v1.5 technical baseline unless a task explicitly says otherwise:
+发生文档、总结和代码不一致时，按以下顺序判断：
 
-- Node.js 24 LTS.
-- TypeScript 5.x.
-- pnpm workspace.
-- Turborepo.
-- Fastify 5.x.
-- React 19.
-- Vite.
-- Ant Design.
-- Zod 4.
-- OpenAPI 3.1.
-- PostgreSQL 17.
-- pgvector.
-- Kysely.
-- Valkey 8.x.
-- Temporal TypeScript SDK.
-- Pi Agent Loop.
-- OpenTelemetry.
-- Pino.
-- Vitest.
-- Playwright.
+1. 当前 Git 工作区代码；
+2. `packages/contracts`；
+3. 数据库 Migration；
+4. 自动化测试和真实 Smoke；
+5. `docs/project/current-status.md`；
+6. 活跃架构和指南文档；
+7. 根 `README.md`；
+8. `docs/archive/` 和历史分析。
 
-Do not introduce a new framework, ORM, package manager, testing framework or language runtime unless explicitly requested.
+历史总结、旧 Codex 回复和聊天内容不是代码事实源。
+
+不要仅依据文件修改时间判断内容是否最新。
 
 ---
 
-## 7. Repository Layout
+## 4. 开始任务前的工作协议
 
-Expected structure:
-
-```text
-durable-agent-runtime-lite/
-  apps/
-    control-plane/
-    runtime-api/
-    runtime-worker/
-    tool-gateway/
-  packages/
-    contracts/
-    config/
-    db/
-    logger/
-    telemetry/
-    security/
-    temporal/
-  db/
-    migrations/
-    seeds/
-  examples/
-    flows/
-    agents/
-    tools/
-    prompts/
-    router-tests/
-  infra/
-    docker-compose.yml
-  devtools/
-    mock-server/
-  tests/
-    e2e/
-    contract/
-  scripts/
-  docs/
-  AGENTS.md
-  README.md
-  package.json
-  pnpm-workspace.yaml
-  turbo.json
-  tsconfig.base.json
-```
-
-Rules:
-
-- Keep each app focused on its responsibility.
-- Put shared schemas and helpers in packages.
-- Avoid circular dependencies between packages.
-- Apps may depend on packages; packages must not depend on apps.
-- Do not create additional production apps without explicit approval.
-
----
-
-## 8. Development Commands
-
-Use these commands when available:
+每个任务开始时至少执行：
 
 ```bash
-pnpm install
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm build
-pnpm dev
+git status --short --branch
+git remote -v
+git fetch origin
+git rev-parse HEAD
+git rev-parse origin/main
+git log --oneline -10
+git diff --stat
+git diff --check
 ```
 
-For local infrastructure:
+规则：
 
-```bash
-docker compose -f infra/docker-compose.yml up -d
-```
-
-Before completing a task, run relevant checks:
-
-```bash
-pnpm lint
-pnpm typecheck
-pnpm test
-```
-
-If a command fails because the repository is not fully initialized yet, either fix the missing script or explain clearly why it cannot run.
-
----
-
-## 9. Coding Standards
-
-General rules:
-
-- Use TypeScript strict mode.
-- Prefer explicit public API types.
-- Validate external inputs with Zod.
-- Use structured JSON logs.
-- Use consistent error shapes from `packages/contracts`.
-- Do not swallow errors silently.
-- Do not expose internal stack traces through public APIs.
-- Do not store secrets in code.
-- Do not hardcode tenant-specific or user-specific values.
-- Do not introduce business-domain coupling into generic runtime code.
-- Prefer small modules and explicit boundaries.
-- Add tests for new logic.
-- Keep implementation aligned with docs.
-
-Naming rules:
-
-- Use `camelCase` for variables and functions.
-- Use `PascalCase` for classes, types and interfaces.
-- Use `UPPER_SNAKE_CASE` for environment variable names.
-- Use kebab-case for file and directory names unless framework convention says otherwise.
-
-Error handling rules:
-
-- All public API errors must use the standard error response contract.
-- Include a stable error code.
-- Include safe, user-readable messages.
-- Do not include secrets, tokens, stack traces or raw adapter responses in public error payloads.
+- 不自动 `reset`；
+- 不自动 `merge`；
+- 不自动 `rebase`；
+- 不覆盖用户已有修改；
+- 不回滚不属于本任务的变更；
+- 本地与远端不一致时先报告；
+- 除非用户明确要求，不执行 `commit`、`push`、`tag` 或 GitHub Release；
+- 以当前仓库实际结构为准，不凭旧提示词猜测；
+- 先审计已有实现，再写代码；
+- 已完成能力不得推倒重写；
+- 一次任务只解决一个可验收闭环；
+- 不把下一阶段内容“顺便”加入当前任务。
 
 ---
 
-## 10. API Standards
+## 5. 固定四应用架构
 
-Each production app must expose:
-
-- `GET /healthz`.
-- `GET /readyz`.
-- Metrics or OpenTelemetry-ready instrumentation.
-
-Public APIs must have:
-
-- Request schema.
-- Response schema.
-- Standard error schema.
-- OpenAPI documentation or a path to generate it.
-
-Common request metadata should include where applicable:
-
-- `request_id`.
-- `tenant_id`.
-- `user_id`.
-- `session_id`.
-- `task_run_id`.
-- `workflow_id`.
-
-Do not expose internal implementation details such as adapter stack traces, database error strings or raw model provider payloads.
-
----
-
-## 11. Data and Migration Standards
-
-Core tables should include, at minimum:
-
-- `flow_definition`.
-- `flow_route_config`.
-- `flow_route_embedding`.
-- `agent_spec`.
-- `tool_manifest`.
-- `prompt_definition`.
-- `task_run`.
-- `human_task`.
-- `audit_event`.
-- `idempotency_record`.
-
-Rules:
-
-- Use migrations for all schema changes.
-- Migrations must be deterministic and reviewable.
-- Do not modify old migrations after they are applied; create new migrations.
-- Keep seed data separate from migrations.
-- Store immutable published specs by version and hash.
-- Do not mutate already published FlowSpec versions in place.
-
----
-
-## 12. Flow, Route and Publish Rules
-
-FlowSpec rules:
-
-- FlowSpec must be versioned.
-- Published FlowSpec versions are immutable.
-- FlowSpec must include input schema, output schema and step definitions.
-- Step types should be constrained to approved types such as `activity`, `tool`, `agent`, `human_task` and `condition`.
-- High-risk steps must be marked and routed through confirmation or policy.
-
-RouteSpec rules:
-
-- Route configuration must include examples, negative examples, keywords, supported channels, role constraints, priority and thresholds where applicable.
-- Router should use a hybrid approach:
-  - rule match;
-  - vector recall;
-  - Top-K LLM or Pi classification;
-  - policy fallback.
-- Low-confidence route decisions must not silently execute high-risk flows.
-
-Publish rules:
-
-- Publish must validate FlowSpec, RouteSpec, ToolManifest dependencies, AgentSpec dependencies and Prompt dependencies.
-- Publish should emit a publish event.
-- Runtime routing should load the latest eligible published or gray version.
-- Rollback should switch routing version pointers; running workflows remain version-locked.
-
----
-
-## 13. Tool Invocation Rules
-
-Every tool invocation must include:
-
-- `tenant_id`.
-- `user_id`.
-- `task_run_id`.
-- `workflow_id`, when available.
-- `tool_name`.
-- `tool_version`.
-- `arguments`.
-- `idempotency_key`.
-- `risk_level`.
-- `request_id`.
-
-Tool invocation lifecycle:
-
-```text
-validate request
-  -> load ToolManifest
-  -> validate arguments schema
-  -> check policy
-  -> check idempotency
-  -> invoke adapter
-  -> validate output schema when configured
-  -> write audit event
-  -> return normalized response
-```
-
-Rules:
-
-- Unknown tools must return a standard error.
-- Schema validation failures must return a standard error.
-- Denied policy decisions must be audited.
-- Repeated idempotency keys must return the original recorded result or a safe conflict response.
-- Tool outputs must be normalized and safe for downstream use.
-
----
-
-## 14. Human Task Rules
-
-Human tasks are required for:
-
-- Medium-risk side-effect actions when policy says confirmation is required.
-- High-risk actions unless explicitly configured otherwise.
-- Low-confidence or ambiguous route decisions requiring user clarification.
-- Agent requests for missing information.
-- Exception handling and manual takeover.
-
-Human task records must include:
-
-- `human_task_id`.
-- `tenant_id`.
-- `task_run_id`.
-- `workflow_id`.
-- `status`.
-- `assignee` or candidate groups when available.
-- `payload`.
-- `created_at`.
-- `completed_at`.
-- `decision`.
-
----
-
-## 15. Observability and Audit Rules
-
-Logging:
-
-- Use structured JSON logs.
-- Include trace and request context where available.
-- Avoid logging sensitive data.
-- Mask tokens, credentials and personal data where applicable.
-
-Tracing:
-
-- Use OpenTelemetry conventions where possible.
-- Create spans for route decision, workflow start, activity execution, Pi call, model call, tool invocation and policy decision.
-
-Audit:
-
-- Audit must be append-only.
-- Audit tool invocations, route decisions, publish actions, human approvals, policy denials, workflow failures and rollback actions.
-- Audit events should include actor, action, target, result, reason and timestamp.
-
----
-
-## 16. Testing Standards
-
-Use this testing pyramid:
-
-- Unit tests for pure functions and schema validation.
-- Integration tests for API and DB interactions.
-- Contract tests for shared DTOs and API schemas.
-- Temporal workflow tests for workflow behavior.
-- Tool Gateway tests for policy, idempotency and audit.
-- E2E smoke tests for route -> workflow -> tool invocation path.
-- Frontend component tests for key control-plane pages.
-- Playwright smoke tests for core console flows when available.
-
-Minimum expectations for new features:
-
-- Happy path.
-- Validation failure.
-- Permission or policy denial where applicable.
-- Idempotency behavior where applicable.
-- Audit event creation where applicable.
-- Typecheck coverage.
-
-Do not mark a task as complete if tests are missing and no clear explanation is provided.
-
----
-
-## 17. Security Rules
-
-- Do not commit secrets.
-- Do not hardcode tokens, API keys or model credentials.
-- Use environment variables and secret management placeholders.
-- Do not log secrets.
-- Mask sensitive fields in logs and audit where appropriate.
-- Apply tenant isolation to runtime requests, registry queries and tool invocations.
-- Do not allow Pi, prompts or user input to bypass policy checks.
-- Treat tool adapters as privileged code paths.
-- Validate all external inputs.
-
----
-
-## 18. Dependency Rules
-
-- Use pnpm workspace.
-- Prefer workspace packages for shared code.
-- Do not introduce duplicate libraries for the same purpose.
-- Do not add heavy dependencies without justification.
-- Do not switch framework choices without approval.
-- Keep dependency changes small and explain why they are needed.
-
----
-
-
-## 19. Docker Deployment Rules
-
-The project is expected to be deployed with Docker. Every production app must be buildable and runnable as a container image.
-
-Production apps requiring Docker support:
+生产应用只能是：
 
 ```text
 apps/control-plane
@@ -773,244 +120,967 @@ apps/runtime-worker
 apps/tool-gateway
 ```
 
-`devtools/mock-server` may have a development-only Docker image, but it must not be treated as a production service.
+未经明确批准，不得新增第五个生产应用或生产业务容器。
 
-### 19.1 Required Docker Files
+### 5.1 control-plane
 
-Use **multiple app-specific Dockerfiles**. Each production app owns its Dockerfile so that build context, exposed port, healthcheck and runtime entrypoint are explicit.
+职责：
 
-Required files:
+- 能力运营控制台；
+- Registry 管理；
+- Flow、Route、Tool、Agent、Prompt 管理；
+- Model Gateway、Model、ModelPolicy 管理；
+- Tenant Policy 管理；
+- Evaluation Dataset、Run、Gate 管理；
+- 发布、灰度、回滚、禁用；
+- Human Task、TaskRun、AgentRun、Audit、ToolCall 运营视图；
+- BFF 和 OpenAPI；
+- 前端静态资源托管。
+
+禁止：
+
+- 执行 Workflow；
+- 运行 Pi；
+- 直接执行 Tool；
+- 直接访问业务系统；
+- 在浏览器中处理或回显模型 API Key；
+- 在前端复制后端 DTO；
+- 在前端自行计算 Gate Decision、Policy Decision 或权限结果。
+
+### 5.2 runtime-api
+
+职责：
+
+- 统一 Runtime 公共入口；
+- 身份、租户、用户和请求上下文标准化；
+- action、规则和 pgvector 语义路由；
+- 澄清和拒绝；
+- TaskRun 创建与查询；
+- Temporal Workflow 启动和 Signal 入口；
+- Evaluation Run 启动和查询。
+
+允许的外部模型调用：
+
+- 仅允许通过专用 Embedding Resolver 调 OpenAI-compatible Embeddings；
+- 只用于路由语义向量；
+- 必须使用精确 ModelDefinition；
+- 必须从 Model Catalog 动态解析 Gateway；
+- 不允许调用 Chat Completion；
+- 不允许运行 Pi。
+
+禁止：
+
+- 直接调用 Tool；
+- 直接访问业务系统；
+- 直接执行 Agent Loop；
+- 在澄清或拒绝时创建 Workflow；
+- 使用 memory/default/sample 作为 production fallback。
+
+### 5.3 runtime-worker
+
+职责：
+
+- Temporal Worker；
+- Workflow 和 Activity；
+- ConfigDrivenWorkflow；
+- Pi Durable Agent Workflow；
+- Human Task Signal；
+- Handoff 和 Continue-As-New；
+- Model Gateway 调用；
+- Context Snapshot；
+- Crash Recovery 和 Replay；
+- Evaluation Worker。
+
+禁止：
+
+- Workflow 代码直接访问 DB；
+- Workflow 代码直接访问 HTTP；
+- Workflow 代码直接调用模型；
+- Workflow 代码直接运行 Pi；
+- Workflow 代码直接读取当前时间或随机数；
+- runtime-worker 直接调用业务 HTTP API；
+- Pi 直接访问 Tool Gateway、DB、Temporal Client、文件系统、Shell、MCP 或业务系统。
+
+### 5.4 tool-gateway
+
+职责：
+
+- Tool 唯一执行出口；
+- ToolManifest 解析；
+- 参数和输出 Schema 校验；
+- Tenant Policy 和 Tool Policy；
+- 风险等级；
+- 幂等；
+- 审计；
+- L3 preview / Human Task / commit；
+- Adapter Dispatcher；
+- 只读 HTTP Adapter；
+- 后续批准的业务 Adapter。
+
+禁止：
+
+- 绕过 ToolManifest；
+- 绕过 Tenant Policy；
+- 信任调用方提交的 resolved policy；
+- 接受用户动态覆盖 Host、Scheme 或固定 Path；
+- 记录凭据、Authorization 或未脱敏结果；
+- 让生产请求落到 mock adapter。
+
+---
+
+## 6. 运行路径不变量
+
+正式运行路径：
 
 ```text
-apps/control-plane/Dockerfile          # static console image, normally Nginx/unprivileged
-apps/runtime-api/Dockerfile            # runtime API image
-apps/runtime-worker/Dockerfile         # Temporal worker image
-apps/tool-gateway/Dockerfile           # tool gateway image
-.dockerignore                          # required for all Docker builds
-infra/docker-compose.yml               # local integrated runtime, including dependencies
-scripts/docker-build-all.sh            # builds all production app images
-scripts/docker-run-local.sh            # starts local Docker stack
-docs/13_docker_deployment.md           # Docker deployment notes
+用户 / API / Webhook
+  -> runtime-api
+  -> action / rule / semantic router
+  -> Temporal Workflow
+  -> runtime-worker
+  -> Pi Agent Loop（需要时）
+  -> Activity
+  -> tool-gateway
+  -> 外部工具或业务 API
 ```
 
-### 19.0.1 AR-2A Ollama Container Gate
+核心规则：
 
-The local Ollama release gate is a manual validation path, not a fifth production app.
+- `runtime-api` 是唯一 Runtime 公共入口；
+- `tool-gateway` 是唯一工具和业务副作用出口；
+- Pi 只能生成文本、规划、分类和 Tool Proposal；
+- Pi Deferred Tool 只能终止当前 Segment 并返回 Proposal；
+- 真正 Tool Call 必须由 Workflow -> Activity -> Tool Gateway 执行；
+- 所有外部调用必须位于 Activity 或非 Workflow 服务层；
+- 运行时不得读取 `latest` 资源；
+- 运行时不得使用默认资源兜底；
+- 运行时必须使用不可变 Execution Plan；
+- 已运行 Workflow 不受新发布版本影响。
 
-Rules:
+---
 
-- Ollama runs on the host machine only.
-- The exact model is `qwen2.5:7b-instruct-q4_K_M`.
-- The four production apps must run from Docker images.
-- `runtime-worker` must use `PI_AGENT_MODE=model_gateway`, `MODEL_GATEWAY_PROFILE_ID=local-ollama`, and `MODEL_GATEWAY_BASE_URL=http://host.docker.internal:11434/v1`.
-- `mock-server` must not run for the Ollama gate.
-- deterministic Pi must not be used for the Ollama gate.
-- Container acceptance must prove `/version` build metadata and DB model-call evidence, not merely a non-crashing flow.
-- Ordinary GitHub hosted CI must not download or run the 7B Ollama model; use `.github/workflows/ollama-runtime.yml` on `[self-hosted, ollama]`.
+## 7. Registry 和版本锁定
 
-Build context rule:
+以下 Registry 资源必须版本化：
 
-- All Docker builds must use the **repository root** as the Docker build context.
-- Do not use `apps/<app>` as the build context, because app images need access to workspace packages, lockfiles and shared configs.
+- FlowDefinition；
+- RouteConfig；
+- ToolManifest；
+- AgentSpec；
+- PromptDefinition；
+- ModelGatewayProfile；
+- ModelDefinition；
+- ModelPolicy；
+- TenantRuntimePolicy；
+- EvaluationDataset；
+- EvaluationGatePolicy。
 
-Expected build pattern:
+规则：
 
-```bash
-docker build \
-  -f apps/runtime-api/Dockerfile \
-  -t durable-agent-runtime/runtime-api:local \
-  .
+- draft 和 validated 可以修改；
+- published、gray、deprecated、disabled 不可原地修改；
+- 修改已发布资源必须 clone 新版本；
+- 发布前必须验证所有精确依赖；
+- 发布必须记录版本、Hash、操作者和 Audit；
+- rollback 切换可选版本，不修改历史内容；
+- 所有引用必须包含精确版本；
+- 需要防漂移的引用必须包含 Hash；
+- 不允许 `latest`；
+- 不允许缺少依赖时选择默认资源。
+
+不可变运行计划包括：
+
+- FlowExecutionPlan；
+- AgentExecutionPlan；
+- EvaluationExecutionPlan；
+- Tenant Policy Snapshot；
+- Evaluation Subject Snapshot。
+
+---
+
+## 8. Temporal 确定性规则
+
+Workflow 中禁止：
+
+- DB 调用；
+- HTTP 调用；
+- 模型调用；
+- Pi 调用；
+- Tool 调用；
+- 文件系统访问；
+- Shell；
+- 非 Temporal 随机数；
+- 直接墙钟时间；
+- 未受控全局状态。
+
+Workflow 中允许：
+
+- Temporal Timer；
+- Signal；
+- Child Workflow；
+- Activity；
+- Continue-As-New；
+- 确定性计算；
+- 不可变输入。
+
+其他规则：
+
+- 外部 I/O 必须放在 Activity；
+- 大 Prompt、Context、Tool Result 和附件不得直接放入 History；
+- History 中保存引用；
+- Side Effect Activity 必须有稳定幂等键；
+- Workflow 修改必须通过 Replay；
+- 不删除历史 Replay Fixture 来掩盖不兼容；
+- 必要时使用 Temporal Patch API；
+- Worker Crash 后必须使用同一 Plan、Policy Snapshot 和幂等身份恢复。
+
+---
+
+## 9. Pi Agent Loop 规则
+
+Pi 是受 Temporal 管理的有界内循环，不是系统总控制器。
+
+必须：
+
+- 使用真实 Pi Agent Core；
+- 使用 Segment 边界；
+- 使用最大步骤、Token、ToolCall、Handoff、时长和 Context 预算；
+- 使用 Context Snapshot 恢复；
+- Tool Proposal 经 Temporal 边界；
+- Tool Result 必须来自 Tool Gateway 权威结果；
+- Human Task、Handoff、Continue-As-New 由 Temporal 管理。
+
+禁止：
+
+- Pi 直接调用 Tool Gateway；
+- Pi 直接访问业务 API；
+- Pi 直接读取数据库；
+- Pi 直接使用 Secret；
+- Pi 直接访问 MCP；
+- Pi 直接执行 Shell；
+- Pi 直接访问文件系统；
+- 保存 hidden chain-of-thought。
+
+---
+
+## 10. 路由规则
+
+路由顺序固定为：
+
+```text
+1. tenant / channel / role 过滤
+2. action_id 精确匹配
+3. keyword / example 规则匹配
+4. pgvector Top-K 语义召回
+5. matched / need_clarify / reject
 ```
 
-Per-app Dockerfiles may share the same build pattern, base images and comments, but they must remain separate files. This makes it easier for Codex and reviewers to reason about each app image independently.
+规则：
 
-### 19.2 Docker Build Rules
+- action 和规则命中优先于语义召回；
+- negative example 是硬排除；
+- channel 和 role 在向量召回前过滤；
+- 只有 published / gray 可执行版本进入候选；
+- 语义 Embedding 是基础模型能力，不是 Tool；
+- Embedding 调用由 runtime-api 的专用 Resolver 执行；
+- 澄清和拒绝不得创建 TaskRun 或 Workflow；
+- 低置信度不得静默执行高风险 Flow；
+- production 不允许 MockVectorRecall；
+- LLM/Pi 候选重排只有在明确任务批准后才能加入。
 
-- Use multi-stage builds.
-- Use the documented Node.js baseline from the technology stack document.
-- Use `corepack` and `pnpm`; do not switch to npm or yarn.
-- Use `pnpm install --frozen-lockfile` inside Docker builds.
-- Prefer Turborepo filter/deploy or an equivalent workspace-pruning approach for smaller images.
-- Do not copy local `node_modules` into images.
-- Do not bake `.env`, tokens, model keys, database passwords or other secrets into images.
-- Do not use `latest` tags for production images.
-- Run runtime containers as a non-root user or use an unprivileged base image.
-- Keep final runtime images as small as practical.
-- Add a Docker healthcheck using `/healthz` where possible.
-- Backend production apps must expose `HOST` and `PORT` environment variables.
-- Backend production apps must bind to `0.0.0.0` inside the container.
-- Backend production apps must support graceful shutdown on `SIGTERM`.
-- `control-plane` may be served as static files by an unprivileged Nginx image. In that case, document its internal port and provide `/healthz`, `/readyz` and SPA fallback.
+---
 
-### 19.3 Required App Scripts
+## 11. 模型目录和凭据规则
 
-Each production app package should provide these scripts:
+关系：
+
+```text
+ModelGatewayProfile
+  -> ModelDefinition
+  -> ModelPolicy
+  -> AgentSpec
+  -> AgentExecutionPlan
+```
+
+规则：
+
+- Gateway Profile 保存公共网关配置；
+- API Key 使用 AES-256-GCM 加密后存 PostgreSQL；
+- 主密钥只来自 `MODEL_CREDENTIAL_MASTER_KEY`；
+- API Key 是 write-only；
+- API、日志、Audit、Trace、UI 不得返回 Key、密文、IV 或 Auth Tag；
+- ModelDefinition 引用精确 Gateway Profile；
+- ModelPolicy 只能选择 published ModelDefinition 精确版本；
+- ModelPolicy 页面不得重新允许手填 `gateway_profile` 和 `model_id`；
+- AgentExecutionPlan 锁定 ModelDefinition 和 Gateway public config Hash；
+- Credential rotation 不能改变 ExecutionPlan；
+- 动态 Client Cache Key 必须包含 Credential Revision；
+- 新增网关、模型、策略切换和凭据轮换不应要求重启 Worker；
+- runtime-api 只能使用 Embedding Model；
+- runtime-worker 使用 Chat / Tool-capable Model；
+- tool-gateway 不读取模型凭据。
+
+本地 Ollama 手动/self-hosted 门禁：
+
+- Ollama 只运行在宿主机；
+- 精确模型固定为 `qwen2.5:7b-instruct-q4_K_M`；
+- Gateway Profile 固定为 `local-ollama`；
+- runtime-worker 容器通过 `host.docker.internal:11434/v1` 访问；
+- 四个生产 app 必须来自 Docker 镜像；
+- GitHub hosted CI 不下载或运行本地 7B 模型；
+- 不能用 deterministic Pi 或 mock-server 代替 Ollama 真实门禁。
+
+---
+
+## 12. Tool 和 Adapter 规则
+
+每个 Tool Call 必须包含：
+
+- tenant_id；
+- user_id；
+- request_id；
+- task_run_id；
+- workflow_id；
+- tool_name；
+- tool_version；
+- arguments；
+- idempotency_key；
+- risk_level；
+- Execution Plan identity；
+- Tenant Policy Snapshot identity。
+
+生命周期：
+
+```text
+validate
+-> load manifest
+-> verify exact identity
+-> policy
+-> idempotency
+-> adapter
+-> output validation
+-> audit
+-> normalized result
+```
+
+### 12.1 http_readonly
+
+必须：
+
+- method 固定 GET；
+- L0/L1；
+- `side_effect=false`；
+- Host allowlist；
+- SSRF 防护；
+- 固定 Base URL 和 Path；
+- Tool 参数只能映射 Query；
+- Secret 只通过 `env:TOOL_SECRET_*`；
+- timeout；
+- bounded retry；
+- response size limit；
+- JSON-only；
+- output schema；
+- redaction。
+
+禁止：
+
+- 用户输入动态 URL；
+- redirect；
+- 任意 Header；
+- OAuth；
+- Request Body；
+- commit；
+- 明文凭据。
+
+### 12.2 L3
+
+Side Effect Tool 必须：
+
+```text
+preview
+-> Human Task
+-> Signal
+-> commit
+```
+
+必须具备：
+
+- idempotency；
+- ToolCall log；
+- HumanTask；
+- Audit；
+- 拒绝路径；
+- retry 不重复 commit。
+
+---
+
+## 13. Control-plane 前端规则
+
+技术基线：
+
+- React；
+- Vite；
+- Ant Design；
+- React Query；
+- shared contracts；
+- `@dar/i18n`。
+
+语言：
+
+- 第一版只支持 `zh-CN`；
+- 不增加空的 `en-US`；
+- 不显示语言切换器；
+- 用户可见文案必须使用 i18n key；
+- 机器字段、枚举、Code、ID 和 Hash 不翻译。
+
+配置体验：
+
+- 可写配置必须使用可视化表单；
+- JSON 只能只读、复制和下载；
+- 不提供高级 JSON 编辑；
+- 不提供 JSON 导入绕过表单；
+- 表单最终必须生成 shared contract；
+- 提交前必须通过 Zod；
+- 引用必须使用精确版本选择器；
+- Flow Canvas 只表达现有顺序 steps 语义；
+- 不引入任意 DAG；
+- published 版本只读；
+- 修改已发布资源必须 clone。
+
+安全：
+
+- API Key 输入不回显；
+- 不显示 encrypted credential；
+- 前端不自行判断权限、Policy 或 Gate；
+- 前端不直连 runtime-api、tool-gateway 或数据库；
+- 所有请求走 control-plane 同源 BFF。
+
+---
+
+## 14. API、错误和国际化
+
+机器字段保持稳定：
+
+- error code；
+- event code；
+- event type；
+- status；
+- resource type；
+- API path；
+- JSON 字段；
+- ID；
+- Hash。
+
+本地化内容：
+
+- `message_key`；
+- `message`；
+- UI 标签；
+- 安全错误说明；
+- 日志消息；
+- Audit display message；
+- OpenAPI 描述；
+- Validation message。
+
+标准错误至少包含：
 
 ```json
 {
-  "scripts": {
-    "dev": "...",
-    "build": "...",
-    "start": "node dist/index.js",
-    "typecheck": "...",
-    "test": "...",
-    "lint": "..."
-  }
+  "code": "STABLE_ERROR_CODE",
+  "message_key": "errors.someKey",
+  "message": "中文安全提示",
+  "locale": "zh-CN",
+  "request_id": "req_xxx"
 }
 ```
 
-For backend apps, the Docker runtime command should normally use the production entrypoint:
+规则：
 
-```bash
-node dist/index.js
-```
+- API 使用 `Accept-Language`；
+- 第一版不支持的语言回退 `zh-CN`；
+- 设置 `Content-Language`；
+- 设置 `Vary: Accept-Language`；
+- 业务逻辑不得依赖本地化文本；
+- 服务间判断依赖 Code，不依赖 Message；
+- Zod Issue 必须安全本地化；
+- 不返回 Stack、SQL、连接串和 raw adapter response。
 
-For `control-plane`, the Docker runtime may be a static web server. If so, document it in `apps/control-plane/README.md` and keep Docker Compose port mapping explicit.
+---
 
-### 19.4 Docker Compose Rules
+## 15. 日志和 Audit
 
-The local Docker Compose stack should include:
+日志必须是结构化 JSON。
 
-- `control-plane`
-- `runtime-api`
-- `runtime-worker`
-- `tool-gateway`
-- PostgreSQL with pgvector support
-- Valkey
-- Temporal Server
-- Temporal UI, if useful for local development
+稳定字段：
 
-The local Docker Compose stack may include `devtools/mock-server`, but it must be clearly marked as development-only.
+- event_code；
+- message_key；
+- message；
+- locale；
+- request_id；
+- tenant_id；
+- user_id；
+- task_run_id；
+- workflow_id；
+- workflow_run_id；
+- agent_run_id；
+- tool_call_id；
+- model_call_id。
 
-Expected local command:
-
-```bash
-docker compose -f infra/docker-compose.yml up --build
-```
-
-Expected image build command:
-
-```bash
-scripts/docker-build-all.sh
-```
-
-### 19.5 Container Configuration Rules
-
-Configuration must come from environment variables. Required variables should be documented in `.env.example`.
-
-Common variables:
+日志语言使用：
 
 ```text
-NODE_ENV
-HOST
-PORT
-DATABASE_URL
-VALKEY_URL
-TEMPORAL_ADDRESS
-TEMPORAL_NAMESPACE
-TOOL_GATEWAY_URL
-RUNTIME_API_URL
-MODEL_GATEWAY_URL
-LOG_LEVEL
-OTEL_EXPORTER_OTLP_ENDPOINT
+LOG_LOCALE
 ```
 
-Do not introduce environment variables without updating `.env.example` and the relevant app documentation.
+不得随每个请求切换日志语言。
 
-### 19.6 Docker Definition of Done
+Audit 事实源：
 
-For any task that changes runtime startup, app scripts, dependencies or deployment behavior, the task is not complete until:
+```text
+event_type
+message_key
+message_params
+metadata
+```
 
-- The affected app image builds successfully.
-- The container starts successfully.
-- `/healthz` returns success.
-- `/readyz` returns success or a clearly documented not-ready state.
-- Logs are written to stdout/stderr as structured logs.
-- No secrets are copied into the image.
-- The Dockerfile and compose files remain aligned with the four-app architecture.
-- The app-specific Dockerfile is updated when that app's runtime entrypoint, build output or package name changes.
+`display_message` 只是渲染结果。
 
-### 19.7 Docker Do-Not List
+禁止记录：
 
-Do not:
-
-- Add a production Docker image for an unapproved fifth app.
-- Add business systems directly to the production runtime image.
-- Use Docker containers to bypass `tool-gateway`.
-- Use bind-mounted local source code in production compose files.
-- Run production containers as root unless explicitly approved.
-- Store secrets in Dockerfile, docker-compose.yml or committed `.env` files.
-- Change the Node.js major version in Docker without updating the technology stack document.
-- Build images from `apps/<app>` context if shared workspace packages are needed.
+- API Key；
+- Authorization；
+- Cookie；
+- Password；
+- Secret；
+- 完整 Prompt；
+- 完整 Context Snapshot；
+- raw Model Response；
+- 未脱敏 Tool Result；
+- hidden chain-of-thought。
 
 ---
 
-## 20. Pull Request Expectations
+## 16. Mock、Fake 和 Sandbox 边界
 
-Each task should produce a small, reviewable diff.
+### 16.1 外部依赖 Mock
 
-Before finishing, summarize:
+以下外部模拟只能位于：
 
-1. Files changed.
-2. Main behavior added.
-3. Commands run.
-4. Tests added or updated.
-5. Remaining TODOs.
-6. Risks or design tradeoffs.
+```text
+devtools/mock-server
+```
 
-Do not make broad refactors unless explicitly requested.
+包括：
+
+- Model Gateway；
+- Tool Call 模型响应；
+- Embedding Gateway；
+- 外部业务 HTTP API；
+- 429 / 5xx / timeout；
+- invalid JSON；
+- oversized response；
+- 外部 request count。
+
+生产 app 源码不得实现外部系统的 Mock Response Generator。
+
+### 16.2 单元测试 Fake/Stub
+
+只允许位于：
+
+```text
+**/*.test.ts
+**/tests/**
+devtools/repo-cli/**
+```
+
+production entrypoint 不得 import。
+
+### 16.3 基础设施开发模式
+
+memory repository、mock Workflow Starter 等不是外部 Mock Server。
+
+它们只允许 development/test：
+
+- production 必须 fail closed；
+- production Compose 不启用；
+- 不得作为真实验收证据；
+- 不得恢复为 default fallback。
+
+### 16.4 Sandbox 例外
+
+显式 sandbox adapter 可以临时存在，但必须：
+
+- 位于清晰 sandbox/testing 目录；
+- 仅 development/test；
+- production 配置拒绝；
+- 有明确 allowlist；
+- 不允许继续新增未批准的 app 内 Mock Adapter。
+
+### 16.5 生产 Compose
+
+生产 Compose 不得包含：
+
+```text
+devtools/mock-server
+```
 
 ---
 
-## 21. Definition of Done
+## 17. 数据库和 Migration
 
-A task is done only when:
+规则：
 
-- Code compiles.
-- Relevant tests pass.
-- Lint and typecheck pass, or failures are explicitly explained.
-- Docs are updated if behavior changed.
-- Public API schemas are updated if APIs changed.
-- No hardcoded secrets are added.
-- New runtime behavior is logged and auditable.
-- The result follows the four-app architecture.
-- The task does not introduce unapproved production services.
-- Docker-related changes build and run successfully when the task affects deployment.
+- Schema 变更必须通过 Migration；
+- 不允许运行时 ad hoc DDL；
+- Migration 必须确定性和可审查；
+- Seed 与 Migration 分离；
+- published spec 使用版本和 Hash；
+- Audit append-only；
+- 幂等记录不可任意覆盖。
 
----
+项目仍处于 pre-v1：
 
-## 22. Strict Do-Not List
+- 默认不做旧数据双读；
+- 默认不做 legacy loader；
+- 默认不做历史数据回填；
+- 默认不做 latest/default fallback；
+- 需要兼容旧数据时必须由任务明确批准。
 
-Do not:
+development/test 可以清库重建，但必须：
 
-- Add a fifth production app without explicit approval.
-- Bypass `tool-gateway` for tool invocation.
-- Let Pi directly access external business systems.
-- Put non-deterministic code in Temporal Workflows.
-- Duplicate shared contracts inside apps.
-- Introduce domain-specific business logic into the generic runtime.
-- Store secrets in code.
-- Make broad unrelated refactors.
-- Change the technology stack without explicit approval.
-- Implement a complex visual workflow designer unless requested.
-- Treat `devtools/mock-server` as a production component.
+- 明确环境保护；
+- 不作用于 production；
+- 不全局 prune Docker Volume；
+- 不删除 Ollama 模型；
+- 重建后运行 Migration、Seed 和相关 Smoke。
+
+除非任务明确批准整体 baseline squash，否则新增 forward Migration。
 
 ---
 
-## 23. Recommended First Development Order
+## 18. 依赖和代码规范
 
-When starting from a skeleton repository, implement in this order:
+技术基线：
 
-1. Monorepo baseline and health endpoints.
-2. Shared contracts in `packages/contracts`.
-3. Database migrations and `packages/db`.
-4. `tool-gateway` first-stage APIs.
-5. `runtime-api` first-stage Intent Router and Workflow Starter.
-6. `runtime-worker` first-stage `ConfigDrivenWorkflow`.
-7. Pi Runner adapter.
-8. Human task flow.
-9. Control-plane first-stage pages.
-10. Docker build and local compose smoke test.
-11. E2E smoke path.
+- Node.js 24；
+- TypeScript strict；
+- pnpm workspace；
+- Turborepo；
+- Fastify；
+- React；
+- Vite；
+- Ant Design；
+- Zod；
+- PostgreSQL；
+- pgvector；
+- Kysely；
+- Temporal；
+- Pi Agent Core；
+- Pino；
+- Vitest；
+- Playwright。
 
-Do not attempt to implement the whole system in one change.
+规则：
+
+- 不切换包管理器；
+- 不引入第二个 ORM；
+- 不引入第二个前端框架；
+- 不引入新的测试框架；
+- 不引入大型依赖解决小问题；
+- 新依赖必须说明必要性；
+- 外部输入必须 Zod 校验；
+- 公共类型显式；
+- 不使用大范围 `any`；
+- 不吞异常；
+- 不把业务逻辑写在路由文件；
+- App 可以依赖 Package；
+- Package 不得依赖 App；
+- 避免循环依赖；
+- 文件使用 kebab-case，框架约定除外。
+
+---
+
+## 19. 仓库脚本和 Smoke 规范
+
+目标统一开发入口：
+
+```bash
+pnpm dar ...
+```
+
+Canonical 命令：
+
+```bash
+pnpm dar check all
+pnpm dar check docs
+pnpm dar check mocks
+pnpm dar check version
+pnpm dar check i18n
+pnpm dar check visual-config
+
+pnpm dar db migrate
+pnpm dar db seed
+
+pnpm dar replay export
+pnpm dar replay test
+
+pnpm dar smoke list
+pnpm dar smoke run <scenario>
+pnpm dar smoke suite <suite>
+```
+
+Smoke Suite 固定为：
+
+```text
+core
+agent
+governance
+ui
+real
+```
+
+规则：
+
+- 不再新增根级单场景 `smoke:*` alias；
+- 不再在 `scripts/` 根目录新增 `smoke-*.ts`；
+- 新 Scenario 必须登记统一 Catalog；
+- 共用 API、DB、Polling、Compose、Artifact 和 Secret Scan；
+- CI/Integration 使用 Suite；
+- Real Suite 仅 manual/self-hosted；
+- 每个 Scenario 输出统一 JSON；
+- 跳过不能伪装成通过；
+- Smoke 失败必须可定位；
+- 不使用 `|| true`；
+- 不降低已有覆盖。
+
+`scripts/` 根目录只允许薄 Wrapper，不保存业务或测试逻辑。
+
+---
+
+## 20. 文档规则
+
+活跃文档结构：
+
+```text
+docs/
+  README.md
+  architecture/
+  guides/
+  operations/
+  reference/
+  project/
+  archive/
+```
+
+唯一事实源：
+
+- 当前状态：`docs/project/current-status.md`
+- 路线和发布：`docs/project/roadmap-and-release.md`
+- 非目标：`docs/project/non-goals.md`
+- 测试、Replay 和恢复：`docs/operations/testing-replay-and-recovery.md`
+
+规则：
+
+- 活跃主题文档不使用连续编号；
+- 每个主题只有一个 active 文档；
+- 不为每个开发阶段新增一份永久文档；
+- 历史记录依赖 Git History；
+- archive 只保留少量确有价值的历史材料；
+- README 只保留简介、快速启动、常用命令和文档入口；
+- 行为变化优先更新已有文档，不新建重复文档；
+- 文档必须使用当前命令；
+- 文档不得引用已删除脚本；
+- 文档中的版本和 Migration Head 必须与仓库一致；
+- `.docx` 不作为活跃工程文档。
+
+---
+
+## 21. 测试标准
+
+测试层级：
+
+1. Unit；
+2. Contract；
+3. DB Integration；
+4. API Integration；
+5. Temporal Workflow；
+6. Tool Gateway；
+7. Service E2E Smoke；
+8. UI Playwright；
+9. Real/manual Gate；
+10. Replay。
+
+新功能最低覆盖：
+
+- happy path；
+- validation failure；
+- permission/policy deny；
+- idempotency；
+- audit；
+- tenant isolation；
+- Secret redaction；
+- typecheck；
+- regression。
+
+规则：
+
+- 不能用 Unit Test 替代承诺的服务级 E2E；
+- 不能用 direct DB insert 伪造 Registry 发布成功；
+- 不能用 mock Pi Runner 证明 Pi 链路；
+- 不能用 mock-server 证明 real Gate；
+- real Gate 必须明确证明 mock-server 未运行；
+- 不运行的验证必须标记 skipped / not run，不能写 passed；
+- 任务没有对应测试时不得声明完成。
+
+---
+
+## 22. Docker 规则
+
+每个生产 app 保留独立 Dockerfile。
+
+规则：
+
+- Build Context 是仓库根目录；
+- 使用 multi-stage；
+- 使用 corepack 和 pnpm；
+- frozen lockfile；
+- 不复制本地 node_modules；
+- 不复制 `.env`；
+- 不复制 `.git`；
+- 不把 Secret 打进镜像；
+- 非 root；
+- healthcheck；
+- backend 绑定 `0.0.0.0`；
+- graceful shutdown；
+- `/version` 暴露 build metadata；
+- 不使用未固定的 production `latest` tag；
+- `devtools/mock-server` 只能在 dev/test override。
+
+如果任务改变启动、依赖、构建产物或环境变量，至少验证：
+
+1. affected image build；
+2. container start；
+3. healthz；
+4. readyz；
+5. structured logs；
+6. no secret in image。
+
+---
+
+## 23. 一次任务的推荐执行方式
+
+### 23.1 审计
+
+- 读取相关 Contract、Repository、Service、Route 和测试；
+- 搜索现有能力；
+- 明确事实路径；
+- 识别真实缺口；
+- 不重复建设。
+
+### 23.2 收窄
+
+一个任务最多：
+
+- 一个主要目标；
+- 三到八个核心交付；
+- 一条主 Smoke；
+- 明确不做项。
+
+不要把后端、UI、真实模型、可观测性和文档大重构默认塞入同一任务。
+
+### 23.3 实现
+
+- 先核心 Contract 和边界；
+- 再 Repository/Service；
+- 再 API/UI；
+- 再测试；
+- 再 Smoke；
+- 最后文档。
+
+### 23.4 验证
+
+优先运行目标包测试，再运行：
+
+```bash
+pnpm dar check all
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+按影响范围运行相关 Suite。
+
+### 23.5 汇报
+
+必须说明：
+
+1. 开始 HEAD 和 origin/main；
+2. 基线状态；
+3. 完成内容；
+4. 修改文件；
+5. 真实数据路径；
+6. 测试和 Smoke；
+7. 未运行项；
+8. 未完成项；
+9. 风险；
+10. Git 状态。
+
+---
+
+## 24. Definition of Done
+
+任务只有在以下条件满足时才能声明完成：
+
+- 目标闭环真实实现；
+- 代码通过 lint；
+- 代码通过 typecheck；
+- 相关测试通过；
+- build 通过；
+- Contract 更新；
+- API Schema 更新；
+- i18n 更新；
+- Audit 和日志更新；
+- Secret 未泄露；
+- Tenant Isolation 保持；
+- Mock Boundary 未破坏；
+- Temporal Determinism 保持；
+- Replay 按需要通过；
+- Docker 按需要通过；
+- 相关 Smoke 通过；
+- 文档事实源更新；
+- 没有未说明的 fallback；
+- 没有将 skipped 写成 passed；
+- 没有新增未批准生产服务；
+- 没有擅自修改版本、Tag 或 Release。
+
+---
+
+## 25. 严格禁止清单
+
+禁止：
+
+- 新增第五个生产 app；
+- 绕过 tool-gateway；
+- Pi 直连外部系统；
+- runtime-worker 直连业务 API；
+- runtime-api 调 Chat Model；
+- 在 Workflow 中执行 I/O；
+- production 使用 memory/mock/default/sample fallback；
+- production app import `devtools`；
+- app 源码实现外部系统 Mock；
+- 在前端提供可编辑 JSON 绕过可视化表单；
+- 在 ModelPolicy 手填 raw gateway/model；
+- API 返回模型 API Key；
+- 日志或 Audit 记录 Secret；
+- 保存 hidden chain-of-thought；
+- 使用本地化文本参与授权、Hash、幂等或 Workflow 分支；
+- 复制 DTO 到 App；
+- 直接修改已发布资源；
+- 使用 `latest`；
+- 删除测试或 Replay Fixture 来掩盖问题；
+- 使用 `|| true` 掩盖失败；
+- 在没有真实证据时宣称 Real Gate 通过；
+- 未经请求执行 commit、push、tag、release 或版本晋级；
+- 在任务之外做大范围重构。

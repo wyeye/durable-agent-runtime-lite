@@ -78,10 +78,6 @@ import {
   effectivePolicyFromSnapshot,
 } from '@dar/db';
 import {
-  createDeterministicPiStream,
-  type DeterministicPiScenario,
-} from '../agent/deterministic-pi-stream.js';
-import {
   createModelGatewayModel,
   createModelGatewayPiStream,
 } from '../agent/model-gateway-pi-stream.js';
@@ -1678,19 +1674,6 @@ function createPiRuntime(input: {
   if (isProductionRuntime(config) && config.PI_AGENT_MODE !== 'model_gateway') {
     throw new Error('PI_AGENT_MODE=model_gateway is required in production');
   }
-  if (config.PI_AGENT_MODE === 'deterministic') {
-    if (isProductionRuntime(config)) {
-      throw new Error('PI_AGENT_MODE=deterministic is not allowed in production');
-    }
-    const deterministic = createDeterministicPiStream(
-      parseDeterministicScenario(input.executionPlan.model_policy),
-    );
-    return {
-      model: deterministic.model,
-      streamFn: deterministic.streamFn,
-      cleanup: deterministic.unregister,
-    };
-  }
   if (config.PI_AGENT_MODE === 'model_gateway') {
     const target = input.executionPlan.resolved_model_policy.resolved_targets[0];
     if (!target) {
@@ -1718,39 +1701,7 @@ function createPiRuntime(input: {
       }),
     };
   }
-  throw new Error('PI_AGENT_MODE is disabled; agent execution is not available');
-}
-
-function parseDeterministicScenario(modelPolicy: string): DeterministicPiScenario {
-  const match = /^deterministic:(.+)$/u.exec(modelPolicy);
-  if (!match?.[1]) {
-    throw new Error(
-      `Deterministic Pi mode requires model_policy=deterministic:<scenario>, got ${modelPolicy}`,
-    );
-  }
-  const scenario = match[1];
-  if (isDeterministicScenario(scenario)) {
-    return scenario;
-  }
-  throw new Error(`Unsupported deterministic Pi scenario: ${scenario}`);
-}
-
-function isDeterministicScenario(value: string): value is DeterministicPiScenario {
-  return [
-    'final_only',
-    'readonly_tool',
-    'l3_tool',
-    'need_user',
-    'handoff',
-    'repeated_tool',
-    'endless_turns',
-    'excessive_tokens',
-    'invalid_tool',
-    'l4_tool',
-    'malformed_output',
-    'stream_error',
-    'aborted',
-  ].includes(value);
+  throw new Error('PI_AGENT_MODE must be model_gateway; app-local deterministic Pi is not available');
 }
 
 function decisionSummaryForSegment(segmentResult: PiSegmentResult): string {

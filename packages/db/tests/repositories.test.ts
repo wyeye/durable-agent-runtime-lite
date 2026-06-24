@@ -213,6 +213,23 @@ class FakeDb {
   }
 }
 
+class InsertConflictQuery extends FakeQuery {
+  constructor() {
+    super([]);
+  }
+
+  override async executeTakeFirst() {
+    return undefined;
+  }
+}
+
+class InsertConflictFakeDb extends FakeDb {
+  override insertInto(table: string) {
+    this.calls.push({ op: 'insert', table });
+    return new InsertConflictQuery();
+  }
+}
+
 const flowSpec: FlowSpec = {
   flow_id: 'db_route_flow',
   version: 7,
@@ -2665,6 +2682,63 @@ describe('db repositories', () => {
       authoritative_tool_result_refs: [{ tool_call_id: 'call_1' }],
       context_snapshot_after: { snapshot_id: 'snapshot_after' },
     });
+  });
+
+  it('keeps existing AgentStep boundary refs when create sees a stable key conflict', async () => {
+    const now = new Date('2025-01-01T00:00:00.000Z').toISOString();
+    const db = new InsertConflictFakeDb({
+      agent_step: [
+        {
+          agent_step_id: 'agent_step_1',
+          agent_run_id: 'agent_run_1',
+          segment_index: 0,
+          stable_step_key: 'agent_run_1:0',
+          segment_status: 'handoff_completed',
+          decision_summary: 'Pi requested workflow handoff',
+          proposed_tool_calls_json: [],
+          tool_result_refs_json: [],
+          authoritative_tool_result_refs_json: [],
+          human_task_ids_json: [],
+          context_snapshot_before_ref: null,
+          context_snapshot_after_ref: null,
+          handoff_refs_json: [
+            {
+              status: 'completed',
+              child_workflow_id: 'workflow_child_1',
+              target_execution_plan_ref: 'db://flow-execution-plan/plan_child',
+            },
+          ],
+          context_snapshot_ref: null,
+          output_ref: null,
+          usage_json: {},
+          error_code: null,
+          error_message: null,
+          created_at: now,
+          updated_at: now,
+        },
+      ],
+    });
+
+    await expect(
+      new AgentStepRepository(db as never).create({
+        agent_run_id: 'agent_run_1',
+        segment_index: 0,
+        stable_step_key: 'agent_run_1:0',
+        segment_status: 'completed',
+        decision_summary: 'Pi returned final answer',
+        proposed_tool_calls: [],
+        tool_result_refs: [],
+        authoritative_tool_result_refs: [],
+        human_task_ids: [],
+        handoff_refs: [],
+        usage: {},
+      }),
+    ).resolves.toMatchObject({
+      stable_step_key: 'agent_run_1:0',
+      segment_status: 'handoff_completed',
+      handoff_refs: [{ child_workflow_id: 'workflow_child_1' }],
+    });
+    expect(db.calls.some((call) => call.op === 'update' && call.table === 'agent_step')).toBe(false);
   });
 
   it('loads and updates tool_call_log status by stable tool_call_id', async () => {

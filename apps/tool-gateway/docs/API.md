@@ -204,14 +204,14 @@ production 下 readiness 要求 `TOOL_GATEWAY_REGISTRY_SOURCE=db`、`TOOL_GATEWA
 ## Local DB Registry Flow
 
 ```bash
-corepack pnpm db:migrate
-corepack pnpm seed:examples
+corepack pnpm dar db migrate
+corepack pnpm dar db seed
 TOOL_GATEWAY_REGISTRY_SOURCE=db corepack pnpm --filter @dar/tool-gateway dev
 ```
 
 ## Temporal DB smoke checks
 
-`corepack pnpm smoke:temporal-db-e2e` 会在 workflow 完成后直接查询 DB，确认：
+`corepack pnpm dar smoke run temporal-db` 会在 workflow 完成后直接查询 DB，确认：
 
 - `audit_event` 中存在 `knowledge.search` 的 `tool.invoke`、`record.write.mock` 的 `tool.preview` / `tool.commit`、以及 `human_task.approve`；
 - `tool_call_log` 中 L3 `record.write.mock` 最终为 `committed`；

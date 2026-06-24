@@ -24,7 +24,7 @@ describe('example ModelPolicy references', () => {
   });
 
   it('defines the opt-in local Ollama seed policy with the exact release-gate model', async () => {
-    const seedScript = await readFile(new URL('../scripts/seed-examples.ts', import.meta.url), 'utf8');
+    const seedScript = await readFile(new URL('../devtools/repo-cli/src/scripts/seed-examples.ts', import.meta.url), 'utf8');
 
     expect(seedScript).toContain('SEED_LOCAL_OLLAMA_MODEL_POLICY');
     expect(seedScript).toContain('local-ollama');

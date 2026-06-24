@@ -33,6 +33,7 @@ import {
 } from '@earendil-works/pi-ai';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
 import type { Kysely } from 'kysely';
+import { buildDeferredPiTools } from './deferred-pi-tool.js';
 
 export interface ModelGatewayPiStreamOptions {
   db: Kysely<Database>;
@@ -137,12 +138,16 @@ async function callModelWithLedger(
 ): Promise<{ response: ModelGatewayResponse; target: ResolvedModelTarget }> {
   const logRepository = new ModelCallLogRepository(input.db);
   const attemptRepository = new ModelCallAttemptRepository(input.db);
+  const piTools = buildDeferredPiTools(
+    input.executionPlan.allowed_tools,
+    input.executionPlan.allowed_handoffs,
+  );
   const requestBase = {
     messages: contextToGatewayMessages(input.context),
-    tools: input.executionPlan.allowed_tools.map((tool) => ({
-      name: tool.tool_name,
+    tools: piTools.map((tool) => ({
+      name: tool.name,
       description: tool.description,
-      input_schema: tool.input_schema,
+      input_schema: tool.parameters as Record<string, unknown>,
     })),
     response_format: input.executionPlan.resolved_model_policy.request_policy.response_format,
     temperature: input.executionPlan.resolved_model_policy.request_policy.temperature,

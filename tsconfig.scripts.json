@@ -4,5 +4,5 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["scripts/**/*.ts"]
+  "include": ["devtools/repo-cli/src/**/*.ts"]
 }

@@ -3500,17 +3500,7 @@ export class AgentStepRepository {
     const saved = await this.db
       .insertInto('agent_step')
       .values(row)
-      .onConflict((oc) =>
-        oc.column('stable_step_key').doUpdateSet({
-          segment_status: row.segment_status,
-          decision_summary: row.decision_summary,
-          proposed_tool_calls_json: row.proposed_tool_calls_json,
-          usage_json: row.usage_json,
-          error_code: row.error_code,
-          error_message: row.error_message,
-          updated_at: new Date(),
-        }),
-      )
+      .onConflict((oc) => oc.column('stable_step_key').doNothing())
       .returningAll()
       .executeTakeFirst();
 

@@ -4,7 +4,7 @@ import type { Database } from '@dar/db';
 import { hashModelGatewayProfileConfig } from '@dar/db';
 import { ModelCredentialCipher } from '@dar/security';
 import type { Kysely } from 'kysely';
-import { createDeterministicPiStream } from '../src/agent/deterministic-pi-stream.js';
+import { createDeterministicPiStream } from './support/deterministic-pi-stream.js';
 import {
   createModelGatewayModel,
   createModelGatewayPiStream,
@@ -338,8 +338,8 @@ describe('PiAgentAdapter', () => {
         model: 'dar-local-model',
         tool_choice: 'auto',
       });
-      expect(JSON.stringify(observedRequests[0]?.body)).not.toContain('knowledge.search');
-      expect(JSON.stringify(observedRequests[0]?.body)).toContain(
+      expect(providerToolNames(observedRequests[0]?.body)).not.toContain('knowledge.search');
+      expect(providerToolNames(observedRequests[0]?.body)).toContain(
         'tool_knowledge_search_f2405c6159c9',
       );
       expect(ledger.modelCalls[0]).toMatchObject({
@@ -361,6 +361,99 @@ describe('PiAgentAdapter', () => {
         status: 'succeeded',
       });
       expect(JSON.stringify(ledger.modelCalls[0]?.safe_response_json)).not.toContain('test-key');
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it('exposes Pi deferred user-input tools through the Model Gateway codec', async () => {
+    const observedRequests: Array<Record<string, unknown>> = [];
+    const server = await import('node:http').then(({ createServer }) =>
+      createServer((request, response) => {
+        if (request.url !== '/v1/chat/completions') {
+          response.statusCode = 404;
+          response.end();
+          return;
+        }
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => {
+          chunks.push(chunk);
+        });
+        request.on('end', () => {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+          observedRequests.push(body);
+          response.setHeader('content-type', 'application/json');
+          response.end(
+            JSON.stringify({
+              id: 'chatcmpl_user_input',
+              model: 'dar-local-model',
+              choices: [
+                {
+                  finish_reason: 'tool_calls',
+                  message: {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: 'call_user_1',
+                        type: 'function',
+                        function: {
+                          name: 'request_user_input',
+                          arguments: JSON.stringify({ question: 'Need value?' }),
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+              usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+            }),
+          );
+        });
+      }),
+    );
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('server did not bind to a TCP port');
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const executionPlan = withModelGatewayBaseUrl(plan('model_gateway:user_input'), baseUrl);
+    const target = firstModelTarget(executionPlan);
+    const ledger = createModelCallLedgerDb(baseUrl);
+    try {
+      const result = await runPiAgentSegment({
+        executionPlan,
+        model: createModelGatewayModel(target),
+        streamFn: createModelGatewayPiStream({
+          db: ledger.db,
+          credentialMasterKey: modelCredentialMasterKey,
+          clientCacheTtlMs: 60_000,
+          executionPlan,
+          agentRun: agentRunFor(executionPlan),
+          segmentIndex: 0,
+          timeoutMs: 5_000,
+          maxRetries: 0,
+          maxResponseBytes: 1_000_000,
+          maxLedgerResponseBytes: 1_048_576,
+          allowInsecureHttp: true,
+          idempotencyHeader: 'Idempotency-Key',
+          userAgent: 'durable-agent-runtime-lite/runtime-worker-test',
+          allowedModelIds: new Set([target.model_id]),
+        }),
+        initialUserInput: 'user_input',
+        segmentIndex: 0,
+        budgetRemaining: executionPlan.budget,
+        maxContextBytes: 262_144,
+      });
+
+      expect(providerToolNames(observedRequests[0])).toContain('request_user_input');
+      expect(result.segmentResult).toMatchObject({
+        status: 'user_input_required',
+        question: 'Need value?',
+      });
     } finally {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
@@ -1069,6 +1162,14 @@ function firstModelTarget(
     throw new Error('test execution plan must include a ModelPolicy target');
   }
   return target;
+}
+
+function providerToolNames(body: unknown): string[] {
+  if (!body || typeof body !== 'object') {
+    return [];
+  }
+  const tools = (body as { tools?: Array<{ function?: { name?: string } }> }).tools ?? [];
+  return tools.map((tool) => tool.function?.name).filter((name): name is string => Boolean(name));
 }
 
 function withModelGatewayBaseUrl(executionPlan: AgentExecutionPlan, baseUrl: string): AgentExecutionPlan {

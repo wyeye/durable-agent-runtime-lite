@@ -6,7 +6,7 @@ import {
   type ReconcileTaskLookup,
   type ReconcileWorkflowLookup,
   type ReconcileWorkflowStatus,
-} from '../scripts/reconcile-tenant-agent-admissions.js';
+} from '../devtools/repo-cli/src/scripts/reconcile-tenant-agent-admissions.js';
 
 function admission(input: Partial<TenantAgentAdmission> = {}): TenantAgentAdmission {
   return {

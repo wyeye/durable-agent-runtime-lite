@@ -130,12 +130,9 @@ corepack pnpm build
 Docker/DB smoke：
 
 ```bash
-corepack pnpm smoke:temporal-db-e2e
-corepack pnpm smoke:control-plane-api-e2e
-corepack pnpm smoke:control-plane-ui-e2e
-corepack pnpm smoke:evaluation-ui-e2e
-corepack pnpm smoke:model-catalog-multi-gateway-e2e
-corepack pnpm smoke:http-readonly-tool-e2e
+corepack pnpm dar smoke suite core
+corepack pnpm dar smoke suite governance
+corepack pnpm dar smoke suite ui
 ```
 
 UI smoke 需要 control-plane、runtime-api、runtime-worker、tool-gateway、PostgreSQL、Temporal 已运行。它会在浏览器中设置开发身份，验证页面渲染，创建并发布 Registry 资源和 Model Catalog 资源，执行 router preview、rollback，并通过 Human Task 页面 approve 一个 L3 pending task。

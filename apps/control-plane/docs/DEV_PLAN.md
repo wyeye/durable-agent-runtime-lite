@@ -46,7 +46,7 @@ tool-gateway
 - production 不默默伪造管理员；缺少身份由 API 返回 401，页面显示友好错误。
 - auditor 只显示只读视图；写操作由 RBAC guard 隐藏或由 API 返回 403。
 - 发布、灰度、回滚、废弃、禁用、Human Task approve/reject 都有二次确认。
-- `smoke:control-plane-ui-e2e` 提供浏览器级 UI smoke。
+- `pnpm dar smoke run control-plane-ui` 提供浏览器级 UI smoke。
 
 ## 后续不在本阶段
 

@@ -198,17 +198,17 @@ response 后向 Temporal workflow 发送 `userInputResponseSignal`。相同 key 
 ## Local DB Registry Flow
 
 ```bash
-corepack pnpm db:migrate
-corepack pnpm seed:examples
+corepack pnpm dar db migrate
+corepack pnpm dar db seed
 RUNTIME_API_ROUTE_SOURCE=db RUNTIME_API_WORKFLOW_STARTER=mock corepack pnpm --filter @dar/runtime-api dev
 ```
 
 ## Temporal DB smoke
 
 ```bash
-corepack pnpm db:migrate
-corepack pnpm seed:examples
-corepack pnpm smoke:temporal-db-e2e
+corepack pnpm dar db migrate
+corepack pnpm dar db seed
+corepack pnpm dar smoke run temporal-db
 ```
 
 smoke 会调用 `/v1/router/preview` 和 `/v1/tasks`。请求文本包含 `db-smoke`，该关键词只存在于 seed 的 DB RouteSpec 中，用于证明没有命中内置 `defaultRouteSpecs`。

@@ -157,9 +157,9 @@ Registry publish requests for `prompts`, `agents`, and `model-policies` accept `
 Backend smoke commands:
 
 ```bash
-corepack pnpm smoke:evaluation-framework-e2e
-corepack pnpm smoke:evaluation-regression-gate-e2e
-corepack pnpm smoke:evaluation-publish-gate-e2e
+corepack pnpm dar smoke run evaluation-framework
+corepack pnpm dar smoke run evaluation-regression
+corepack pnpm dar smoke run evaluation-publish-gate
 ```
 
 React Evaluation UI and smoke:
@@ -175,7 +175,7 @@ React Evaluation UI and smoke:
 ```
 
 ```bash
-corepack pnpm smoke:evaluation-ui-e2e
+corepack pnpm dar smoke run evaluation-ui
 ```
 
 The UI uses only same-origin `/api/v1/*`. Dataset/Case, Run, Gate Policy, Gate Decision, Override, and Registry Gate Card flows do not directly call runtime-api, tool-gateway, PostgreSQL, or external model providers.

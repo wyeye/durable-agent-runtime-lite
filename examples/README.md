@@ -1,6 +1,6 @@
 # Examples
 
-`seed:examples` publishes the sample FlowSpec, RouteSpec, ToolManifest, AgentSpec, and Prompt into PostgreSQL.
+`pnpm dar db seed` publishes the sample FlowSpec, RouteSpec, ToolManifest, AgentSpec, and Prompt into PostgreSQL.
 
 The sample flow is intentionally small:
 
@@ -26,8 +26,8 @@ Local Docker smoke:
 
 ```bash
 docker compose -f infra/docker-compose.yml up -d postgres valkey temporal temporal-ui
-corepack pnpm db:migrate
-corepack pnpm seed:examples
+corepack pnpm dar db migrate
+corepack pnpm dar db seed
 docker compose -f infra/docker-compose.yml up -d tool-gateway runtime-worker runtime-api
-corepack pnpm smoke:temporal-db-e2e
+corepack pnpm dar smoke run temporal-db
 ```

@@ -1073,8 +1073,12 @@ function endpointUrl(baseUrl: URL, path: string): URL {
     ? baseUrl.pathname
     : `${baseUrl.pathname}/`;
   const normalizedPath = path.replace(/^\/+/u, '');
+  const pathWithoutDuplicateVersion =
+    normalizedPath.startsWith('v1/') && /(?:^|\/)v1\/$/u.test(normalizedBasePath)
+      ? normalizedPath.replace(/^v1\//u, '')
+      : normalizedPath;
   const url = new URL(baseUrl.toString());
-  url.pathname = `${normalizedBasePath}${normalizedPath}`.replace(/\/{2,}/gu, '/');
+  url.pathname = `${normalizedBasePath}${pathWithoutDuplicateVersion}`.replace(/\/{2,}/gu, '/');
   url.search = '';
   url.hash = '';
   return url;
