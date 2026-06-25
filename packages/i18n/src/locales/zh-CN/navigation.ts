@@ -19,4 +19,8 @@ export const navigation = {
   toolCalls: '工具调用',
   policySnapshots: '策略快照',
   tenantAdmissions: '租户准入',
+  iam: '组织与权限',
+  tenants: '租户管理',
+  users: '用户管理',
+  roles: '角色说明',
 };

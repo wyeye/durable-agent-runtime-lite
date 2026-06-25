@@ -1,11 +1,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { RuntimeConfig } from '@dar/config';
 import { errorResponse, requestLocale } from '@dar/i18n';
-import type { AuthContext, ControlPlanePermission } from '@dar/security';
+import type { AuthContext, ControlPlanePermission, IdentityDirectory } from '@dar/security';
 import {
   AuthError,
   hasControlPlanePermission,
   requireAuthContext,
+  resolvedIdentityToAuthContext,
 } from '@dar/security';
 import { createRequestId } from '../modules/task/task-id.js';
 
@@ -15,20 +16,29 @@ declare module 'fastify' {
   }
 }
 
-export function runtimeAuthPlugin(server: FastifyInstance, options: { config: RuntimeConfig }): void {
-  validateRuntimeAuthConfig(options.config);
+export interface RuntimeAuthPluginOptions {
+  config: RuntimeConfig;
+  identityDirectory?: IdentityDirectory;
+}
+
+export function runtimeAuthPlugin(server: FastifyInstance, options: RuntimeAuthPluginOptions): void {
+  const { config, identityDirectory } = options;
+  validateRuntimeAuthConfig(config);
+
   server.addHook('onRequest', async (request, reply) => {
     if (!request.url.startsWith('/v1/')) {
       return;
     }
-    if (options.config.RUNTIME_API_AUTH_MODE === 'disabled') {
+    if (config.RUNTIME_API_AUTH_MODE === 'disabled') {
       return;
     }
+
     try {
-      request.authContext = requireAuthContext(request.headers, {
-        authMode: options.config.RUNTIME_API_AUTH_MODE,
-        nodeEnv: options.config.NODE_ENV,
-        requireRoles: true,
+      // Parse headers to extract user_id/tenant_id (but NOT roles in DB mode)
+      const parsed = requireAuthContext(request.headers, {
+        authMode: config.RUNTIME_API_AUTH_MODE,
+        nodeEnv: config.NODE_ENV,
+        requireRoles: config.IAM_DIRECTORY_MODE !== 'db', // DB mode doesn't require header roles
         testIdentity: {
           tenant_id: 'default',
           user_id: 'dev_runtime_api',
@@ -36,7 +46,21 @@ export function runtimeAuthPlugin(server: FastifyInstance, options: { config: Ru
           request_id: headerValue(request, 'x-request-id') ?? createRequestId(),
         },
       });
-      request.authContext.request_id ??= createRequestId();
+
+      // DB mode: resolve from identity directory
+      if (config.IAM_DIRECTORY_MODE === 'db' && identityDirectory) {
+        const resolved = await identityDirectory.resolve({
+          user_id: parsed.user_id,
+          tenant_id: parsed.tenant_id,
+          ...(parsed.request_id ? { request_id: parsed.request_id } : {}),
+        });
+        request.authContext = resolvedIdentityToAuthContext(resolved);
+      } else {
+        // Header mode: use header roles as-is
+        request.authContext = parsed;
+      }
+
+      request.authContext!.request_id ??= createRequestId();
     } catch (error) {
       if (error instanceof AuthError) {
         await sendAuthError(reply, error, request);

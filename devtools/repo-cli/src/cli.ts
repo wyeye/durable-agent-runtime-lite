@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { handleDb, handleDev, handleOps, handleReplay } from './commands/basic.js';
+import { handleDb, handleDev, handleIam, handleOps, handleReplay } from './commands/basic.js';
 import { handleCheck } from './commands/check.js';
 import { handleSmoke } from './commands/smoke.js';
 
@@ -25,6 +25,10 @@ async function main(): Promise<void> {
     await handleDb(args);
     return;
   }
+  if (command === 'iam') {
+    await handleIam(args);
+    return;
+  }
   if (command === 'ops') {
     await handleOps(args);
     return;
@@ -42,6 +46,7 @@ function printHelp(): void {
   pnpm dar smoke list|run|suite
   pnpm dar dev up|down
   pnpm dar db migrate|seed
+  pnpm dar iam bootstrap-admin|seed-local
   pnpm dar ops reconcile-admissions
   pnpm dar replay export|test`);
 }

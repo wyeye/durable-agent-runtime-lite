@@ -1,8 +1,9 @@
 import { Menu } from 'antd';
 import { Link, useLocation } from 'react-router';
 import { navLabel } from '../utils/i18n-labels.js';
+import { useIdentity } from '../auth/identity-context.js';
 
-const items = [
+const baseItems = [
   { key: '/dashboard', label: <Link to="/dashboard">{navLabel('dashboard')}</Link> },
   {
     key: 'ability',
@@ -43,12 +44,29 @@ const items = [
   { key: '/tenant-admissions', label: <Link to="/tenant-admissions">{navLabel('tenantAdmissions')}</Link> },
 ];
 
+const iamItems = [
+  {
+    key: 'iam',
+    label: navLabel('iam'),
+    children: [
+      { key: '/iam/tenants', label: <Link to="/iam/tenants">{navLabel('tenants')}</Link> },
+      { key: '/iam/users', label: <Link to="/iam/users">{navLabel('users')}</Link> },
+      { key: '/iam/roles', label: <Link to="/iam/roles">{navLabel('roles')}</Link> },
+    ],
+  },
+];
+
 export function SideNav() {
   const location = useLocation();
+  const { hasPermission } = useIdentity();
+  const showIam = hasPermission('iam:read');
+  const items = showIam ? [...baseItems, ...iamItems] : baseItems;
+
   const selected = leafKeys.find((key) => location.pathname.startsWith(key)) ?? '/dashboard';
   const openKeys = selected === '/model-gateways' || selected === '/models' || selected === '/model-policies' ? ['ability']
     : selected.startsWith('/registry') ? ['registry']
     : selected.startsWith('/evaluation') ? ['evaluation']
+    : selected.startsWith('/iam') ? ['iam']
       : [];
   return <Menu mode="inline" selectedKeys={[selected]} defaultOpenKeys={openKeys} items={items} />;
 }
@@ -75,4 +93,7 @@ const leafKeys = [
   '/tool-calls',
   '/policy-snapshots',
   '/tenant-admissions',
+  '/iam/tenants',
+  '/iam/users',
+  '/iam/roles',
 ];

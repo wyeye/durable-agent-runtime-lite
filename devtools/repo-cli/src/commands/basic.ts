@@ -17,6 +17,30 @@ export async function handleDb(args: string[]): Promise<void> {
   throw new Error(`Unknown db command: ${command}`);
 }
 
+export async function handleIam(args: string[]): Promise<void> {
+  const [command, ...rest] = args;
+  if (!command || command === '--help' || command === 'help') {
+    console.log('Usage: pnpm dar iam bootstrap-admin [--user-id <id>] [--display-name <name>] [--email <email>]');
+    console.log('       pnpm dar iam seed-local');
+    return;
+  }
+  if (command === 'bootstrap-admin') {
+    assertSuccess(
+      await runCommand('tsx', ['devtools/repo-cli/src/scripts/iam-bootstrap.ts', ...rest], { inherit: true }),
+      'iam bootstrap-admin',
+    );
+    return;
+  }
+  if (command === 'seed-local') {
+    assertSuccess(
+      await runCommand('tsx', ['devtools/repo-cli/src/scripts/iam-seed-local.ts', ...rest], { inherit: true }),
+      'iam seed-local',
+    );
+    return;
+  }
+  throw new Error(`Unknown iam command: ${command}`);
+}
+
 export async function handleDev(args: string[]): Promise<void> {
   const [command] = args;
   if (!command || command === '--help' || command === 'help') {

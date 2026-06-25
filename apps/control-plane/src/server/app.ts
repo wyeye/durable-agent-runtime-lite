@@ -4,8 +4,9 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { RuntimeConfig } from '@dar/config';
 import { getRuntimeApiUrl, getToolGatewayUrl, loadConfig } from '@dar/config';
 import { createLogger, logEvent } from '@dar/logger';
-import { closeDb, createDb, type Database } from '@dar/db';
+import { closeDb, createDb, type Database, AuditEventRepository, TenantRepository, UserAccountRepository, TenantMembershipRepository } from '@dar/db';
 import { installFastifyLocale } from '@dar/i18n';
+import { DbIdentityDirectory, type IdentityDirectory } from '@dar/security';
 import { sql, type Kysely } from 'kysely';
 import { RuntimeApiClient, type RuntimeApiOperationsClient } from './clients/runtime-api-client.js';
 import { ToolGatewayClient, type ToolGatewayOperationsClient } from './clients/tool-gateway-client.js';
@@ -18,9 +19,13 @@ import { evaluationRoutes } from './routes/evaluation.js';
 import { operationsRoutes } from './routes/operations.js';
 import { registryRoutes } from './routes/registry.js';
 import { modelCatalogRoutes } from './routes/model-catalog.js';
+import { iamRoutes } from './routes/iam.js';
 import { EvaluationApiService, type EvaluationApi } from './services/evaluation-api-service.js';
 import { ModelCatalogService, type ModelCatalogApi } from './services/model-catalog-service.js';
 import { RegistryApiService, type RegistryApi } from './services/registry-api-service.js';
+import { TenantDirectoryService } from './services/iam/tenant-directory-service.js';
+import { UserDirectoryService } from './services/iam/user-directory-service.js';
+import { MembershipService } from './services/iam/membership-service.js';
 import { RouteEmbeddingIndexService } from '../modules/registry/route-embedding-index-service.js';
 
 export interface ControlPlaneAppOptions {
@@ -78,10 +83,60 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
   installFastifyLocale(app);
   await errorHandlerPlugin(app);
   await openApiPlugin(app, { config });
-  await authPlugin(app, { config });
+
+  // IAM Identity Directory
+  let identityDirectory: IdentityDirectory | undefined;
+  if (config.IAM_DIRECTORY_MODE === 'db' && db) {
+    const tenantRepo = new TenantRepository(db);
+    const userRepo = new UserAccountRepository(db);
+    const membershipRepo = new TenantMembershipRepository(db);
+    identityDirectory = new DbIdentityDirectory({
+      getUser: (userId) => userRepo.get(userId),
+      getTenant: (tenantId) => tenantRepo.get(tenantId),
+      getMembership: (tenantId, userId) => membershipRepo.get(tenantId, userId),
+      getActiveMembershipsForUser: (userId) => membershipRepo.listForUser(userId),
+    });
+  }
+
+  await authPlugin(app, { config, identityDirectory });
+
+  // IAM Services and Routes
+  if (db) {
+    const auditRepo = new AuditEventRepository(db);
+    const tenantRepo = new TenantRepository(db);
+    const userRepo = new UserAccountRepository(db);
+    const membershipRepo = new TenantMembershipRepository(db);
+    const auditWriter = {
+      write: async (event: { tenant_id: string; actor_id: string; action: string; target_type: string; target_id: string; result: string; payload?: Record<string, unknown> | undefined; request_id?: string | undefined }) => {
+        await auditRepo.append({
+          tenant_id: event.tenant_id,
+          actor_id: event.actor_id,
+          action: event.action,
+          target_type: event.target_type,
+          target_id: event.target_id,
+          result: event.result as 'succeeded',
+          payload: event.payload ?? {},
+          ...(event.request_id !== undefined ? { trace_id: event.request_id } : {}),
+          event_key: `${event.action}:${event.target_id}:${Date.now()}`,
+        } as Parameters<typeof auditRepo.append>[0]);
+      },
+    };
+    const tenantService = new TenantDirectoryService(tenantRepo, auditWriter);
+    const userService = new UserDirectoryService(userRepo, auditWriter);
+    const membershipService = new MembershipService(membershipRepo, auditWriter);
+    await iamRoutes(app, { tenantService, userService, membershipService });
+  }
   await healthRoutes(app, {
     config,
-    readyCheck: options.readyCheck ?? (async () => { await sql`select 1`.execute(requireDb(db)); }),
+    readyCheck: options.readyCheck ?? (async () => {
+      await sql`select 1`.execute(requireDb(db));
+      // In DB mode, verify IAM tables are accessible
+      if (config.IAM_DIRECTORY_MODE === 'db' && db) {
+        await sql`select 1 from tenant limit 1`.execute(db);
+        await sql`select 1 from user_account limit 1`.execute(db);
+        await sql`select 1 from tenant_membership limit 1`.execute(db);
+      }
+    }),
   });
   await registryRoutes(app, { service: registryService });
   await modelCatalogRoutes(app, { service: modelCatalogService });
@@ -139,6 +194,9 @@ function validateControlPlaneConfig(config: RuntimeConfig): void {
   }
   if (isProduction && config.EVALUATION_GATE_MODE !== 'required') {
     throw new Error('EVALUATION_GATE_MODE=required is required in production');
+  }
+  if (isProduction && config.IAM_DIRECTORY_MODE !== 'db') {
+    throw new Error('IAM_DIRECTORY_MODE=db is required in production');
   }
   if (isProduction && !config.MODEL_CREDENTIAL_MASTER_KEY) {
     throw new Error('MODEL_CREDENTIAL_MASTER_KEY is required in production');

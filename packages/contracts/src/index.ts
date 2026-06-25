@@ -2263,4 +2263,175 @@ export type AgentRunQuery = z.infer<typeof agentRunQuerySchema>;
 export type AgentStepQuery = z.infer<typeof agentStepQuerySchema>;
 export type WorkflowStartRequest = z.infer<typeof workflowStartRequestSchema>;
 export type WorkflowStartResponse = z.infer<typeof workflowStartResponseSchema>;
+
+// =========================================================================
+// IAM Directory contracts
+// =========================================================================
+
+export const iamTenantStatusSchema = z.enum(['active', 'disabled']);
+export type IamTenantStatus = z.infer<typeof iamTenantStatusSchema>;
+
+export const iamTenantSchema = z.object({
+  tenant_id: z.string().min(1).max(128),
+  display_name: z.string().min(1).max(256),
+  description: z.string().max(2000).default(''),
+  status: iamTenantStatusSchema,
+  revision: z.number().int().positive(),
+  created_by: z.string().nullable().optional(),
+  updated_by: z.string().nullable().optional(),
+  created_at: z.string().or(z.date()),
+  updated_at: z.string().or(z.date()),
+  disabled_at: z.string().or(z.date()).nullable().optional(),
+});
+export type IamTenant = z.infer<typeof iamTenantSchema>;
+
+export const iamTenantCreateRequestSchema = z.object({
+  tenant_id: z.string().min(1).max(128).regex(/^[a-zA-Z0-9_-]+$/u, 'tenant_id 只允许字母、数字、下划线和连字符'),
+  display_name: z.string().min(1).max(256),
+  description: z.string().max(2000).default(''),
+});
+export type IamTenantCreateRequest = z.infer<typeof iamTenantCreateRequestSchema>;
+
+export const iamTenantUpdateRequestSchema = z.object({
+  display_name: z.string().min(1).max(256).optional(),
+  description: z.string().max(2000).optional(),
+  expected_revision: z.number().int().positive(),
+});
+export type IamTenantUpdateRequest = z.infer<typeof iamTenantUpdateRequestSchema>;
+
+export const iamTenantQuerySchema = z.object({
+  status: iamTenantStatusSchema.optional(),
+  search: z.string().optional(),
+  page: z.number().int().positive().default(1),
+  page_size: z.number().int().min(1).max(100).default(20),
+});
+export type IamTenantQuery = z.infer<typeof iamTenantQuerySchema>;
+
+export const iamUserStatusSchema = z.enum(['active', 'disabled']);
+export type IamUserStatus = z.infer<typeof iamUserStatusSchema>;
+
+export const iamPlatformRoleSchema = z.enum(['platform_admin']);
+export type IamPlatformRole = z.infer<typeof iamPlatformRoleSchema>;
+
+export const iamUserAccountSchema = z.object({
+  user_id: z.string().min(1).max(128),
+  display_name: z.string().min(1).max(256),
+  email: z.string().email().nullable().optional(),
+  status: iamUserStatusSchema,
+  platform_roles: z.array(iamPlatformRoleSchema),
+  revision: z.number().int().positive(),
+  created_by: z.string().nullable().optional(),
+  updated_by: z.string().nullable().optional(),
+  created_at: z.string().or(z.date()),
+  updated_at: z.string().or(z.date()),
+  disabled_at: z.string().or(z.date()).nullable().optional(),
+});
+export type IamUserAccount = z.infer<typeof iamUserAccountSchema>;
+
+export const iamUserCreateRequestSchema = z.object({
+  user_id: z.string().min(1).max(128).regex(/^[a-zA-Z0-9_-]+$/u, 'user_id 只允许字母、数字、下划线和连字符'),
+  display_name: z.string().min(1).max(256),
+  email: z.string().email().optional(),
+  platform_roles: z.array(iamPlatformRoleSchema).default([]),
+});
+export type IamUserCreateRequest = z.infer<typeof iamUserCreateRequestSchema>;
+
+export const iamUserUpdateRequestSchema = z.object({
+  display_name: z.string().min(1).max(256).optional(),
+  email: z.string().email().optional().nullable(),
+  platform_roles: z.array(iamPlatformRoleSchema).optional(),
+  expected_revision: z.number().int().positive(),
+});
+export type IamUserUpdateRequest = z.infer<typeof iamUserUpdateRequestSchema>;
+
+export const iamUserQuerySchema = z.object({
+  status: iamUserStatusSchema.optional(),
+  search: z.string().optional(),
+  platform_role: iamPlatformRoleSchema.optional(),
+  page: z.number().int().positive().default(1),
+  page_size: z.number().int().min(1).max(100).default(20),
+});
+export type IamUserQuery = z.infer<typeof iamUserQuerySchema>;
+
+export const iamMembershipStatusSchema = z.enum(['active', 'disabled']);
+export type IamMembershipStatus = z.infer<typeof iamMembershipStatusSchema>;
+
+export const iamMembershipRoleSchema = z.enum(['capability_operator', 'auditor']);
+export type IamMembershipRole = z.infer<typeof iamMembershipRoleSchema>;
+
+export const iamTenantMembershipSchema = z.object({
+  tenant_id: z.string().min(1),
+  user_id: z.string().min(1),
+  roles: z.array(iamMembershipRoleSchema),
+  status: iamMembershipStatusSchema,
+  revision: z.number().int().positive(),
+  created_by: z.string().nullable().optional(),
+  updated_by: z.string().nullable().optional(),
+  created_at: z.string().or(z.date()),
+  updated_at: z.string().or(z.date()),
+  disabled_at: z.string().or(z.date()).nullable().optional(),
+});
+export type IamTenantMembership = z.infer<typeof iamTenantMembershipSchema>;
+
+export const iamMembershipCreateRequestSchema = z.object({
+  tenant_id: z.string().min(1),
+  user_id: z.string().min(1),
+  roles: z.array(iamMembershipRoleSchema).default([]),
+});
+export type IamMembershipCreateRequest = z.infer<typeof iamMembershipCreateRequestSchema>;
+
+export const iamMembershipUpdateRequestSchema = z.object({
+  roles: z.array(iamMembershipRoleSchema),
+  expected_revision: z.number().int().positive(),
+});
+export type IamMembershipUpdateRequest = z.infer<typeof iamMembershipUpdateRequestSchema>;
+
+export const iamMembershipQuerySchema = z.object({
+  tenant_id: z.string().optional(),
+  user_id: z.string().optional(),
+  status: iamMembershipStatusSchema.optional(),
+  page: z.number().int().positive().default(1),
+  page_size: z.number().int().min(1).max(100).default(20),
+});
+export type IamMembershipQuery = z.infer<typeof iamMembershipQuerySchema>;
+
+export const iamRoleDescriptorSchema = z.object({
+  role: z.string(),
+  scope: z.enum(['global', 'tenant']),
+  description: z.string(),
+  can_manage_iam: z.boolean(),
+  can_write_registry: z.boolean(),
+  can_handle_human_task: z.boolean(),
+  is_read_only: z.boolean(),
+  can_use_runtime: z.boolean(),
+});
+export type IamRoleDescriptor = z.infer<typeof iamRoleDescriptorSchema>;
+
+export const iamRoleCatalogResponseSchema = z.object({
+  roles: z.array(iamRoleDescriptorSchema),
+  membership_roles: z.array(iamRoleDescriptorSchema),
+});
+export type IamRoleCatalogResponse = z.infer<typeof iamRoleCatalogResponseSchema>;
+
+export const iamResolvedIdentitySchema = z.object({
+  user_id: z.string(),
+  tenant_id: z.string(),
+  display_name: z.string(),
+  email: z.string().optional(),
+  platform_roles: z.array(z.string()),
+  membership_roles: z.array(z.string()),
+  roles: z.array(z.string()),
+  identity_source: z.enum(['directory', 'header']),
+  request_id: z.string().optional(),
+});
+export type IamResolvedIdentity = z.infer<typeof iamResolvedIdentitySchema>;
+
+export const iamListResponseSchema = <T extends z.ZodType>(itemSchema: T) =>
+  z.object({
+    items: z.array(itemSchema),
+    total: z.number().int().nonnegative(),
+    page: z.number().int().positive(),
+    page_size: z.number().int().positive(),
+  });
+
 export * from './evaluation.js';

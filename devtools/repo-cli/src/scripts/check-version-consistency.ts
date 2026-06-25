@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const root = new URL('../../../..', import.meta.url);
@@ -34,7 +34,15 @@ async function main() {
   await assertTextIncludes('.env.example', `APP_VERSION=${version}`);
   await assertTextIncludes('README.md', `当前平台版本：${version}`);
   await assertTextIncludes('docs/project/current-status.md', `当前平台版本：${version}。`);
-  await assertTextIncludes('docs/project/current-status.md', '当前 migration head：`001_baseline.sql`。');
+
+  // Dynamically find the latest migration file
+  const migrationFiles = (await readdir(join(root.pathname, 'db/migrations')))
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+  const latestMigration = migrationFiles[migrationFiles.length - 1];
+  assert.ok(latestMigration, 'must have at least one migration file');
+  await assertTextIncludes('docs/project/current-status.md', `当前 migration head：\`${latestMigration}\`。`);
+
   await assertTextIncludes('CHANGELOG.md', `## ${version}`);
   console.log(JSON.stringify({ ok: true, version }, null, 2));
 }

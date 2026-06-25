@@ -12,7 +12,10 @@ import type {
   StandardSuccessResponse,
 } from '@dar/contracts';
 import { EvaluationGateError, EvaluationRepositoryError, RegistryRepositoryError } from '@dar/db';
+import { IamRepositoryError } from '@dar/db';
 import { AuthError } from '@dar/security';
+import { IamServiceError } from '../services/iam/user-directory-service.js';
+import { mapIamError } from '../routes/iam.js';
 
 export class ControlPlaneHttpError extends Error {
   constructor(
@@ -115,6 +118,20 @@ export function mapError(error: unknown, request?: FastifyRequest): { statusCode
         details: scrubDetails(error.details),
       }, requestId, locale),
     };
+  }
+
+  if (error instanceof IamServiceError || error instanceof IamRepositoryError) {
+    const mapped = mapIamError(error);
+    if (mapped) {
+      return {
+        statusCode: mapped.statusCode,
+        body: fail({
+          code: mapped.code,
+          message: mapped.message,
+          details: scrubDetails(error.details),
+        }, requestId, locale),
+      };
+    }
   }
 
   if (error instanceof Error && /validation failed|can_publish=false|dependency/i.test(error.message)) {

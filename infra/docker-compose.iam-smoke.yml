@@ -1,0 +1,12 @@
+# IAM Smoke compose override — enables DB-backed identity directory.
+# Usage: docker compose -f infra/docker-compose.yml -f infra/docker-compose.iam-smoke.yml up -d
+services:
+  control-plane:
+    environment:
+      IAM_DIRECTORY_MODE: db
+      CONTROL_PLANE_AUTH_MODE: header
+
+  runtime-api:
+    environment:
+      IAM_DIRECTORY_MODE: db
+      RUNTIME_API_AUTH_MODE: header

@@ -49,6 +49,8 @@ export const controlPlanePermissionSchema = z.enum([
   'release:read',
   'operations:read',
   'human_task:decide',
+  'iam:read',
+  'iam:write',
 ]);
 export type ControlPlanePermission = z.infer<typeof controlPlanePermissionSchema>;
 
@@ -434,3 +436,5 @@ export function maskSensitiveFields(value: unknown): unknown {
 
   return value;
 }
+
+export * from './identity-directory.js';

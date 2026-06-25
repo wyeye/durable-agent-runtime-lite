@@ -24,6 +24,9 @@ import { EvaluationGateDetailPage } from './pages/evaluation/EvaluationGateDetai
 import { EvaluationGatesPage } from './pages/evaluation/EvaluationGatesPage.js';
 import { EvaluationRunDetailPage } from './pages/evaluation/EvaluationRunDetailPage.js';
 import { EvaluationRunsPage } from './pages/evaluation/EvaluationRunsPage.js';
+import { TenantsPage } from './pages/iam/TenantsPage.js';
+import { UsersPage } from './pages/iam/UsersPage.js';
+import { RolesPage } from './pages/iam/RolesPage.js';
 
 export const router = createBrowserRouter([
   {
@@ -56,6 +59,9 @@ export const router = createBrowserRouter([
       { path: 'evaluation/gates', element: <EvaluationGatesPage /> },
       { path: 'evaluation/gates/:gatePolicyId/versions/:version', element: <EvaluationGateDetailPage /> },
       { path: 'evaluation/gate-decisions/:decisionId', element: <EvaluationDecisionDetailPage /> },
+      { path: 'iam/tenants', element: <TenantsPage /> },
+      { path: 'iam/users', element: <UsersPage /> },
+      { path: 'iam/roles', element: <RolesPage /> },
       { path: '*', element: <Navigate to="/dashboard" replace /> },
     ],
   },

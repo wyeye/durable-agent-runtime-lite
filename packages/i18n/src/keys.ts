@@ -207,6 +207,20 @@ export const ERROR_MESSAGE_KEYS = {
   MODEL_POLICY_NO_ENABLED_TARGET: 'errors.modelPolicyNoEnabledTarget',
   MODEL_POLICY_DISABLED_TARGET: 'errors.modelPolicyInvalid',
   MODEL_POLICY_DUPLICATE_TARGET_ID: 'errors.modelPolicyInvalid',
+  IAM_DIRECTORY_UNAVAILABLE: 'errors.iamDirectoryUnavailable',
+  IAM_TENANT_NOT_FOUND: 'errors.iamTenantNotFound',
+  IAM_TENANT_DISABLED: 'errors.iamTenantDisabled',
+  IAM_USER_NOT_FOUND: 'errors.iamUserNotFound',
+  IAM_USER_DISABLED: 'errors.iamUserDisabled',
+  IAM_MEMBERSHIP_NOT_FOUND: 'errors.iamMembershipNotFound',
+  IAM_MEMBERSHIP_DISABLED: 'errors.iamMembershipDisabled',
+  IAM_MEMBERSHIP_REQUIRED: 'errors.iamMembershipRequired',
+  IAM_ROLE_NOT_ALLOWED: 'errors.iamRoleNotAllowed',
+  IAM_PLATFORM_ROLE_SCOPE_INVALID: 'errors.iamPlatformRoleScopeInvalid',
+  IAM_MEMBERSHIP_ROLE_SCOPE_INVALID: 'errors.iamMembershipRoleScopeInvalid',
+  IAM_LAST_PLATFORM_ADMIN_REQUIRED: 'errors.iamLastPlatformAdminRequired',
+  IAM_REVISION_CONFLICT: 'errors.iamRevisionConflict',
+  IAM_EMAIL_CONFLICT: 'errors.iamEmailConflict',
 } as const;
 
 export const LOG_MESSAGE_KEYS = {

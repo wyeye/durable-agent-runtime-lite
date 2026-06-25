@@ -227,6 +227,15 @@ export const smokeCatalog: SmokeScenario[] = [
     command: script('smoke-model-catalog-multi-gateway-e2e.ts'),
   },
   {
+    id: 'iam-directory',
+    suite: 'governance',
+    description: 'IAM Directory DB-backed identity, RBAC, and lifecycle smoke.',
+    mode: 'ci',
+    timeoutMs: 180_000,
+    command: script('smoke-iam-directory-e2e.ts'),
+    env: { IAM_DIRECTORY_MODE: 'db' },
+  },
+  {
     id: 'replay',
     suite: 'governance',
     description: 'Temporal replay fixture test.',

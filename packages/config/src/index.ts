@@ -191,6 +191,10 @@ export const runtimeConfigSchema = z.object({
     emptyToUndefined,
     z.enum(['header', 'disabled']).default('header'),
   ),
+  IAM_DIRECTORY_MODE: z.preprocess(
+    emptyToUndefined,
+    z.enum(['header', 'db']).default('header'),
+  ),
   CONTROL_PLANE_SWAGGER_ENABLED: booleanEnvSchema(true),
   CONTROL_PLANE_STATIC_ENABLED: booleanEnvSchema(false),
 });

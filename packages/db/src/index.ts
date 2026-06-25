@@ -729,7 +729,50 @@ export interface AgentContextSnapshotTable {
   created_at: Timestamp;
 }
 
+export interface TenantTable {
+  tenant_id: string;
+  display_name: string;
+  description: string;
+  status: string;
+  revision: number;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  disabled_at: Timestamp | null;
+}
+
+export interface UserAccountTable {
+  user_id: string;
+  display_name: string;
+  email: string | null;
+  status: string;
+  platform_roles: Json;
+  revision: number;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  disabled_at: Timestamp | null;
+}
+
+export interface TenantMembershipTable {
+  tenant_id: string;
+  user_id: string;
+  roles: Json;
+  status: string;
+  revision: number;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  disabled_at: Timestamp | null;
+}
+
 export interface Database {
+  tenant: TenantTable;
+  user_account: UserAccountTable;
+  tenant_membership: TenantMembershipTable;
   flow_definition: FlowDefinitionTable;
   flow_route_config: FlowRouteConfigTable;
   flow_route_embedding: FlowRouteEmbeddingTable;
@@ -832,3 +875,4 @@ export * from './repositories.js';
 export * from './evaluation-repositories.js';
 export * from './registry.js';
 export * from './tenant-policy.js';
+export * from './iam-repositories.js';
