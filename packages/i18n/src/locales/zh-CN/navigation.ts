@@ -1,4 +1,5 @@
 export const navigation = {
+  chat: '对话',
   dashboard: '运营总览',
   registry: '能力注册中心',
   flows: '流程',

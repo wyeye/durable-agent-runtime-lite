@@ -78,6 +78,9 @@ export interface TaskRunTable {
   tenant_id: string;
   user_id: string;
   route_type: string;
+  conversation_id: string | null;
+  user_message_id: string | null;
+  assistant_message_id: string | null;
   flow_id: string | null;
   flow_version: number | null;
   workflow_id: string | null;
@@ -93,6 +96,41 @@ export interface TaskRunTable {
   workflow_start_json: Json | null;
   created_at: Timestamp;
   updated_at: Timestamp;
+}
+
+export interface ConversationTable {
+  conversation_id: string;
+  tenant_id: string;
+  owner_user_id: string;
+  title: string;
+  status: string;
+  revision: number;
+  next_sequence_no: number;
+  last_message_at: Timestamp | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  archived_at: Timestamp | null;
+}
+
+export interface ConversationMessageTable {
+  message_id: string;
+  conversation_id: string;
+  tenant_id: string;
+  sequence_no: number;
+  role: string;
+  status: string;
+  content_text: string | null;
+  client_message_id: string | null;
+  reply_to_message_id: string | null;
+  task_run_id: string | null;
+  agent_run_id: string | null;
+  context_message_ids_json: Json;
+  context_hash: string | null;
+  error_code: string | null;
+  error_message_key: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  completed_at: Timestamp | null;
 }
 
 export interface HumanTaskTable {
@@ -779,6 +817,8 @@ export interface Database {
   agent_spec: AgentSpecTable;
   tool_manifest: ToolManifestTable;
   prompt_definition: PromptDefinitionTable;
+  conversation: ConversationTable;
+  conversation_message: ConversationMessageTable;
   task_run: TaskRunTable;
   human_task: HumanTaskTable;
   audit_event: AuditEventTable;

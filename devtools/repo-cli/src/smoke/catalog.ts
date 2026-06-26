@@ -236,6 +236,21 @@ export const smokeCatalog: SmokeScenario[] = [
     env: { IAM_DIRECTORY_MODE: 'db' },
   },
   {
+    id: 'chat-mvp',
+    suite: 'agent',
+    description: 'Persistent multi-turn chat conversation through runtime-api, Temporal, and Pi.',
+    mode: 'ci',
+    timeoutMs: 240_000,
+    command: script('smoke-chat-e2e.ts'),
+    env: {
+      IAM_DIRECTORY_MODE: 'db',
+      CHAT_ENABLED: 'true',
+      MODEL_CREDENTIAL_MASTER_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      SMOKE_RESULT_PATH: 'artifacts/chat-mvp/result.json',
+    },
+    artifacts: ['artifacts/chat-mvp/result.json'],
+  },
+  {
     id: 'replay',
     suite: 'governance',
     description: 'Temporal replay fixture test.',

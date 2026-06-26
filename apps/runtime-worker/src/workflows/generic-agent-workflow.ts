@@ -10,7 +10,7 @@ const { updateTaskRunStatusActivity } = proxyActivities<{
     task_run_id: string;
     workflow_id: string;
     request_id: string;
-    status: 'running' | 'waiting_human' | 'completed' | 'failed';
+    status: 'running' | 'waiting_human' | 'waiting_user' | 'completed' | 'failed';
     error_code?: string;
     error_message?: string;
   }): Promise<void>;
@@ -56,7 +56,13 @@ export async function genericAgentWorkflow(input: GenericAgentWorkflowInput): Pr
     });
     await updateTaskRunStatusActivity({
       ...context,
-      status: result.status === 'completed' ? 'completed' : result.status === 'waiting_user' || result.status === 'waiting_human' ? 'waiting_human' : 'failed',
+      status: result.status === 'completed'
+        ? 'completed'
+        : result.status === 'waiting_user'
+          ? 'waiting_user'
+          : result.status === 'waiting_human'
+            ? 'waiting_human'
+            : 'failed',
       ...(result.error?.code ? { error_code: result.error.code } : {}),
       ...(result.error?.message ? { error_message: result.error.message } : {}),
     });

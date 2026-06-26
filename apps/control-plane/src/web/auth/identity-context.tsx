@@ -1,11 +1,14 @@
 import React, { createContext, useContext, useMemo, useState } from 'react';
 import type { ControlPlanePermission } from '@dar/security';
 import { hasControlPlanePermission } from '@dar/security';
+import type { IamResolvedIdentity } from '@dar/contracts';
 
 export interface ControlPlaneIdentity {
   user_id: string;
   tenant_id: string;
   roles: string[];
+  membership_roles?: string[];
+  platform_roles?: string[];
 }
 
 interface IdentityContextValue {
@@ -13,6 +16,7 @@ interface IdentityContextValue {
   setIdentity(identity: ControlPlaneIdentity | undefined): void;
   clearIdentity(): void;
   hasPermission(permission: ControlPlanePermission): boolean;
+  canUseRuntime: boolean;
 }
 
 const storageKey = 'dar.control-plane.identity';
@@ -36,6 +40,7 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
       localStorage.removeItem(storageKey);
     },
     hasPermission: (permission) => identity ? hasControlPlanePermission(identity, permission) : false,
+    canUseRuntime: Boolean(identity),
   }), [identity]);
 
   return <IdentityContext.Provider value={value}>{children}</IdentityContext.Provider>;
@@ -60,6 +65,8 @@ export function readStoredIdentity(): ControlPlaneIdentity | undefined {
       user_id: 'dev_operator',
       tenant_id: 'default',
       roles: ['capability_operator'],
+      membership_roles: ['capability_operator'],
+      platform_roles: [],
     };
   }
 
@@ -90,9 +97,27 @@ function parseIdentity(value: unknown): ControlPlaneIdentity | undefined {
   const roles = Array.isArray(record.roles)
     ? record.roles.filter((role): role is string => typeof role === 'string' && role.length > 0)
     : [];
+  const membershipRoles = Array.isArray(record.membership_roles)
+    ? record.membership_roles.filter((role): role is string => typeof role === 'string')
+    : [];
+  const platformRoles = Array.isArray(record.platform_roles)
+    ? record.platform_roles.filter((role): role is string => typeof role === 'string')
+    : [];
   return {
     user_id: record.user_id,
     tenant_id: record.tenant_id,
     roles,
+    membership_roles: membershipRoles,
+    platform_roles: platformRoles,
+  };
+}
+
+export function fromResolvedIdentity(identity: IamResolvedIdentity): ControlPlaneIdentity {
+  return {
+    user_id: identity.user_id,
+    tenant_id: identity.tenant_id,
+    roles: identity.roles,
+    membership_roles: identity.membership_roles,
+    platform_roles: identity.platform_roles,
   };
 }

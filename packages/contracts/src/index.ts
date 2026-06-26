@@ -1280,6 +1280,7 @@ export const taskRunStatusSchema = z.enum([
   'queued',
   'running',
   'waiting_human',
+  'waiting_user',
   'completed',
   'failed',
   'failed_to_start',
@@ -1291,6 +1292,9 @@ export const taskRunSchema = z.object({
   tenant_id: z.string().min(1),
   user_id: z.string().min(1),
   route_type: z.enum(['matched', 'agent_fallback', 'manual', 'unknown']),
+  conversation_id: z.string().min(1).optional(),
+  user_message_id: z.string().min(1).optional(),
+  assistant_message_id: z.string().min(1).optional(),
   flow_id: z.string().optional(),
   flow_version: z.number().int().positive().optional(),
   workflow_id: z.string().optional(),
@@ -1603,6 +1607,14 @@ export const taskInputSchema = z
   })
   .passthrough();
 
+export const conversationRuntimeMetadataSchema = z.object({
+  conversation_id: z.string().min(1).max(128),
+  user_message_id: z.string().min(1).max(128),
+  assistant_message_id: z.string().min(1).max(128),
+  context_message_ids: z.array(z.string().min(1).max(128)).max(100).default([]),
+  context_hash: sha256Schema,
+});
+
 export const runTaskRequestSchema = z.object({
   request_id: z.string().min(1).optional(),
   tenant_id: z.string().min(1).optional(),
@@ -1613,6 +1625,7 @@ export const runTaskRequestSchema = z.object({
   channel: z.string().min(1).optional(),
   roles: z.array(z.string()).default([]),
   input: taskInputSchema.default({ payload: {} }),
+  conversation_runtime: conversationRuntimeMetadataSchema.optional(),
 });
 
 export const routerPreviewRequestSchema = runTaskRequestSchema;
@@ -1637,6 +1650,7 @@ export const workflowStartRequestSchema = z.object({
   tenant_policy_hash: sha256Schema.optional(),
   tenant_admission_id: z.string().min(1).optional(),
   input: taskInputSchema.default({ payload: {} }),
+  conversation_runtime: conversationRuntimeMetadataSchema.optional(),
   request_locale: z.enum(['zh-CN']).optional(),
   request_id: z.string().min(1),
   trace_id: z.string().optional(),
@@ -1666,6 +1680,7 @@ export const runTaskResponseSchema = z.object({
 
 export const taskRunQuerySchema = paginationRequestSchema.extend({
   tenant_id: z.string().min(1).optional(),
+  user_id: z.string().min(1).optional(),
   status: taskRunStatusSchema.optional(),
   flow_id: z.string().min(1).optional(),
   workflow_id: z.string().min(1).optional(),
@@ -1851,6 +1866,7 @@ export const piSegmentRequestSchema = z.object({
   agent_run_id: z.string().min(1),
   execution_plan_ref: z.string().min(1),
   context_snapshot_ref: piContextSnapshotRefSchema.optional(),
+  seed_messages: z.array(jsonObjectSchema).optional(),
   initial_user_input: z.string().optional(),
   resume_reason: z.string().min(1),
   segment_index: z.number().int().nonnegative(),
@@ -2055,6 +2071,7 @@ export const piDurableAgentWorkflowResultSchema = z.object({
 
 export const agentRunQuerySchema = paginationRequestSchema.extend({
   tenant_id: z.string().min(1).optional(),
+  user_id: z.string().min(1).optional(),
   task_run_id: z.string().min(1).optional(),
   agent_id: z.string().min(1).optional(),
   status: agentRunStatusSchema.optional(),
@@ -2263,6 +2280,119 @@ export type AgentRunQuery = z.infer<typeof agentRunQuerySchema>;
 export type AgentStepQuery = z.infer<typeof agentStepQuerySchema>;
 export type WorkflowStartRequest = z.infer<typeof workflowStartRequestSchema>;
 export type WorkflowStartResponse = z.infer<typeof workflowStartResponseSchema>;
+
+// =========================================================================
+// Conversation contracts
+// =========================================================================
+
+export const conversationStatusSchema = z.enum(['active', 'archived']);
+export type ConversationStatus = z.infer<typeof conversationStatusSchema>;
+
+export const conversationMessageRoleSchema = z.enum(['user', 'assistant']);
+export type ConversationMessageRole = z.infer<typeof conversationMessageRoleSchema>;
+
+export const conversationMessageStatusSchema = z.enum([
+  'queued',
+  'running',
+  'waiting_human',
+  'waiting_user',
+  'completed',
+  'failed',
+  'cancelled',
+]);
+export type ConversationMessageStatus = z.infer<typeof conversationMessageStatusSchema>;
+
+export const conversationSchema = z.object({
+  conversation_id: z.string().min(1).max(128),
+  tenant_id: z.string().min(1).max(128),
+  owner_user_id: z.string().min(1).max(128),
+  title: z.string().min(1).max(100),
+  status: conversationStatusSchema,
+  revision: z.number().int().positive(),
+  next_sequence_no: z.number().int().positive(),
+  last_message_at: z.string().datetime().optional(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+  archived_at: z.string().datetime().nullable().optional(),
+});
+
+export const conversationMessageSchema = z.object({
+  message_id: z.string().min(1).max(128),
+  conversation_id: z.string().min(1).max(128),
+  tenant_id: z.string().min(1).max(128),
+  sequence_no: z.number().int().positive(),
+  role: conversationMessageRoleSchema,
+  status: conversationMessageStatusSchema,
+  effective_status: conversationMessageStatusSchema.optional(),
+  content_text: z.string().max(16_000).nullable().optional(),
+  client_message_id: z.string().min(1).max(200).nullable().optional(),
+  reply_to_message_id: z.string().min(1).max(128).nullable().optional(),
+  task_run_id: z.string().min(1).max(128).nullable().optional(),
+  agent_run_id: z.string().min(1).max(128).nullable().optional(),
+  context_message_ids: z.array(z.string().min(1).max(128)).default([]),
+  context_hash: sha256Schema.nullable().optional(),
+  error_code: z.string().min(1).nullable().optional(),
+  error_message_key: z.string().min(1).nullable().optional(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+  completed_at: z.string().datetime().nullable().optional(),
+});
+
+export const conversationCreateRequestSchema = z.object({
+  title: z.string().trim().min(1).max(100).optional(),
+});
+
+export const conversationUpdateRequestSchema = z.object({
+  title: z.string().trim().min(1).max(100),
+  expected_revision: z.number().int().positive().optional(),
+});
+
+export const conversationQuerySchema = paginationRequestSchema.extend({
+  status: conversationStatusSchema.optional(),
+});
+
+export const conversationListResponseSchema = z.object({
+  items: z.array(conversationSchema),
+  page: z.number().int().positive(),
+  page_size: z.number().int().positive(),
+  total: z.number().int().nonnegative(),
+});
+
+export const conversationMessageQuerySchema = paginationRequestSchema.extend({
+  order: z.enum(['oldest', 'newest']).default('oldest'),
+});
+
+export const conversationMessageListResponseSchema = z.object({
+  items: z.array(conversationMessageSchema),
+  page: z.number().int().positive(),
+  page_size: z.number().int().positive(),
+  total: z.number().int().nonnegative(),
+});
+
+export const conversationSendMessageRequestSchema = z.object({
+  content: z.string().trim().min(1).max(8_000),
+  client_message_id: z.string().trim().min(1).max(200),
+});
+
+export const conversationSendMessageResponseSchema = z.object({
+  conversation: conversationSchema,
+  user_message: conversationMessageSchema,
+  assistant_message: conversationMessageSchema,
+  task_run_id: z.string().min(1).optional(),
+  workflow_id: z.string().min(1).optional(),
+});
+
+export type Conversation = z.infer<typeof conversationSchema>;
+export type ConversationCreateRequest = z.infer<typeof conversationCreateRequestSchema>;
+export type ConversationUpdateRequest = z.infer<typeof conversationUpdateRequestSchema>;
+export type ConversationQuery = z.infer<typeof conversationQuerySchema>;
+export type ConversationListResponse = z.infer<typeof conversationListResponseSchema>;
+export type ConversationMessage = z.infer<typeof conversationMessageSchema>;
+export type ConversationMessageQuery = z.infer<typeof conversationMessageQuerySchema>;
+export type ConversationMessageListResponse = z.infer<typeof conversationMessageListResponseSchema>;
+export type ConversationSendMessageRequest = z.infer<typeof conversationSendMessageRequestSchema>;
+export type ConversationSendMessageResponse = z.infer<typeof conversationSendMessageResponseSchema>;
+export type ConversationRuntimeMetadata = z.infer<typeof conversationRuntimeMetadataSchema>;
 
 // =========================================================================
 // IAM Directory contracts

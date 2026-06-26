@@ -8,7 +8,7 @@ export interface ApiClientOptions {
 }
 
 export interface ApiRequestOptions {
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   query?: object | undefined;
   signal?: AbortSignal | undefined;

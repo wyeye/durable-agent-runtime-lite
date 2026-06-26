@@ -11,7 +11,7 @@ const flow: FlowSpec = {
   steps: [
     { id: 'input_normalize', type: 'activity', activity: 'input.normalize' },
     { id: 'knowledge_search', type: 'tool', tool: 'knowledge.search', tool_version: '1.0.0' },
-    { id: 'agent_plan', type: 'agent', agent_id: 'sample_agent', input: { agent_version: 1 } },
+    { id: 'agent_plan', type: 'agent', agent_id: 'sample_agent', input: { agent_version: 1, text: '${input.text}' } },
     { id: 'record_write', type: 'tool', tool: 'record.write.mock', tool_version: '1.0.0', risk_level: 'L1' },
   ],
 };
@@ -330,6 +330,47 @@ describe('runtime-worker flow interpreter', () => {
     expect(result.steps.record_write).toMatchObject({
       status: 'rejected',
       human_task: { status: 'rejected' },
+    });
+  });
+
+  it('propagates need_user agent steps as waiting_human flow status until child workflow semantics are split', async () => {
+    const result = await executeFlowSpec(
+      planFor({
+        flow_id: 'agent_need_user_flow',
+        version: 1,
+        runtime: { workflow_type: 'ConfigDrivenWorkflow', task_queue: 'runtime-worker-main' },
+        steps: [
+          { id: 'agent_plan', type: 'agent', agent_id: 'sample_agent', input: { text: '${input.text}' } },
+        ],
+      }),
+      context(),
+      { text: 'need more input' },
+      {
+        normalizeInput: async (input) => ({ normalized: true, input }),
+        invokeTool: async () => {
+          throw new Error('agent-only flow should not invoke tools');
+        },
+        previewTool: async () => {
+          throw new Error('agent-only flow should not preview tools');
+        },
+        commitTool: async () => {
+          throw new Error('agent-only flow should not commit tools');
+        },
+        runAgent: async () => ({
+          status: 'need_user',
+          proposed_tool_calls: [],
+          usage: {},
+          error: { code: 'AGENT_USER_INPUT_REQUIRED', message: 'Need one more user field' },
+        }),
+        createHumanTask: async () => humanTask({ status: 'pending' }),
+        waitForHumanTaskDecision: async () => humanTask({ status: 'approved' }),
+      },
+    );
+
+    expect(result.status).toBe('waiting_human');
+    expect(result.steps.agent_plan).toMatchObject({
+      status: 'need_user',
+      error: { code: 'AGENT_USER_INPUT_REQUIRED' },
     });
   });
 

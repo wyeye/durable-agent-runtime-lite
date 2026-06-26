@@ -31,6 +31,7 @@ describe('repo-cli smoke catalog', () => {
       'pi-user-input',
       'pi-handoff',
       'worker-crash-resume',
+      'chat-mvp',
       'tenant-policy',
       'tenant-snapshot',
       'tenant-concurrency',

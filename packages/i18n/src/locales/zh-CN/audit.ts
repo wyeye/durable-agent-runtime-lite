@@ -15,5 +15,13 @@ export const audit = {
   humanTaskRespond: '人工任务已响应。',
   evaluationRunCompleted: '评测任务已完成。',
   evaluationGateEvaluated: '评测门禁已计算。',
+  conversationCreated: '会话已创建。',
+  conversationRenamed: '会话已重命名。',
+  conversationArchived: '会话已归档。',
+  conversationUnarchived: '会话已恢复。',
+  conversationMessageAccepted: '会话消息已接受。',
+  conversationTurnStarted: '会话轮次已启动。',
+  conversationTurnCompleted: '会话轮次已完成。',
+  conversationTurnFailed: '会话轮次已失败。',
   fallback: '审计事件已记录。',
 };

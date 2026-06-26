@@ -8,6 +8,12 @@ import type {
   AgentToolResultReference,
   AgentUsage,
   AuditEvent,
+  Conversation,
+  ConversationCreateRequest,
+  ConversationMessage,
+  ConversationMessageStatus,
+  ConversationStatus,
+  ConversationUpdateRequest,
   FlowExecutionPlan,
   FlowSpec,
   HumanTask,
@@ -48,6 +54,12 @@ import {
   agentStepRecordSchema,
   agentUsageSchema,
   auditEventSchema,
+  conversationCreateRequestSchema,
+  conversationMessageSchema,
+  conversationMessageStatusSchema,
+  conversationSchema,
+  conversationStatusSchema,
+  conversationUpdateRequestSchema,
   flowExecutionPlanSchema,
   flowSpecSchema,
   grayPolicySchema,
@@ -94,6 +106,8 @@ import type {
   AgentRunTable,
   AgentStepTable,
   AuditEventTable,
+  ConversationMessageTable,
+  ConversationTable,
   Database,
   FlowExecutionPlanTable,
   FlowDefinitionTable,
@@ -132,6 +146,17 @@ import {
 export const executableSpecStatuses = ['published', 'gray'] as const;
 export type ExecutableSpecStatus = (typeof executableSpecStatuses)[number];
 
+export class ConversationRepositoryError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly details: Record<string, unknown> = {},
+  ) {
+    super(message);
+    this.name = 'ConversationRepositoryError';
+  }
+}
+
 export interface RepositoryTenantOptions {
   tenantId?: string;
 }
@@ -159,11 +184,84 @@ export interface UpdateTaskRunStatusInput {
 }
 
 export interface ListTaskRunsOptions extends RepositoryTenantOptions {
+  userId?: string;
+  conversationId?: string;
   status?: TaskRun['status'];
   flowId?: string;
   workflowId?: string;
   limit?: number;
   offset?: number;
+}
+
+export interface ListConversationsOptions extends RepositoryTenantOptions {
+  ownerUserId: string;
+  status?: ConversationStatus;
+  limit?: number;
+  offset?: number;
+}
+
+export interface CreateConversationInput {
+  conversationId: string;
+  tenantId: string;
+  ownerUserId: string;
+  title: string;
+}
+
+export interface UpdateConversationTitleInput extends ConversationUpdateRequest {
+  conversationId: string;
+  tenantId: string;
+  ownerUserId: string;
+}
+
+export interface ConversationArchiveInput {
+  conversationId: string;
+  tenantId: string;
+  ownerUserId: string;
+}
+
+export interface CreateConversationTurnInput {
+  conversationId: string;
+  tenantId: string;
+  ownerUserId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+  userClientMessageId: string;
+  userContent: string;
+  contextMessageIds: string[];
+  contextHash: string;
+}
+
+export interface ListConversationMessagesOptions extends RepositoryTenantOptions {
+  conversationId: string;
+  ownerUserId?: string;
+  order?: 'oldest' | 'newest';
+  limit?: number;
+  offset?: number;
+}
+
+export interface CompleteAssistantMessageInput {
+  assistantMessageId: string;
+  tenantId: string;
+  contentText: string;
+  taskRunId?: string;
+  agentRunId?: string;
+}
+
+export interface FailAssistantMessageInput {
+  assistantMessageId: string;
+  tenantId: string;
+  status?: Extract<ConversationMessageStatus, 'failed' | 'cancelled'>;
+  errorCode: string;
+  errorMessageKey: string;
+  taskRunId?: string;
+  agentRunId?: string;
+}
+
+export interface ConversationContextMessageOptions extends RepositoryTenantOptions {
+  conversationId: string;
+  ownerUserId?: string;
+  maxMessages: number;
+  maxBytes: number;
 }
 
 export type RouteEmbeddingSourceType = 'keyword' | 'example';
@@ -655,6 +753,7 @@ export interface TenantPolicySnapshotListOptions extends RepositoryTenantOptions
 }
 
 export interface ListAgentRunsOptions extends RepositoryTenantOptions {
+  userId?: string;
   taskRunId?: string;
   agentId?: string;
   status?: AgentRunRecord['status'];
@@ -3188,6 +3287,9 @@ export class TaskRunRepository {
       tenant_id: taskRun.tenant_id,
       user_id: taskRun.user_id,
       route_type: taskRun.route_type,
+      conversation_id: taskRun.conversation_id ?? null,
+      user_message_id: taskRun.user_message_id ?? null,
+      assistant_message_id: taskRun.assistant_message_id ?? null,
       flow_id: taskRun.flow_id ?? null,
       flow_version: taskRun.flow_version ?? null,
       workflow_id: taskRun.workflow_id ?? null,
@@ -3213,13 +3315,42 @@ export class TaskRunRepository {
     return mapTaskRun(saved);
   }
 
-  async get(taskRunId: string): Promise<TaskRun | undefined> {
-    const row = await this.db
+  async get(
+    taskRunId: string,
+    options: { tenantId?: string; userId?: string } = {},
+  ): Promise<TaskRun | undefined> {
+    let query = this.db
       .selectFrom('task_run')
       .selectAll()
-      .where('task_run_id', '=', taskRunId)
-      .executeTakeFirst();
+      .where('task_run_id', '=', taskRunId);
+    if (options.tenantId) {
+      query = query.where('tenant_id', '=', options.tenantId);
+    }
+    if (options.userId) {
+      query = query.where('user_id', '=', options.userId);
+    }
+    const row = await query.executeTakeFirst();
 
+    return row ? mapTaskRun(row) : undefined;
+  }
+
+  async getByAssistantMessageId(
+    assistantMessageId: string,
+    options: { tenantId?: string; userId?: string } = {},
+  ): Promise<TaskRun | undefined> {
+    let query = this.db
+      .selectFrom('task_run')
+      .selectAll()
+      .where('assistant_message_id', '=', assistantMessageId);
+    if (options.tenantId) {
+      query = query.where('tenant_id', '=', options.tenantId);
+    }
+    if (options.userId) {
+      query = query.where('user_id', '=', options.userId);
+    }
+    const row = await query
+      .orderBy('created_at', 'desc')
+      .executeTakeFirst();
     return row ? mapTaskRun(row) : undefined;
   }
 
@@ -3227,6 +3358,12 @@ export class TaskRunRepository {
     let query = this.db.selectFrom('task_run').selectAll();
     if (options.tenantId) {
       query = query.where('tenant_id', '=', options.tenantId);
+    }
+    if (options.userId) {
+      query = query.where('user_id', '=', options.userId);
+    }
+    if (options.conversationId) {
+      query = query.where('conversation_id', '=', options.conversationId);
     }
     if (options.status) {
       query = query.where('status', '=', options.status);
@@ -3281,6 +3418,661 @@ export class TaskRunRepository {
       .executeTakeFirst();
 
     return row ? mapTaskRun(row) : undefined;
+  }
+}
+
+export class ConversationRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async listOwned(options: ListConversationsOptions): Promise<{ items: Conversation[]; total: number }> {
+    let base = this.db
+      .selectFrom('conversation')
+      .selectAll()
+      .where('owner_user_id', '=', options.ownerUserId);
+    if (options.tenantId) {
+      base = base.where('tenant_id', '=', options.tenantId);
+    }
+    if (options.status) {
+      base = base.where('status', '=', options.status);
+    }
+
+    const countRow = await base
+      .clearSelect()
+      .select((eb) => eb.fn.countAll().as('total'))
+      .executeTakeFirstOrThrow();
+    const total = Number(countRow.total);
+
+    const rows = await base
+      .orderBy('last_message_at', 'desc')
+      .orderBy('updated_at', 'desc')
+      .limit(limit(options.limit))
+      .offset(offset(options.offset))
+      .execute();
+
+    return { items: rows.map(mapConversation), total };
+  }
+
+  async getOwned(
+    conversationId: string,
+    options: { tenantId?: string; ownerUserId: string },
+  ): Promise<Conversation | undefined> {
+    let query = this.db
+      .selectFrom('conversation')
+      .selectAll()
+      .where('conversation_id', '=', conversationId)
+      .where('owner_user_id', '=', options.ownerUserId);
+    if (options.tenantId) {
+      query = query.where('tenant_id', '=', options.tenantId);
+    }
+    const row = await query.executeTakeFirst();
+    return row ? mapConversation(row) : undefined;
+  }
+
+  async create(input: CreateConversationInput): Promise<Conversation> {
+    const parsed = conversationCreateRequestSchema.parse({ title: input.title });
+    const row: Insertable<ConversationTable> = {
+      conversation_id: input.conversationId,
+      tenant_id: input.tenantId,
+      owner_user_id: input.ownerUserId,
+      title: parsed.title ?? input.title,
+      status: 'active',
+      revision: 1,
+      next_sequence_no: 1,
+      last_message_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+      archived_at: null,
+    };
+    const saved = await this.db
+      .insertInto('conversation')
+      .values(row)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return mapConversation(saved);
+  }
+
+  async updateTitle(input: UpdateConversationTitleInput): Promise<Conversation> {
+    const parsed = conversationUpdateRequestSchema.parse({
+      title: input.title,
+      expected_revision: input.expected_revision,
+    });
+    let query = this.db
+      .updateTable('conversation')
+      .set({
+        title: parsed.title,
+        revision: sql<number>`revision + 1`,
+        updated_at: new Date(),
+      })
+      .where('conversation_id', '=', input.conversationId)
+      .where('owner_user_id', '=', input.ownerUserId);
+    if (input.tenantId) {
+      query = query.where('tenant_id', '=', input.tenantId);
+    }
+    if (parsed.expected_revision !== undefined) {
+      query = query.where('revision', '=', parsed.expected_revision);
+    }
+    const row = await query.returningAll().executeTakeFirst();
+    if (row) {
+      return mapConversation(row);
+    }
+    const existing = await this.getOwned(input.conversationId, {
+      tenantId: input.tenantId,
+      ownerUserId: input.ownerUserId,
+    });
+    if (!existing) {
+      throw new ConversationRepositoryError(
+        'CONVERSATION_NOT_FOUND',
+        `Conversation not found: ${input.conversationId}`,
+        { conversation_id: input.conversationId },
+      );
+    }
+    if (
+      parsed.expected_revision !== undefined
+      && existing.revision !== parsed.expected_revision
+    ) {
+      throw new ConversationRepositoryError(
+        'CONVERSATION_REVISION_CONFLICT',
+        'Conversation revision conflict',
+        {
+          conversation_id: input.conversationId,
+          expected_revision: parsed.expected_revision,
+          actual_revision: existing.revision,
+        },
+      );
+    }
+    return existing;
+  }
+
+  async archive(input: ConversationArchiveInput): Promise<Conversation> {
+    return this.setStatus(input, 'archived');
+  }
+
+  async unarchive(input: ConversationArchiveInput): Promise<Conversation> {
+    return this.setStatus(input, 'active');
+  }
+
+  async lockForAppend(
+    conversationId: string,
+    options: { tenantId?: string; ownerUserId: string },
+  ): Promise<Conversation> {
+    let query = this.db
+      .selectFrom('conversation')
+      .selectAll()
+      .where('conversation_id', '=', conversationId)
+      .where('owner_user_id', '=', options.ownerUserId)
+      .forUpdate();
+    if (options.tenantId) {
+      query = query.where('tenant_id', '=', options.tenantId);
+    }
+    const row = await query.executeTakeFirst();
+    if (!row) {
+      throw new ConversationRepositoryError(
+        'CONVERSATION_NOT_FOUND',
+        `Conversation not found: ${conversationId}`,
+        { conversation_id: conversationId },
+      );
+    }
+    return mapConversation(row);
+  }
+
+  async allocateSequenceRange(
+    conversationId: string,
+    count: number,
+    options: { tenantId?: string; ownerUserId: string },
+  ): Promise<{ start: number; end: number; conversation: Conversation }> {
+    if (!Number.isInteger(count) || count <= 0) {
+      throw new Error(`Conversation sequence allocation count must be positive: ${count}`);
+    }
+    const locked = await this.lockForAppend(conversationId, options);
+    const start = locked.next_sequence_no;
+    const end = start + count - 1;
+    const row = await this.db
+      .updateTable('conversation')
+      .set({
+        next_sequence_no: end + 1,
+        revision: sql<number>`revision + 1`,
+        updated_at: new Date(),
+      })
+      .where('conversation_id', '=', conversationId)
+      .where('owner_user_id', '=', options.ownerUserId)
+      .where('revision', '=', locked.revision)
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) {
+      throw new ConversationRepositoryError(
+        'CONVERSATION_REVISION_CONFLICT',
+        'Conversation revision conflict during sequence allocation',
+        { conversation_id: conversationId, revision: locked.revision },
+      );
+    }
+    return { start, end, conversation: mapConversation(row) };
+  }
+
+  async touchLastMessage(
+    conversationId: string,
+    input: { tenantId?: string; ownerUserId: string; lastMessageAt: string | Date },
+  ): Promise<Conversation | undefined> {
+    let query = this.db
+      .updateTable('conversation')
+      .set({
+        last_message_at: input.lastMessageAt,
+        updated_at: new Date(),
+      })
+      .where('conversation_id', '=', conversationId)
+      .where('owner_user_id', '=', input.ownerUserId);
+    if (input.tenantId) {
+      query = query.where('tenant_id', '=', input.tenantId);
+    }
+    const row = await query.returningAll().executeTakeFirst();
+    return row ? mapConversation(row) : undefined;
+  }
+
+  private async setStatus(
+    input: ConversationArchiveInput,
+    status: ConversationStatus,
+  ): Promise<Conversation> {
+    let query = this.db
+      .updateTable('conversation')
+      .set({
+        status,
+        archived_at: status === 'archived' ? new Date() : null,
+        revision: sql<number>`revision + 1`,
+        updated_at: new Date(),
+      })
+      .where('conversation_id', '=', input.conversationId)
+      .where('owner_user_id', '=', input.ownerUserId);
+    if (input.tenantId) {
+      query = query.where('tenant_id', '=', input.tenantId);
+    }
+    const row = await query.returningAll().executeTakeFirst();
+    if (row) {
+      return mapConversation(row);
+    }
+    throw new ConversationRepositoryError(
+      'CONVERSATION_NOT_FOUND',
+      `Conversation not found: ${input.conversationId}`,
+      { conversation_id: input.conversationId },
+    );
+  }
+}
+
+export class ConversationMessageRepository {
+  constructor(private readonly db: Kysely<Database>) {}
+
+  async listByConversation(
+    options: ListConversationMessagesOptions,
+  ): Promise<{ items: ConversationMessage[]; total: number }> {
+    let base = this.db
+      .selectFrom('conversation_message as message')
+      .innerJoin('conversation', 'conversation.conversation_id', 'message.conversation_id')
+      .selectAll('message')
+      .where('message.conversation_id', '=', options.conversationId);
+    if (options.tenantId) {
+      base = base.where('message.tenant_id', '=', options.tenantId);
+    }
+    if (options.ownerUserId) {
+      base = base.where('conversation.owner_user_id', '=', options.ownerUserId);
+    }
+
+    const countRow = await base
+      .clearSelect()
+      .select((eb) => eb.fn.countAll().as('total'))
+      .executeTakeFirstOrThrow();
+    const total = Number(countRow.total);
+
+    const direction = options.order === 'newest' ? 'desc' : 'asc';
+    const rows = await base
+      .orderBy('message.sequence_no', direction)
+      .limit(limit(options.limit))
+      .offset(offset(options.offset))
+      .execute();
+    return { items: rows.map(mapConversationMessage), total };
+  }
+
+  async get(
+    messageId: string,
+    options: { tenantId?: string; ownerUserId?: string },
+  ): Promise<ConversationMessage | undefined> {
+    let query = this.db
+      .selectFrom('conversation_message as message')
+      .innerJoin('conversation', 'conversation.conversation_id', 'message.conversation_id')
+      .selectAll('message')
+      .where('message.message_id', '=', messageId);
+    if (options.tenantId) {
+      query = query.where('message.tenant_id', '=', options.tenantId);
+    }
+    if (options.ownerUserId) {
+      query = query.where('conversation.owner_user_id', '=', options.ownerUserId);
+    }
+    const row = await query.executeTakeFirst();
+    return row ? mapConversationMessage(row) : undefined;
+  }
+
+  async getByClientMessageId(
+    conversationId: string,
+    clientMessageId: string,
+    options: { tenantId?: string; ownerUserId?: string },
+  ): Promise<ConversationMessage | undefined> {
+    let query = this.db
+      .selectFrom('conversation_message as message')
+      .innerJoin('conversation', 'conversation.conversation_id', 'message.conversation_id')
+      .selectAll('message')
+      .where('message.conversation_id', '=', conversationId)
+      .where('message.client_message_id', '=', clientMessageId)
+      .where('message.role', '=', 'user');
+    if (options.tenantId) {
+      query = query.where('message.tenant_id', '=', options.tenantId);
+    }
+    if (options.ownerUserId) {
+      query = query.where('conversation.owner_user_id', '=', options.ownerUserId);
+    }
+    const row = await query.executeTakeFirst();
+    return row ? mapConversationMessage(row) : undefined;
+  }
+
+  async createUserAndAssistantTurn(input: CreateConversationTurnInput): Promise<{
+    userMessage: ConversationMessage;
+    assistantMessage: ConversationMessage;
+    idempotentReplay?: boolean;
+  }> {
+    return withTransaction(this.db, async (trx) => {
+      const conversationRepo = new ConversationRepository(trx);
+      const lockedConversation = await conversationRepo.lockForAppend(input.conversationId, {
+        tenantId: input.tenantId,
+        ownerUserId: input.ownerUserId,
+      });
+      if (lockedConversation.status !== 'active') {
+        throw new ConversationRepositoryError(
+          'CONVERSATION_ARCHIVED',
+          'Conversation is archived',
+          { conversation_id: input.conversationId },
+        );
+      }
+      const existing = await new ConversationMessageRepository(trx).getByClientMessageId(
+        input.conversationId,
+        input.userClientMessageId,
+        {
+          tenantId: input.tenantId,
+          ownerUserId: input.ownerUserId,
+        },
+      );
+      if (existing) {
+        if (existing.content_text !== input.userContent) {
+          throw new ConversationRepositoryError(
+            'CONVERSATION_MESSAGE_IDEMPOTENCY_CONFLICT',
+            'Conversation message idempotency conflict',
+            {
+              conversation_id: input.conversationId,
+              client_message_id: input.userClientMessageId,
+            },
+          );
+        }
+        return {
+          userMessage: existing,
+          assistantMessage: await this.requireAssistantReply(existing.message_id, trx, input.tenantId),
+          idempotentReplay: true,
+        };
+      }
+      const inFlight = await this.findInFlightAssistant(input.conversationId, {
+        tenantId: input.tenantId,
+        ownerUserId: input.ownerUserId,
+        db: trx,
+      });
+      if (inFlight) {
+        throw new ConversationRepositoryError(
+          'CONVERSATION_TURN_IN_PROGRESS',
+          'Conversation already has an in-flight turn',
+          {
+            conversation_id: input.conversationId,
+            assistant_message_id: inFlight.message_id,
+          },
+        );
+      }
+      const allocated = await conversationRepo.allocateSequenceRange(
+        input.conversationId,
+        2,
+        { tenantId: input.tenantId, ownerUserId: input.ownerUserId },
+      );
+      const now = new Date();
+      const userRow: Insertable<ConversationMessageTable> = {
+        message_id: input.userMessageId,
+        conversation_id: input.conversationId,
+        tenant_id: input.tenantId,
+        sequence_no: allocated.start,
+        role: 'user',
+        status: 'completed',
+        content_text: input.userContent,
+        client_message_id: input.userClientMessageId,
+        reply_to_message_id: null,
+        task_run_id: null,
+        agent_run_id: null,
+        context_message_ids_json: toDbJson([]),
+        context_hash: null,
+        error_code: null,
+        error_message_key: null,
+        created_at: now,
+        updated_at: now,
+        completed_at: now,
+      };
+      const assistantRow: Insertable<ConversationMessageTable> = {
+        message_id: input.assistantMessageId,
+        conversation_id: input.conversationId,
+        tenant_id: input.tenantId,
+        sequence_no: allocated.end,
+        role: 'assistant',
+        status: 'queued',
+        content_text: null,
+        client_message_id: null,
+        reply_to_message_id: input.userMessageId,
+        task_run_id: null,
+        agent_run_id: null,
+        context_message_ids_json: toDbJson(input.contextMessageIds),
+        context_hash: input.contextHash,
+        error_code: null,
+        error_message_key: null,
+        created_at: now,
+        updated_at: now,
+        completed_at: null,
+      };
+      try {
+        const savedUser = await trx
+          .insertInto('conversation_message')
+          .values(userRow)
+          .returningAll()
+          .executeTakeFirstOrThrow();
+        const savedAssistant = await trx
+          .insertInto('conversation_message')
+          .values(assistantRow)
+          .returningAll()
+          .executeTakeFirstOrThrow();
+        await conversationRepo.touchLastMessage(input.conversationId, {
+          tenantId: input.tenantId,
+          ownerUserId: input.ownerUserId,
+          lastMessageAt: now,
+        });
+        return {
+          userMessage: mapConversationMessage(savedUser),
+          assistantMessage: mapConversationMessage(savedAssistant),
+        };
+      } catch (error) {
+        throw mapConversationWriteError(error, {
+          conversation_id: input.conversationId,
+          client_message_id: input.userClientMessageId,
+        });
+      }
+    });
+  }
+
+  async linkTaskRun(
+    assistantMessageId: string,
+    input: { tenantId: string; taskRunId: string; userMessageId: string },
+  ): Promise<ConversationMessage | undefined> {
+    const row = await this.db
+      .updateTable('conversation_message')
+      .set({
+        task_run_id: input.taskRunId,
+        updated_at: new Date(),
+      })
+      .where('message_id', '=', assistantMessageId)
+      .where('tenant_id', '=', input.tenantId)
+      .where('reply_to_message_id', '=', input.userMessageId)
+      .returningAll()
+      .executeTakeFirst();
+    return row ? mapConversationMessage(row) : undefined;
+  }
+
+  async linkAgentRun(
+    assistantMessageId: string,
+    input: { tenantId: string; agentRunId: string },
+  ): Promise<ConversationMessage | undefined> {
+    const row = await this.db
+      .updateTable('conversation_message')
+      .set({
+        agent_run_id: input.agentRunId,
+        updated_at: new Date(),
+      })
+      .where('message_id', '=', assistantMessageId)
+      .where('tenant_id', '=', input.tenantId)
+      .returningAll()
+      .executeTakeFirst();
+    return row ? mapConversationMessage(row) : undefined;
+  }
+
+  async completeAssistant(
+    input: CompleteAssistantMessageInput,
+  ): Promise<ConversationMessage> {
+    const row = await this.db
+      .updateTable('conversation_message')
+      .set({
+        status: 'completed',
+        content_text: input.contentText,
+        updated_at: new Date(),
+        completed_at: new Date(),
+        ...(input.taskRunId ? { task_run_id: input.taskRunId } : {}),
+        ...(input.agentRunId ? { agent_run_id: input.agentRunId } : {}),
+        error_code: null,
+        error_message_key: null,
+      })
+      .where('message_id', '=', input.assistantMessageId)
+      .where('tenant_id', '=', input.tenantId)
+      .where('role', '=', 'assistant')
+      .returningAll()
+      .executeTakeFirst();
+    if (row) {
+      return mapConversationMessage(row);
+    }
+    const existing = await this.get(input.assistantMessageId, { tenantId: input.tenantId });
+    if (!existing) {
+      throw new ConversationRepositoryError(
+        'CONVERSATION_MESSAGE_NOT_FOUND',
+        `Conversation message not found: ${input.assistantMessageId}`,
+        { assistant_message_id: input.assistantMessageId },
+      );
+    }
+    if (
+      existing.status === 'completed'
+      && existing.content_text === input.contentText
+      && (!input.taskRunId || existing.task_run_id === input.taskRunId)
+      && (!input.agentRunId || existing.agent_run_id === input.agentRunId)
+    ) {
+      return existing;
+    }
+    throw new ConversationRepositoryError(
+      'CONVERSATION_FINALIZATION_CONFLICT',
+      'Assistant message already finalized with different content',
+      { assistant_message_id: input.assistantMessageId, status: existing.status },
+    );
+  }
+
+  async failAssistant(input: FailAssistantMessageInput): Promise<ConversationMessage> {
+    return this.finalizeFailure(input);
+  }
+
+  async cancelAssistant(
+    input: Omit<FailAssistantMessageInput, 'status'>,
+  ): Promise<ConversationMessage> {
+    return this.finalizeFailure({ ...input, status: 'cancelled' });
+  }
+
+  async listCompletedContextMessages(
+    options: ConversationContextMessageOptions,
+  ): Promise<ConversationMessage[]> {
+    let query = this.db
+      .selectFrom('conversation_message as message')
+      .innerJoin('conversation', 'conversation.conversation_id', 'message.conversation_id')
+      .selectAll('message')
+      .where('message.conversation_id', '=', options.conversationId)
+      .where('message.status', '=', 'completed')
+      .where('message.role', 'in', ['user', 'assistant'])
+      .orderBy('message.sequence_no', 'desc');
+    if (options.tenantId) {
+      query = query.where('message.tenant_id', '=', options.tenantId);
+    }
+    if (options.ownerUserId) {
+      query = query.where('conversation.owner_user_id', '=', options.ownerUserId);
+    }
+    const rows = await query.execute();
+    const selected: ConversationMessage[] = [];
+    let totalBytes = 0;
+    for (const row of rows) {
+      const message = mapConversationMessage(row);
+      const size = Buffer.byteLength(
+        stableStringify({
+          message_id: message.message_id,
+          sequence_no: message.sequence_no,
+          role: message.role,
+          content_text: message.content_text ?? '',
+        }),
+        'utf8',
+      );
+      if (selected.length >= options.maxMessages || totalBytes + size > options.maxBytes) {
+        break;
+      }
+      selected.push(message);
+      totalBytes += size;
+    }
+    return selected.reverse();
+  }
+
+  async findInFlightAssistant(
+    conversationId: string,
+    options: { tenantId?: string; ownerUserId?: string; db?: Kysely<Database> } = {},
+  ): Promise<ConversationMessage | undefined> {
+    const db = options.db ?? this.db;
+    let query = db
+      .selectFrom('conversation_message as message')
+      .innerJoin('conversation', 'conversation.conversation_id', 'message.conversation_id')
+      .selectAll('message')
+      .where('message.conversation_id', '=', conversationId)
+      .where('message.role', '=', 'assistant')
+      .where('message.status', 'in', ['queued', 'running', 'waiting_human', 'waiting_user']);
+    if (options.tenantId) {
+      query = query.where('message.tenant_id', '=', options.tenantId);
+    }
+    if (options.ownerUserId) {
+      query = query.where('conversation.owner_user_id', '=', options.ownerUserId);
+    }
+    const row = await query.orderBy('message.sequence_no', 'desc').executeTakeFirst();
+    return row ? mapConversationMessage(row) : undefined;
+  }
+
+  private async requireAssistantReply(
+    userMessageId: string,
+    db: Kysely<Database>,
+    tenantId: string,
+  ): Promise<ConversationMessage> {
+    const row = await db
+      .selectFrom('conversation_message')
+      .selectAll()
+      .where('reply_to_message_id', '=', userMessageId)
+      .where('tenant_id', '=', tenantId)
+      .where('role', '=', 'assistant')
+      .executeTakeFirst();
+    if (!row) {
+      throw new ConversationRepositoryError(
+        'CONVERSATION_MESSAGE_NOT_FOUND',
+        `Assistant reply not found for user message: ${userMessageId}`,
+        { user_message_id: userMessageId },
+      );
+    }
+    return mapConversationMessage(row);
+  }
+
+  private async finalizeFailure(input: FailAssistantMessageInput): Promise<ConversationMessage> {
+    const status = conversationMessageStatusSchema.parse(input.status ?? 'failed');
+    const row = await this.db
+      .updateTable('conversation_message')
+      .set({
+        status,
+        updated_at: new Date(),
+        completed_at: new Date(),
+        error_code: input.errorCode,
+        error_message_key: input.errorMessageKey,
+        ...(input.taskRunId ? { task_run_id: input.taskRunId } : {}),
+        ...(input.agentRunId ? { agent_run_id: input.agentRunId } : {}),
+      })
+      .where('message_id', '=', input.assistantMessageId)
+      .where('tenant_id', '=', input.tenantId)
+      .where('role', '=', 'assistant')
+      .returningAll()
+      .executeTakeFirst();
+    if (row) {
+      return mapConversationMessage(row);
+    }
+    const existing = await this.get(input.assistantMessageId, { tenantId: input.tenantId });
+    if (
+      existing
+      && existing.status === status
+      && existing.error_code === input.errorCode
+      && existing.error_message_key === input.errorMessageKey
+    ) {
+      return existing;
+    }
+    throw new ConversationRepositoryError(
+      'CONVERSATION_FINALIZATION_CONFLICT',
+      'Assistant message finalization conflict',
+      { assistant_message_id: input.assistantMessageId },
+    );
   }
 }
 
@@ -3350,11 +4142,14 @@ export class AgentRunRepository {
 
   async get(
     agentRunId: string,
-    options: RepositoryTenantOptions = {},
+    options: RepositoryTenantOptions & { userId?: string } = {},
   ): Promise<AgentRunRecord | undefined> {
     let query = this.db.selectFrom('agent_run').selectAll().where('agent_run_id', '=', agentRunId);
     if (options.tenantId) {
       query = query.where('tenant_id', '=', options.tenantId);
+    }
+    if (options.userId) {
+      query = query.where('user_id', '=', options.userId);
     }
     const row = await query.executeTakeFirst();
     return row ? mapAgentRun(row) : undefined;
@@ -3364,6 +4159,9 @@ export class AgentRunRepository {
     let query = this.db.selectFrom('agent_run').selectAll();
     if (options.tenantId) {
       query = query.where('tenant_id', '=', options.tenantId);
+    }
+    if (options.userId) {
+      query = query.where('user_id', '=', options.userId);
     }
     if (options.taskRunId) {
       query = query.where('task_run_id', '=', options.taskRunId);
@@ -6253,6 +7051,77 @@ function offset(value: number | undefined): number {
   return Math.max(value ?? 0, 0);
 }
 
+function mapConversationWriteError(
+  error: unknown,
+  details: Record<string, unknown>,
+): ConversationRepositoryError {
+  if (isPgError(error, '23505')) {
+    const constraint = pgConstraintName(error);
+    if (constraint === 'idx_conversation_single_in_flight_turn') {
+      return new ConversationRepositoryError(
+        'CONVERSATION_TURN_IN_PROGRESS',
+        'Conversation already has an in-flight turn',
+        details,
+      );
+    }
+    if (constraint === 'idx_conversation_user_client_message_id') {
+      return new ConversationRepositoryError(
+        'CONVERSATION_MESSAGE_IDEMPOTENCY_CONFLICT',
+        'Conversation message idempotency conflict',
+        details,
+      );
+    }
+  }
+  return new ConversationRepositoryError(
+    'CONVERSATION_FINALIZATION_CONFLICT',
+    error instanceof Error ? error.message : 'Conversation write failed',
+    details,
+  );
+}
+
+function mapConversation(row: Selectable<ConversationTable>): Conversation {
+  return conversationSchema.parse({
+    conversation_id: row.conversation_id,
+    tenant_id: row.tenant_id,
+    owner_user_id: row.owner_user_id,
+    title: row.title,
+    status: row.status,
+    revision: row.revision,
+    next_sequence_no: row.next_sequence_no,
+    ...(row.last_message_at ? { last_message_at: toIso(row.last_message_at) } : {}),
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+    archived_at: row.archived_at ? toIso(row.archived_at) : null,
+  });
+}
+
+function mapConversationMessage(
+  row: Selectable<ConversationMessageTable>,
+): ConversationMessage {
+  return conversationMessageSchema.parse({
+    message_id: row.message_id,
+    conversation_id: row.conversation_id,
+    tenant_id: row.tenant_id,
+    sequence_no: row.sequence_no,
+    role: row.role,
+    status: row.status,
+    content_text: row.content_text,
+    client_message_id: row.client_message_id,
+    reply_to_message_id: row.reply_to_message_id,
+    task_run_id: row.task_run_id,
+    agent_run_id: row.agent_run_id,
+    context_message_ids: jsonArray(row.context_message_ids_json).filter(
+      (value): value is string => typeof value === 'string' && value.length > 0,
+    ),
+    context_hash: row.context_hash,
+    error_code: row.error_code,
+    error_message_key: row.error_message_key,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+    completed_at: row.completed_at ? toIso(row.completed_at) : null,
+  });
+}
+
 function mapTaskRun(row: Selectable<TaskRunTable>): TaskRun {
   const taskRun: TaskRun = {
     task_run_id: row.task_run_id,
@@ -6266,6 +7135,15 @@ function mapTaskRun(row: Selectable<TaskRunTable>): TaskRun {
 
   if (row.flow_id) {
     taskRun.flow_id = row.flow_id;
+  }
+  if (row.conversation_id) {
+    taskRun.conversation_id = row.conversation_id;
+  }
+  if (row.user_message_id) {
+    taskRun.user_message_id = row.user_message_id;
+  }
+  if (row.assistant_message_id) {
+    taskRun.assistant_message_id = row.assistant_message_id;
   }
   if (row.flow_version) {
     taskRun.flow_version = row.flow_version;
@@ -7110,6 +7988,22 @@ export function hashTenantRuntimePolicy(policy: TenantRuntimePolicy): string {
 
 function toIso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function isPgError(
+  error: unknown,
+  code: string,
+): error is Error & { code: string; constraint?: string } {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  return 'code' in error && (error as { code?: unknown }).code === code;
+}
+
+function pgConstraintName(error: unknown): string | undefined {
+  return isRecord(error) && typeof error.constraint === 'string'
+    ? error.constraint
+    : undefined;
 }
 
 function sortJson(value: unknown): unknown {

@@ -9,7 +9,7 @@ import type { WorkflowStartResponse } from '@dar/contracts';
 
 export interface TaskRunStore {
   create(input: CreateTaskRunInput): Promise<TaskRun>;
-  get(taskRunId: string): Promise<TaskRun | undefined>;
+  get(taskRunId: string, options?: { tenantId?: string; userId?: string }): Promise<TaskRun | undefined>;
   list(options?: ListTaskRunsOptions): Promise<TaskRun[]>;
   updateStatus(
     taskRunId: string,
@@ -27,8 +27,18 @@ export class InMemoryTaskRunStore implements TaskRunStore {
     return taskRun;
   }
 
-  async get(taskRunId: string): Promise<TaskRun | undefined> {
-    return this.taskRuns.get(taskRunId);
+  async get(taskRunId: string, options: { tenantId?: string; userId?: string } = {}): Promise<TaskRun | undefined> {
+    const taskRun = this.taskRuns.get(taskRunId);
+    if (!taskRun) {
+      return undefined;
+    }
+    if (options.tenantId && taskRun.tenant_id !== options.tenantId) {
+      return undefined;
+    }
+    if (options.userId && taskRun.user_id !== options.userId) {
+      return undefined;
+    }
+    return taskRun;
   }
 
   async list(options: ListTaskRunsOptions = {}): Promise<TaskRun[]> {
@@ -93,8 +103,18 @@ export class DbTaskRunStore implements TaskRunStore {
     return this.repository.create(input);
   }
 
-  async get(taskRunId: string): Promise<TaskRun | undefined> {
-    return this.repository.get(taskRunId);
+  async get(taskRunId: string, options: { tenantId?: string; userId?: string } = {}): Promise<TaskRun | undefined> {
+    const taskRun = await this.repository.get(taskRunId);
+    if (!taskRun) {
+      return undefined;
+    }
+    if (options.tenantId && taskRun.tenant_id !== options.tenantId) {
+      return undefined;
+    }
+    if (options.userId && taskRun.user_id !== options.userId) {
+      return undefined;
+    }
+    return taskRun;
   }
 
   async list(options: ListTaskRunsOptions = {}): Promise<TaskRun[]> {

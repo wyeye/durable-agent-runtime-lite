@@ -95,6 +95,15 @@ describe('updateTaskRunStatusActivity', () => {
       tenant_admission_id: 'admission_1',
       status: 'waiting_human',
     });
+    await updateTaskRunStatusActivity({
+      tenant_id: 'tenant_1',
+      user_id: 'user_1',
+      task_run_id: 'task_1',
+      workflow_id: 'workflow_1',
+      request_id: 'req_1',
+      tenant_admission_id: 'admission_1',
+      status: 'waiting_user',
+    });
 
     expect(releasedAdmissions).toEqual([]);
 
@@ -123,5 +132,25 @@ describe('updateTaskRunStatusActivity', () => {
       { admissionId: 'admission_1', reason: 'workflow_completed' },
       { admissionId: 'admission_2', reason: 'workflow_failed' },
     ]);
+  });
+
+  it('does not release tenant admission for waiting_user task_run status', async () => {
+    const { updateTaskRunStatusActivity } = await import('../src/activities/index.js');
+
+    await updateTaskRunStatusActivity({
+      tenant_id: 'tenant_1',
+      user_id: 'user_1',
+      task_run_id: 'task_waiting_user',
+      workflow_id: 'workflow_waiting_user',
+      request_id: 'req_waiting_user',
+      tenant_admission_id: 'admission_waiting_user',
+      status: 'waiting_user',
+    });
+
+    expect(statusUpdates).toContainEqual({
+      taskRunId: 'task_waiting_user',
+      input: { status: 'waiting_user', errorCode: undefined, errorMessage: undefined },
+    });
+    expect(releasedAdmissions).toEqual([]);
   });
 });

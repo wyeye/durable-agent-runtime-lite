@@ -36,6 +36,8 @@ import type {
 import type {
   ActivityContext,
   AppendUserInputActivityInput,
+  ConversationContextActivityInput,
+  ConversationContextActivityResult,
   CreateAgentRunActivityInput,
   CreateHumanTaskActivityInput,
   PiRuntimeConfigActivityResult,
@@ -80,10 +82,12 @@ type PiActivities = {
     tenant_policy_hash?: string;
   }): Promise<EffectiveTenantPolicy>;
   loadPiRuntimeConfigActivity(): Promise<PiRuntimeConfigActivityResult>;
+  loadConversationContextActivity(input: ConversationContextActivityInput): Promise<ConversationContextActivityResult>;
   runPiSegmentActivity(input: {
     agent_run_id: string;
     execution_plan_ref: string;
     context_snapshot_ref?: PiContextSnapshotRef;
+    seed_messages?: Array<Record<string, unknown>>;
     initial_user_input?: string;
     resume_reason: string;
     segment_index: number;
@@ -91,7 +95,7 @@ type PiActivities = {
     request_context: ActivityContext;
   }): Promise<PiSegmentResult>;
   updateAgentRunActivity(input: UpdateAgentRunActivityInput): Promise<AgentRunRecord>;
-  updateTaskRunStatusActivity(input: ActivityContext & { status: 'running' | 'waiting_human' | 'completed' | 'failed'; error_code?: string; error_message?: string }): Promise<void>;
+  updateTaskRunStatusActivity(input: ActivityContext & { status: 'running' | 'waiting_human' | 'waiting_user' | 'completed' | 'failed'; error_code?: string; error_message?: string }): Promise<void>;
   updateAgentStepActivity(input: UpdateAgentStepActivityInput): Promise<unknown>;
   invokeToolActivity(
     context: ActivityContext,
@@ -215,6 +219,7 @@ const readActivities = proxyActivities<Pick<PiActivities,
   | 'loadTenantPolicySnapshotActivity'
   | 'deriveTenantPolicySnapshotActivity'
   | 'loadPiRuntimeConfigActivity'
+  | 'loadConversationContextActivity'
 >>(PI_ACTIVITY_OPTIONS.read);
 
 const dbActivities = proxyActivities<Pick<PiActivities,
@@ -242,6 +247,7 @@ const {
   loadTenantPolicySnapshotActivity,
   deriveTenantPolicySnapshotActivity,
   loadPiRuntimeConfigActivity,
+  loadConversationContextActivity,
 } = readActivities;
 
 const {
@@ -335,6 +341,7 @@ export async function piDurableAgentWorkflow(
   let contextSnapshotRef = input.context_snapshot_ref;
   let segmentIndex = input.segment_index ?? 0;
   let ledger = normalizeLedger(input.budget_ledger);
+  let conversationSeedLoaded = false;
 
   await updateAgentRunActivity({
     agent_run_id: agentRun.agent_run_id,
@@ -354,11 +361,18 @@ export async function piDurableAgentWorkflow(
       return await budgetExceeded(agentRun.agent_run_id, exhaustedBeforeSegment.code, exhaustedBeforeSegment.message, contextSnapshotRef, ledger, executionContext, taskStatusOwner);
     }
     const remainingBeforeSegment = remainingBudget(activeBudget, ledger);
+    const seedMessages = !contextSnapshotRef && !conversationSeedLoaded && input.conversation_runtime
+      ? await loadConversationSeedMessages(input.conversation_runtime, executionContext)
+      : undefined;
+    if (seedMessages?.length) {
+      conversationSeedLoaded = true;
+    }
 
     const segment = await runPiSegmentActivity({
       agent_run_id: agentRun.agent_run_id,
       execution_plan_ref: executionPlan.execution_plan_ref,
       ...(contextSnapshotRef ? { context_snapshot_ref: contextSnapshotRef } : {}),
+      ...(seedMessages?.length ? { seed_messages: seedMessages } : {}),
       ...(!contextSnapshotRef && input.initial_user_input ? { initial_user_input: input.initial_user_input } : {}),
       resume_reason: segmentIndex === 0 ? 'initial_prompt' : 'durable_boundary_resolved',
       segment_index: segmentIndex,
@@ -891,6 +905,7 @@ async function maybeContinueAsNew(
     ...(originalInput.tenant_admission_id ? { tenant_admission_id: originalInput.tenant_admission_id } : {}),
     request_id: context.request_id,
     ...(originalInput.trace_id ? { trace_id: originalInput.trace_id } : {}),
+    ...(originalInput.conversation_runtime ? { conversation_runtime: originalInput.conversation_runtime } : {}),
   });
 }
 
@@ -989,6 +1004,22 @@ function normalizeLedger(input: AgentBudgetLedger | undefined): AgentBudgetLedge
     elapsed_duration_ms: input?.elapsed_duration_ms ?? 0,
     context_bytes: input?.context_bytes ?? 0,
   };
+}
+
+async function loadConversationSeedMessages(
+  conversationRuntime: PiDurableAgentWorkflowInput['conversation_runtime'] extends infer T
+    ? NonNullable<T>
+    : never,
+  context: ActivityContext,
+): Promise<Array<Record<string, unknown>>> {
+  const loaded = await loadConversationContextActivity({
+    tenant_id: context.tenant_id,
+    owner_user_id: context.user_id,
+    conversation_id: conversationRuntime.conversation_id,
+    context_message_ids: conversationRuntime.context_message_ids,
+    context_hash: conversationRuntime.context_hash,
+  });
+  return loaded.seed_messages;
 }
 
 function usageFromLedger(ledger: AgentBudgetLedger): PiDurableAgentWorkflowResult['usage'] {

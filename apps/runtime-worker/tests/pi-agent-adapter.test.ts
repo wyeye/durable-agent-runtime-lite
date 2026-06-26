@@ -98,6 +98,55 @@ describe('PiAgentAdapter', () => {
     }
   });
 
+  it('appends the current user input when continuing from prior conversation history', async () => {
+    const runtime = createDeterministicPiStream('final_only');
+    const executionPlan = plan('deterministic:final_only');
+    try {
+      const result = await runPiAgentSegment({
+        executionPlan,
+        model: runtime.model,
+        streamFn: runtime.streamFn,
+        contextMessages: [
+          {
+            role: 'user',
+            content: '请记住项目代号是蓝鲸',
+            timestamp: 0,
+          },
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: '已记住项目代号“蓝鲸”。' }],
+            api: 'conversation-history',
+            provider: 'conversation-history',
+            model: 'conversation-history',
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop',
+            timestamp: 0,
+          },
+        ],
+        initialUserInput: '项目代号是什么？',
+        segmentIndex: 1,
+        budgetRemaining: executionPlan.budget,
+        maxContextBytes: 262_144,
+      });
+
+      const userMessages = result.messages.filter((message) => message.role === 'user');
+      expect(userMessages).toHaveLength(2);
+      expect(userMessages.at(-1)).toMatchObject({
+        role: 'user',
+        content: '项目代号是什么？',
+      });
+    } finally {
+      runtime.unregister();
+    }
+  });
+
   it('returns cancelled when an AbortSignal is already aborted before the Pi turn starts', async () => {
     const runtime = createDeterministicPiStream('readonly_tool');
     const controller = new AbortController();

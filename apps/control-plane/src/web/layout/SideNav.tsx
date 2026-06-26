@@ -4,6 +4,7 @@ import { navLabel } from '../utils/i18n-labels.js';
 import { useIdentity } from '../auth/identity-context.js';
 
 const baseItems = [
+  { key: '/chat', label: <Link to="/chat">{navLabel('chat')}</Link> },
   { key: '/dashboard', label: <Link to="/dashboard">{navLabel('dashboard')}</Link> },
   {
     key: 'ability',
@@ -58,11 +59,44 @@ const iamItems = [
 
 export function SideNav() {
   const location = useLocation();
-  const { hasPermission } = useIdentity();
+  const { hasPermission, canUseRuntime } = useIdentity();
   const showIam = hasPermission('iam:read');
-  const items = showIam ? [...baseItems, ...iamItems] : baseItems;
+  const showOperations = hasPermission('operations:read');
+  const showRegistry = hasPermission('registry:read');
+  const showAbility = hasPermission('registry:write') || hasPermission('registry:read');
+  const showReleases = hasPermission('release:read');
+  const showChatOnly = canUseRuntime && !showOperations && !showRegistry && !showAbility && !showReleases && !showIam;
+  const items = showChatOnly
+    ? baseItems.filter((item) => item.key === '/chat')
+    : [
+        ...baseItems.filter((item) => {
+          if (item.key === '/chat') {
+            return canUseRuntime;
+          }
+          if (item.key === '/dashboard') {
+            return showOperations;
+          }
+          if (item.key === 'ability') {
+            return showAbility;
+          }
+          if (item.key === 'registry') {
+            return showRegistry;
+          }
+          if (item.key === 'evaluation') {
+            return showOperations || showRegistry;
+          }
+          if (item.key === '/releases') {
+            return showReleases;
+          }
+          if (item.key === '/human-tasks') {
+            return hasPermission('human_task:decide') || showOperations;
+          }
+          return showOperations;
+        }),
+        ...(showIam ? iamItems : []),
+      ];
 
-  const selected = leafKeys.find((key) => location.pathname.startsWith(key)) ?? '/dashboard';
+  const selected = leafKeys.find((key) => location.pathname.startsWith(key)) ?? '/chat';
   const openKeys = selected === '/model-gateways' || selected === '/models' || selected === '/model-policies' ? ['ability']
     : selected.startsWith('/registry') ? ['registry']
     : selected.startsWith('/evaluation') ? ['evaluation']
@@ -72,6 +106,7 @@ export function SideNav() {
 }
 
 const leafKeys = [
+  '/chat',
   '/dashboard',
   '/registry/flows',
   '/registry/routes',

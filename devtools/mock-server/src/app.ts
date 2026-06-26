@@ -220,6 +220,8 @@ function responseForScenario(scenario: string, request: GenerateRequest): MockGe
     return finalResponse(model, `Mock final after ${scenario} boundary.`);
   }
   switch (scenario) {
+    case 'conversation_memory':
+      return conversationMemoryResponse(model, request.messages ?? []);
     case 'regression_b_degraded':
       return finalResponse(model, 'Mock degraded regression answer.');
     case 'http_readonly_tool':
@@ -475,6 +477,7 @@ function usage() {
 }
 
 const supportedScenarios = [
+  'conversation_memory',
   'regression_b_degraded',
   'repeated_tool',
   'http_readonly_tool',
@@ -515,6 +518,42 @@ function scenarioFromMessages(messages: MockRequestMessage[]): string {
     }
   }
   return 'readonly_tool';
+}
+
+function conversationMemoryResponse(
+  model: string,
+  messages: MockRequestMessage[],
+): MockGenerateResponse {
+  const normalized = messages.map((message) => ({
+    role: message.role,
+    content: messageContentToText(message.content).trim(),
+  }));
+  const latestUserMessage = [...normalized]
+    .reverse()
+    .find((message) => message.role === 'user')
+    ?.content;
+
+  if (latestUserMessage?.includes('请记住项目代号是蓝鲸')) {
+    return finalResponse(model, '已记住项目代号“蓝鲸”。');
+  }
+
+  const asksForCodename = latestUserMessage
+    && (
+      latestUserMessage.includes('项目代号是什么')
+      || latestUserMessage.includes('刚才记住的项目代号')
+      || latestUserMessage.includes('重复一次')
+    );
+  const hasPriorMemory = normalized
+    .slice(0, -1)
+    .some((message) => message.content.includes('请记住项目代号是蓝鲸'));
+
+  if (asksForCodename) {
+    return hasPriorMemory
+      ? finalResponse(model, '项目代号是“蓝鲸”。')
+      : finalResponse(model, '项目代号是“海豚”。');
+  }
+
+  return finalResponse(model, '已收到会话消息。');
 }
 
 function hasToolResult(messages: MockRequestMessage[]): boolean {

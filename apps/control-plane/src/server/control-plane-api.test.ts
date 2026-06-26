@@ -3,6 +3,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import type {
+  Conversation,
+  ConversationListResponse,
+  ConversationMessageListResponse,
+  ConversationSendMessageResponse,
   AgentRunRecord,
   AgentStepRecord,
   CapabilityRelease,
@@ -559,6 +563,35 @@ describe('control-plane API', () => {
     await close();
   });
 
+  it('allows active tenant members to use conversation BFF without control-plane permissions', async () => {
+    const runtime = new FakeRuntimeApiClient();
+    const { app, close } = await testApp({ runtimeApiClient: runtime });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/conversations?status=active&page_size=20',
+      headers: {
+        'x-user-id': 'member_1',
+        'x-tenant-id': 'tenant_1',
+        'x-roles': '',
+        'x-request-id': 'req_chat_member',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.items[0]).toMatchObject({
+      conversation_id: 'conversation_1',
+      title: '测试会话',
+    });
+    expect(runtime.lastHeaders).toMatchObject({
+      userId: 'member_1',
+      tenantId: 'tenant_1',
+      roles: [],
+    });
+
+    await close();
+  });
+
   it('exposes read-only tenant policy snapshot and admission operations', async () => {
     const service = new FakeRegistryApi();
     const { app, close } = await testApp({ registryService: service });
@@ -995,6 +1028,88 @@ class FakeEvaluationApi implements EvaluationApi {
 class FakeRuntimeApiClient {
   lastHeaders?: unknown;
   lastDecisionBody?: unknown;
+  conversations: Conversation[] = [
+    {
+      conversation_id: 'conversation_1',
+      tenant_id: 'tenant_1',
+      owner_user_id: 'operator_1',
+      title: '测试会话',
+      status: 'active',
+      revision: 1,
+      next_sequence_no: 3,
+      created_at: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+      updated_at: new Date('2026-01-01T00:01:00.000Z').toISOString(),
+      last_message_at: new Date('2026-01-01T00:01:00.000Z').toISOString(),
+      archived_at: null,
+    },
+  ];
+
+  async listConversations(_query: URLSearchParams, headers: unknown): Promise<ConversationListResponse> {
+    this.lastHeaders = headers;
+    return { items: this.conversations, page: 1, page_size: 50, total: this.conversations.length };
+  }
+
+  async createConversation(_body: unknown, headers: unknown): Promise<Conversation> {
+    this.lastHeaders = headers;
+    return this.conversations[0]!;
+  }
+
+  async getConversation(): Promise<Conversation> {
+    return this.conversations[0]!;
+  }
+
+  async updateConversation(): Promise<Conversation> {
+    return this.conversations[0]!;
+  }
+
+  async archiveConversation(): Promise<Conversation> {
+    return { ...this.conversations[0]!, status: 'archived', archived_at: new Date('2026-01-01T00:02:00.000Z').toISOString() };
+  }
+
+  async unarchiveConversation(): Promise<Conversation> {
+    return { ...this.conversations[0]!, status: 'active', archived_at: null };
+  }
+
+  async listConversationMessages(): Promise<ConversationMessageListResponse> {
+    return { items: [], page: 1, page_size: 100, total: 0 };
+  }
+
+  async sendConversationMessage(): Promise<ConversationSendMessageResponse> {
+    return {
+      conversation: this.conversations[0]!,
+      user_message: {
+        message_id: 'msg_user_1',
+        conversation_id: 'conversation_1',
+        tenant_id: 'tenant_1',
+        sequence_no: 1,
+        role: 'user',
+        status: 'completed',
+        effective_status: 'completed',
+        content_text: '你好',
+        client_message_id: 'client_1',
+        context_message_ids: [],
+        created_at: new Date('2026-01-01T00:01:00.000Z').toISOString(),
+        updated_at: new Date('2026-01-01T00:01:00.000Z').toISOString(),
+        completed_at: new Date('2026-01-01T00:01:00.000Z').toISOString(),
+      },
+      assistant_message: {
+        message_id: 'msg_assistant_1',
+        conversation_id: 'conversation_1',
+        tenant_id: 'tenant_1',
+        sequence_no: 2,
+        role: 'assistant',
+        status: 'queued',
+        effective_status: 'queued',
+        content_text: null,
+        reply_to_message_id: 'msg_user_1',
+        context_message_ids: [],
+        created_at: new Date('2026-01-01T00:01:01.000Z').toISOString(),
+        updated_at: new Date('2026-01-01T00:01:01.000Z').toISOString(),
+      },
+      task_run_id: 'task_1',
+      workflow_id: 'workflow_1',
+    };
+  }
 
   async listHumanTasks(_query: URLSearchParams, headers: unknown): Promise<HumanTaskListResponse> {
     this.lastHeaders = headers;

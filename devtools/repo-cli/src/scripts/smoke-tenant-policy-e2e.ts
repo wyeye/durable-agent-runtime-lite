@@ -104,7 +104,10 @@ async function runConcurrencyScenario(db: ReturnType<typeof createDb>): Promise<
   await checkHealth(`${runtimeApiUrl}/healthz`, 'runtime-api');
   const first = await createAgentTask(agentExecutionPlanRef, `${requestId}_first`);
   const firstTask = await pollTask(db, first.task_run_id, { stopWhenWaiting: true });
-  assert.ok(['queued', 'running', 'waiting_human'].includes(firstTask.status), `First task should keep admission open, got ${firstTask.status}`);
+  assert.ok(
+    ['queued', 'running', 'waiting_human', 'waiting_user'].includes(firstTask.status),
+    `First task should keep admission open, got ${firstTask.status}`,
+  );
   const firstAdmission = firstTask.tenant_admission_id
     ? await new TenantAgentAdmissionRepository(db).get(firstTask.tenant_admission_id)
     : undefined;

@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient, ApiError } from './api/client.js';
+import {
+  archiveConversation,
+  createConversation,
+  listConversationMessages,
+  listConversations,
+  renameConversation,
+  sendConversationMessage,
+} from './api/conversations-api.js';
 import { createDraft, listResources } from './api/registry-api.js';
 import { listHumanTasks, listToolCalls } from './api/operations-api.js';
 import {
@@ -171,6 +179,36 @@ describe('control-plane web api client', () => {
     expect(bodies.join('\n')).toContain('"evaluation_execution_plan_ref"');
     expect(bodies.join('\n')).not.toContain('"latest"');
   });
+
+  it('builds conversation client URLs and methods under /api/v1', async () => {
+    const urls: string[] = [];
+    const methods: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      urls.push(String(input));
+      methods.push(init?.method ?? 'GET');
+      return jsonResponse({ success: true, data: conversationSuccessData(String(input), init?.method ?? 'GET'), error: null });
+    }));
+    vi.stubGlobal('location', { origin: 'http://localhost:3100' });
+    vi.stubGlobal('crypto', { randomUUID: () => 'request-id-chat' });
+    const client = new ApiClient({ getIdentity: () => ({ user_id: 'member', tenant_id: 'tenant-a', roles: [] }) });
+
+    await listConversations(client, { status: 'active', page_size: 20 });
+    await createConversation(client, {});
+    await renameConversation(client, 'conversation_1', { title: '重命名', expected_revision: 1 });
+    await listConversationMessages(client, 'conversation_1', { order: 'oldest', page_size: 100 });
+    await sendConversationMessage(client, 'conversation_1', { content: '你好', client_message_id: 'client_1' });
+    await archiveConversation(client, 'conversation_1');
+
+    expect(urls).toEqual([
+      '/api/v1/conversations?status=active&page_size=20',
+      '/api/v1/conversations',
+      '/api/v1/conversations/conversation_1',
+      '/api/v1/conversations/conversation_1/messages?order=oldest&page_size=100',
+      '/api/v1/conversations/conversation_1/messages',
+      '/api/v1/conversations/conversation_1/archive',
+    ]);
+    expect(methods).toEqual(['GET', 'POST', 'PATCH', 'GET', 'POST', 'POST']);
+  });
 });
 
 describe('registry web model', () => {
@@ -262,4 +300,68 @@ function successDataFor(url: string): unknown {
     return { items: [], page: 1, page_size: 20 };
   }
   return {};
+}
+
+function conversationSuccessData(url: string, method: string): unknown {
+  if (url.includes('/messages') && method === 'GET') {
+    return { items: [], page: 1, page_size: 100, total: 0 };
+  }
+  if (url.includes('/messages') && method === 'POST') {
+    return {
+      conversation: conversationRecord(),
+      user_message: {
+        message_id: 'msg_user_1',
+        conversation_id: 'conversation_1',
+        tenant_id: 'tenant-a',
+        sequence_no: 1,
+        role: 'user',
+        status: 'completed',
+        content_text: '你好',
+        client_message_id: 'client_1',
+        context_message_ids: [],
+        created_at: new Date(0).toISOString(),
+        updated_at: new Date(0).toISOString(),
+        completed_at: new Date(0).toISOString(),
+      },
+      assistant_message: {
+        message_id: 'msg_assistant_1',
+        conversation_id: 'conversation_1',
+        tenant_id: 'tenant-a',
+        sequence_no: 2,
+        role: 'assistant',
+        status: 'queued',
+        effective_status: 'queued',
+        content_text: null,
+        reply_to_message_id: 'msg_user_1',
+        context_message_ids: [],
+        created_at: new Date(0).toISOString(),
+        updated_at: new Date(0).toISOString(),
+      },
+      task_run_id: 'task_1',
+      workflow_id: 'workflow_1',
+    };
+  }
+  if (url.endsWith('/archive')) {
+    return { ...conversationRecord(), status: 'archived', archived_at: new Date(0).toISOString() };
+  }
+  if (method === 'GET') {
+    return { items: [conversationRecord()], page: 1, page_size: 20, total: 1 };
+  }
+  return conversationRecord();
+}
+
+function conversationRecord() {
+  return {
+    conversation_id: 'conversation_1',
+    tenant_id: 'tenant-a',
+    owner_user_id: 'member',
+    title: '测试会话',
+    status: 'active',
+    revision: 1,
+    next_sequence_no: 3,
+    last_message_at: new Date(0).toISOString(),
+    created_at: new Date(0).toISOString(),
+    updated_at: new Date(0).toISOString(),
+    archived_at: null,
+  };
 }

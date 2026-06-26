@@ -1,4 +1,11 @@
 import type {
+  Conversation,
+  ConversationCreateRequest,
+  ConversationListResponse,
+  ConversationMessageListResponse,
+  ConversationSendMessageRequest,
+  ConversationSendMessageResponse,
+  ConversationUpdateRequest,
   HumanTask,
   HumanTaskDecisionResponse,
   HumanTaskGetResponse,
@@ -13,6 +20,14 @@ import type { ForwardHeaders } from './http-client.js';
 import { DownstreamClient } from './http-client.js';
 
 export interface RuntimeApiOperationsClient {
+  listConversations(query: URLSearchParams, headers: ForwardHeaders): Promise<ConversationListResponse>;
+  createConversation(body: ConversationCreateRequest, headers: ForwardHeaders): Promise<Conversation>;
+  getConversation(conversationId: string, headers: ForwardHeaders): Promise<Conversation>;
+  updateConversation(conversationId: string, body: ConversationUpdateRequest, headers: ForwardHeaders): Promise<Conversation>;
+  archiveConversation(conversationId: string, headers: ForwardHeaders): Promise<Conversation>;
+  unarchiveConversation(conversationId: string, headers: ForwardHeaders): Promise<Conversation>;
+  listConversationMessages(conversationId: string, query: URLSearchParams, headers: ForwardHeaders): Promise<ConversationMessageListResponse>;
+  sendConversationMessage(conversationId: string, body: ConversationSendMessageRequest, headers: ForwardHeaders): Promise<ConversationSendMessageResponse>;
   listHumanTasks(query: URLSearchParams, headers: ForwardHeaders): Promise<HumanTaskListResponse>;
   getHumanTask(humanTaskId: string, query: URLSearchParams, headers: ForwardHeaders): Promise<HumanTaskGetResponse>;
   approveHumanTask(humanTaskId: string, body: unknown, headers: ForwardHeaders): Promise<HumanTaskDecisionResponse>;
@@ -37,6 +52,38 @@ export class RuntimeApiClient implements RuntimeApiOperationsClient {
       baseUrl,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     });
+  }
+
+  listConversations(query: URLSearchParams, headers: ForwardHeaders): Promise<ConversationListResponse> {
+    return this.client.get<ConversationListResponse>(`/v1/conversations?${query.toString()}`, headers);
+  }
+
+  createConversation(body: ConversationCreateRequest, headers: ForwardHeaders): Promise<Conversation> {
+    return this.client.post<Conversation>('/v1/conversations', body, headers);
+  }
+
+  getConversation(conversationId: string, headers: ForwardHeaders): Promise<Conversation> {
+    return this.client.get<Conversation>(`/v1/conversations/${encodeURIComponent(conversationId)}`, headers);
+  }
+
+  updateConversation(conversationId: string, body: ConversationUpdateRequest, headers: ForwardHeaders): Promise<Conversation> {
+    return this.client.patch<Conversation>(`/v1/conversations/${encodeURIComponent(conversationId)}`, body, headers);
+  }
+
+  archiveConversation(conversationId: string, headers: ForwardHeaders): Promise<Conversation> {
+    return this.client.post<Conversation>(`/v1/conversations/${encodeURIComponent(conversationId)}/archive`, {}, headers);
+  }
+
+  unarchiveConversation(conversationId: string, headers: ForwardHeaders): Promise<Conversation> {
+    return this.client.post<Conversation>(`/v1/conversations/${encodeURIComponent(conversationId)}/unarchive`, {}, headers);
+  }
+
+  listConversationMessages(conversationId: string, query: URLSearchParams, headers: ForwardHeaders): Promise<ConversationMessageListResponse> {
+    return this.client.get<ConversationMessageListResponse>(`/v1/conversations/${encodeURIComponent(conversationId)}/messages?${query.toString()}`, headers);
+  }
+
+  sendConversationMessage(conversationId: string, body: ConversationSendMessageRequest, headers: ForwardHeaders): Promise<ConversationSendMessageResponse> {
+    return this.client.post<ConversationSendMessageResponse>(`/v1/conversations/${encodeURIComponent(conversationId)}/messages`, body, headers);
   }
 
   listHumanTasks(query: URLSearchParams, headers: ForwardHeaders): Promise<HumanTaskListResponse> {

@@ -1,8 +1,13 @@
 import { pathToFileURL } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
-import type { StandardErrorResponse, StandardSuccessResponse } from '@dar/contracts';
-import { getAppPort, getBuildInfo, loadConfig } from '@dar/config';
+import type {
+  ConversationSendMessageRequest,
+  ConversationUpdateRequest,
+  StandardErrorResponse,
+  StandardSuccessResponse,
+} from '@dar/contracts';
+import { getAppPort, getBuildInfo, loadConfig, type RuntimeConfig } from '@dar/config';
 import { createLogger, logErrorEvent, logEvent } from '@dar/logger';
 import {
   errorResponse,
@@ -13,6 +18,8 @@ import {
 } from '@dar/i18n';
 import { AuthError } from '@dar/security';
 import { EvaluationRepositoryError, TenantRuntimePolicyError } from '@dar/db';
+import { ConversationService } from './modules/conversation/conversation-service.js';
+import { ConversationServiceError } from './modules/conversation/conversation-errors.js';
 import { HumanTaskService } from './modules/human-task/human-task-service.js';
 import { createRuntimeApiTaskService, TaskService } from './modules/task/task-service.js';
 import { AgentRunService } from './modules/task/agent-run-service.js';
@@ -51,6 +58,12 @@ function toErrorResponse(error: unknown, traceId?: string, locale?: unknown): St
     }, responseOptions(traceId, locale)) as StandardErrorResponse;
   }
   if (error instanceof EvaluationRepositoryError) {
+    return errorResponse({
+      code: error.code,
+      ...detailsOf(error.details),
+    }, responseOptions(traceId, locale)) as StandardErrorResponse;
+  }
+  if (error instanceof ConversationServiceError) {
     return errorResponse({
       code: error.code,
       ...detailsOf(error.details),
@@ -100,6 +113,9 @@ function errorStatus(error: unknown): number {
     }
     return 409;
   }
+  if (error instanceof ConversationServiceError) {
+    return error.statusCode;
+  }
   if (error instanceof Error && error.message.startsWith('ROUTER_EMBEDDING_UNAVAILABLE')) {
     return 503;
   }
@@ -128,13 +144,38 @@ export interface RuntimeApiReadinessChecker {
 }
 
 export function buildServer(
-  taskService = new TaskService(),
+  taskService?: TaskService,
+  readiness?: RuntimeApiReadiness | RuntimeApiReadinessChecker,
+  humanTaskService?: HumanTaskService,
+  agentRunService?: AgentRunService,
+  evaluationRunService?: EvaluationRunService,
+  config?: RuntimeConfig,
+): FastifyInstance;
+export function buildServer(
+  taskService: TaskService | undefined,
+  readiness: RuntimeApiReadiness | RuntimeApiReadinessChecker | undefined,
+  conversationService: ConversationService | undefined,
+  humanTaskService: HumanTaskService | undefined,
+  agentRunService: AgentRunService | undefined,
+  evaluationRunService: EvaluationRunService | undefined,
+  config?: RuntimeConfig,
+): FastifyInstance;
+export function buildServer(
+  taskService: TaskService = new TaskService(),
   readiness: RuntimeApiReadiness | RuntimeApiReadinessChecker = { routeSource: 'memory', workflowStarter: 'mock' },
-  humanTaskService = new HumanTaskService(),
-  agentRunService = new AgentRunService(),
-  evaluationRunService: EvaluationRunService | undefined = undefined,
-  config = loadConfig(),
+  third?: ConversationService | HumanTaskService,
+  fourth?: HumanTaskService | AgentRunService,
+  fifth?: AgentRunService | EvaluationRunService,
+  sixth?: EvaluationRunService | RuntimeConfig,
+  seventh?: RuntimeConfig,
 ): FastifyInstance {
+  const {
+    conversationService,
+    humanTaskService,
+    agentRunService,
+    evaluationRunService,
+    config,
+  } = normalizeBuildServerServices(third, fourth, fifth, sixth, seventh);
   const server = Fastify({ logger: false });
   installFastifyLocale(server);
   runtimeAuthPlugin(server, { config });
@@ -221,9 +262,16 @@ export function buildServer(
     try {
       const auth = request.authContext ? readAuth(request) : undefined;
       const query = withAuthQuery(request.query, auth);
-      const taskRun = await taskService.get(taskRunId);
-      const { tenant_id: tenantId } = query as { tenant_id?: string };
-      if (!taskRun || (tenantId && taskRun.tenant_id !== tenantId)) {
+      const { tenant_id: tenantId, user_id: userId } = query as { tenant_id?: string; user_id?: string };
+      const taskRun = await taskService.get(taskRunId, {
+        ...(tenantId ? { tenantId } : {}),
+        ...(userId ? { userId } : {}),
+      });
+      if (
+        !taskRun
+        || (tenantId && taskRun.tenant_id !== tenantId)
+        || (userId && taskRun.user_id !== userId)
+      ) {
         reply.code(404);
         return errorResponse({ code: 'TASK_RUN_NOT_FOUND' }, { locale: requestLocale(request) });
       }
@@ -231,6 +279,166 @@ export function buildServer(
     } catch (error) {
       reply.code(errorStatus(error));
       return toErrorResponse(error, undefined, requestLocale(request));
+    }
+  });
+
+  server.get('/v1/conversations', async (request, reply) => {
+    try {
+      if (!conversationService) {
+        reply.code(503);
+        return toErrorResponse(new ConversationServiceError('DOWNSTREAM_UNAVAILABLE', 503), undefined, requestLocale(request));
+      }
+      const auth = readAuth(request);
+      return toSuccessResponse(await conversationService.list(auth, request.query));
+    } catch (error) {
+      reply.code(errorStatus(error));
+      return toErrorResponse(error, undefined, requestLocale(request));
+    }
+  });
+
+  server.post('/v1/conversations', async (request, reply) => {
+    const traceId = getTraceId(request.body);
+    try {
+      if (!conversationService) {
+        reply.code(503);
+        return toErrorResponse(new ConversationServiceError('DOWNSTREAM_UNAVAILABLE', 503), traceId, requestLocale(request));
+      }
+      const auth = requireWriteAuth(request);
+      if (!auth) {
+        reply.code(401);
+        return toErrorResponse(new AuthError('UNAUTHORIZED', 'Missing identity headers'), traceId, requestLocale(request));
+      }
+      return toSuccessResponse(await conversationService.create(auth, request.body as Record<string, unknown>), traceId);
+    } catch (error) {
+      reply.code(errorStatus(error));
+      return toErrorResponse(error, traceId, requestLocale(request));
+    }
+  });
+
+  server.get('/v1/conversations/:conversationId', async (request, reply) => {
+    const { conversationId } = request.params as { conversationId: string };
+    try {
+      if (!conversationService) {
+        reply.code(503);
+        return toErrorResponse(new ConversationServiceError('DOWNSTREAM_UNAVAILABLE', 503), undefined, requestLocale(request));
+      }
+      const auth = readAuth(request);
+      const conversation = await conversationService.get(auth, conversationId);
+      if (!conversation) {
+        reply.code(404);
+        return errorResponse({ code: 'CONVERSATION_NOT_FOUND' }, { locale: requestLocale(request) });
+      }
+      return toSuccessResponse(conversation);
+    } catch (error) {
+      reply.code(errorStatus(error));
+      return toErrorResponse(error, undefined, requestLocale(request));
+    }
+  });
+
+  server.patch('/v1/conversations/:conversationId', async (request, reply) => {
+    const { conversationId } = request.params as { conversationId: string };
+    const traceId = getTraceId(request.body);
+    try {
+      if (!conversationService) {
+        reply.code(503);
+        return toErrorResponse(new ConversationServiceError('DOWNSTREAM_UNAVAILABLE', 503), traceId, requestLocale(request));
+      }
+      const auth = requireWriteAuth(request);
+      if (!auth) {
+        reply.code(401);
+        return toErrorResponse(new AuthError('UNAUTHORIZED', 'Missing identity headers'), traceId, requestLocale(request));
+      }
+      return toSuccessResponse(
+        await conversationService.update(
+          auth,
+          conversationId,
+          request.body as ConversationUpdateRequest,
+        ),
+        traceId,
+      );
+    } catch (error) {
+      reply.code(errorStatus(error));
+      return toErrorResponse(error, traceId, requestLocale(request));
+    }
+  });
+
+  server.post('/v1/conversations/:conversationId/archive', async (request, reply) => {
+    const { conversationId } = request.params as { conversationId: string };
+    try {
+      if (!conversationService) {
+        reply.code(503);
+        return toErrorResponse(new ConversationServiceError('DOWNSTREAM_UNAVAILABLE', 503), undefined, requestLocale(request));
+      }
+      const auth = requireWriteAuth(request);
+      if (!auth) {
+        reply.code(401);
+        return toErrorResponse(new AuthError('UNAUTHORIZED', 'Missing identity headers'), undefined, requestLocale(request));
+      }
+      return toSuccessResponse(await conversationService.archive(auth, conversationId));
+    } catch (error) {
+      reply.code(errorStatus(error));
+      return toErrorResponse(error, undefined, requestLocale(request));
+    }
+  });
+
+  server.post('/v1/conversations/:conversationId/unarchive', async (request, reply) => {
+    const { conversationId } = request.params as { conversationId: string };
+    try {
+      if (!conversationService) {
+        reply.code(503);
+        return toErrorResponse(new ConversationServiceError('DOWNSTREAM_UNAVAILABLE', 503), undefined, requestLocale(request));
+      }
+      const auth = requireWriteAuth(request);
+      if (!auth) {
+        reply.code(401);
+        return toErrorResponse(new AuthError('UNAUTHORIZED', 'Missing identity headers'), undefined, requestLocale(request));
+      }
+      return toSuccessResponse(await conversationService.unarchive(auth, conversationId));
+    } catch (error) {
+      reply.code(errorStatus(error));
+      return toErrorResponse(error, undefined, requestLocale(request));
+    }
+  });
+
+  server.get('/v1/conversations/:conversationId/messages', async (request, reply) => {
+    const { conversationId } = request.params as { conversationId: string };
+    try {
+      if (!conversationService) {
+        reply.code(503);
+        return toErrorResponse(new ConversationServiceError('DOWNSTREAM_UNAVAILABLE', 503), undefined, requestLocale(request));
+      }
+      const auth = readAuth(request);
+      return toSuccessResponse(await conversationService.listMessages(auth, conversationId, request.query));
+    } catch (error) {
+      reply.code(errorStatus(error));
+      return toErrorResponse(error, undefined, requestLocale(request));
+    }
+  });
+
+  server.post('/v1/conversations/:conversationId/messages', async (request, reply) => {
+    const { conversationId } = request.params as { conversationId: string };
+    const traceId = getTraceId(request.body);
+    try {
+      if (!conversationService) {
+        reply.code(503);
+        return toErrorResponse(new ConversationServiceError('DOWNSTREAM_UNAVAILABLE', 503), traceId, requestLocale(request));
+      }
+      const auth = requireWriteAuth(request);
+      if (!auth) {
+        reply.code(401);
+        return toErrorResponse(new AuthError('UNAUTHORIZED', 'Missing identity headers'), traceId, requestLocale(request));
+      }
+      return toSuccessResponse(
+        await conversationService.sendMessage(
+          auth,
+          conversationId,
+          request.body as ConversationSendMessageRequest,
+        ),
+        traceId,
+      );
+    } catch (error) {
+      reply.code(errorStatus(error));
+      return toErrorResponse(error, traceId, requestLocale(request));
     }
   });
 
@@ -373,6 +581,11 @@ export function buildServer(
     const { agentRunId } = request.params as { agentRunId: string };
     try {
       const auth = request.authContext ? readAuth(request) : undefined;
+      const agentRun = await agentRunService.get(agentRunId, withAuthQuery(request.query, auth));
+      if (!agentRun) {
+        reply.code(404);
+        return errorResponse({ code: 'AGENT_RUN_NOT_FOUND' }, { locale: requestLocale(request) });
+      }
       return toSuccessResponse(await agentRunService.listSteps(agentRunId, withAuthQuery(request.query, auth)));
     } catch (error) {
       reply.code(errorStatus(error));
@@ -460,6 +673,91 @@ export function buildServer(
   return server;
 }
 
+function normalizeBuildServerServices(
+  third?: ConversationService | HumanTaskService,
+  fourth?: HumanTaskService | AgentRunService,
+  fifth?: AgentRunService | EvaluationRunService,
+  sixth?: EvaluationRunService | RuntimeConfig,
+  seventh?: RuntimeConfig,
+): {
+  conversationService?: ConversationService;
+  humanTaskService: HumanTaskService;
+  agentRunService: AgentRunService;
+  evaluationRunService?: EvaluationRunService;
+  config: RuntimeConfig;
+} {
+  if (isConversationService(third)) {
+    const normalized: {
+      conversationService?: ConversationService;
+      humanTaskService: HumanTaskService;
+      agentRunService: AgentRunService;
+      evaluationRunService?: EvaluationRunService;
+      config: RuntimeConfig;
+    } = {
+      conversationService: third,
+      humanTaskService: isHumanTaskService(fourth) ? fourth : new HumanTaskService(),
+      agentRunService: isAgentRunService(fifth) ? fifth : new AgentRunService(),
+      config: isRuntimeConfig(sixth) ? sixth : seventh ?? loadConfig(),
+    };
+    if (isEvaluationRunService(sixth)) {
+      normalized.evaluationRunService = sixth;
+    }
+    return normalized;
+  }
+
+  const normalized: {
+    conversationService?: ConversationService;
+    humanTaskService: HumanTaskService;
+    agentRunService: AgentRunService;
+    evaluationRunService?: EvaluationRunService;
+    config: RuntimeConfig;
+  } = {
+    humanTaskService: isHumanTaskService(third) ? third : new HumanTaskService(),
+    agentRunService: isAgentRunService(fourth) ? fourth : new AgentRunService(),
+    config: isRuntimeConfig(sixth) ? sixth : seventh ?? loadConfig(),
+  };
+  if (isEvaluationRunService(fifth)) {
+    normalized.evaluationRunService = fifth;
+  }
+  return normalized;
+}
+
+function isConversationService(value: unknown): value is ConversationService {
+  return hasMethods(value, [
+    'list',
+    'get',
+    'create',
+    'update',
+    'archive',
+    'unarchive',
+    'listMessages',
+    'sendMessage',
+  ]);
+}
+
+function isHumanTaskService(value: unknown): value is HumanTaskService {
+  return hasMethods(value, ['list', 'get', 'approve', 'reject']);
+}
+
+function isAgentRunService(value: unknown): value is AgentRunService {
+  return hasMethods(value, ['list', 'get', 'listSteps']);
+}
+
+function isEvaluationRunService(value: unknown): value is EvaluationRunService {
+  return hasMethods(value, ['create', 'get', 'list', 'listResults', 'cancel']);
+}
+
+function isRuntimeConfig(value: unknown): value is RuntimeConfig {
+  return value !== null && typeof value === 'object' && 'DATABASE_URL' in value && 'NODE_ENV' in value;
+}
+
+function hasMethods<T extends string>(value: unknown, methodNames: T[]): boolean {
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  return methodNames.every((methodName) => typeof (value as Record<string, unknown>)[methodName] === 'function');
+}
+
 function withRequestLocale<T>(body: T, request: { locale?: 'zh-CN' }): T & { request_locale: 'zh-CN' } {
   return {
     ...(body && typeof body === 'object' ? body : {}),
@@ -469,13 +767,32 @@ function withRequestLocale<T>(body: T, request: { locale?: 'zh-CN' }): T & { req
 
 export async function start(): Promise<void> {
   const config = loadConfig();
-  const { taskService, humanTaskService, agentRunService, evaluationRunService, close, db, routeSource } = createRuntimeApiTaskService(config);
+  const {
+    taskService,
+    humanTaskService,
+    agentRunService,
+    evaluationRunService,
+    close,
+    db,
+    routeSource,
+  } = createRuntimeApiTaskService(config);
+  const conversationService = db
+    ? new ConversationService({ db, taskService, config })
+    : undefined;
   const readiness = new RuntimeApiReadinessService({
     config,
     ...(db ? { db } : {}),
     ...(routeSource ? { routeSource } : {}),
   });
-  const server = buildServer(taskService, readiness, humanTaskService, agentRunService, evaluationRunService, config);
+  const server = buildServer(
+    taskService,
+    readiness,
+    conversationService,
+    humanTaskService,
+    agentRunService,
+    evaluationRunService,
+    config,
+  );
   const port = getAppPort(appName, config);
 
   server.addHook('onClose', async () => {

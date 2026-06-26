@@ -115,9 +115,13 @@ function parseWorkflowIdMap(value: string): FixtureRequest[] {
   }));
 }
 
-function parseSmokeResult(value: string): FixtureRequest[] {
+export function parseSmokeResult(value: string): FixtureRequest[] {
   const parsed = recordOrThrow(JSON.parse(value) as unknown, 'TEMPORAL_REPLAY_SMOKE_RESULT_FILE');
   if (Array.isArray(parsed.runs)) {
+    const chatRuns = parseChatSmokeResult(parsed);
+    if (chatRuns.length > 0) {
+      return chatRuns;
+    }
     return parseEvaluationSmokeResult(parsed);
   }
   const scenarios = recordOrThrow(parsed.scenarios, 'smoke scenarios');
@@ -144,6 +148,49 @@ function parseSmokeResult(value: string): FixtureRequest[] {
     }
     return requests;
   });
+}
+
+function parseChatSmokeResult(parsed: Record<string, unknown>): FixtureRequest[] {
+  const runs = parsed.runs;
+  if (!Array.isArray(runs)) {
+    return [];
+  }
+  const hasChatMarkers = runs.some((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return false;
+    }
+    const record = entry as Record<string, unknown>;
+    const name = stringOrUndefined(record.name);
+    return typeof record.task_run_id === 'string'
+      || typeof record.assistant_message_id === 'string'
+      || Boolean(name?.startsWith('chat-turn-'));
+  });
+  if (!hasChatMarkers) {
+    return [];
+  }
+  const requests: FixtureRequest[] = [];
+  for (const [index, entry] of runs.entries()) {
+    const record = recordOrThrow(entry, `chat smoke run ${index}`);
+    const workflowId = stringOrUndefined(record.workflow_id);
+    if (!workflowId) {
+      continue;
+    }
+    const safeName = stringOrDefault(record.name, `chat-turn-${index + 1}`).replace(/_/gu, '-');
+    requests.push(optionalObject({
+      name: `chat-${safeName}-task`,
+      workflowId,
+      runId: stringOrUndefined(record.workflow_run_id),
+    }) as FixtureRequest);
+    const agentWorkflowId = stringOrUndefined(record.agent_workflow_id);
+    if (agentWorkflowId) {
+      requests.push(optionalObject({
+        name: `chat-${safeName}-agent`,
+        workflowId: agentWorkflowId,
+        runId: stringOrUndefined(record.agent_workflow_run_id),
+      }) as FixtureRequest);
+    }
+  }
+  return requests;
 }
 
 function parseEvaluationSmokeResult(parsed: Record<string, unknown>): FixtureRequest[] {
@@ -225,7 +272,9 @@ function optionalObject<T extends object>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
 }
 
-main().catch((error: unknown) => {
-  console.error(error);
-  process.exit(1);
-});
+if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((error: unknown) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

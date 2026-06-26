@@ -1,4 +1,8 @@
-import type { AgentBudgetLedger, PiContextSnapshotRef } from '@dar/contracts';
+import type {
+  AgentBudgetLedger,
+  ConversationRuntimeMetadata,
+  PiContextSnapshotRef,
+} from '@dar/contracts';
 
 export const TASK_QUEUES = {
   runtimeWorkerMain: 'runtime-worker-main',
@@ -30,6 +34,7 @@ export interface ConfigDrivenWorkflowInput {
   request_id: string;
   trace_id?: string;
   input_ref?: string;
+  conversation_runtime?: ConversationRuntimeMetadata;
 }
 
 export interface GenericAgentWorkflowInput {
@@ -83,6 +88,7 @@ export interface PiDurableAgentWorkflowInput {
   request_locale?: 'zh-CN';
   request_id: string;
   trace_id?: string;
+  conversation_runtime?: ConversationRuntimeMetadata;
 }
 
 export interface EvaluationRunWorkflowInput {

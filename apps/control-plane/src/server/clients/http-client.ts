@@ -33,6 +33,17 @@ export class DownstreamClient {
     });
   }
 
+  async patch<T>(path: string, body: unknown, headers: ForwardHeaders): Promise<T> {
+    return this.request<T>(path, {
+      method: 'PATCH',
+      headers: {
+        ...this.headers(headers),
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
   private async request<T>(path: string, init: RequestInit): Promise<T> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 5_000);

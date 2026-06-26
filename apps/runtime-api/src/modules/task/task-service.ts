@@ -197,6 +197,7 @@ export class TaskService {
           tenant_policy_hash: policySnapshot?.snapshot_hash,
           tenant_admission_id: admission?.admission_id,
           input: normalized.input,
+          conversation_runtime: normalized.conversation_runtime,
           request_locale: normalized.request_locale,
           request_id: normalized.request_id,
           trace_id: normalized.trace_id,
@@ -233,6 +234,9 @@ export class TaskService {
         tenant_id: normalized.tenant_id,
         user_id: normalized.user_id,
         route_type: decision.decision === 'matched' ? 'matched' : 'agent_fallback',
+        conversation_id: normalized.conversation_runtime?.conversation_id,
+        user_message_id: normalized.conversation_runtime?.user_message_id,
+        assistant_message_id: normalized.conversation_runtime?.assistant_message_id,
         flow_id: queuedResponse.flow_id,
         flow_version: queuedResponse.flow_version,
         workflow_id: workflowId,
@@ -496,8 +500,11 @@ export class TaskService {
     return result.admission;
   }
 
-  async get(taskRunId: string): Promise<TaskRun | undefined> {
-    return this.taskStore.get(taskRunId);
+  async get(
+    taskRunId: string,
+    options: { tenantId?: string; userId?: string } = {},
+  ): Promise<TaskRun | undefined> {
+    return this.taskStore.get(taskRunId, options);
   }
 
   async list(input: unknown): Promise<TaskRun[]> {
@@ -507,6 +514,7 @@ export class TaskService {
     }
     return this.taskStore.list({
       tenantId: query.tenant_id,
+      ...(query.user_id ? { userId: query.user_id } : {}),
       ...(query.status ? { status: query.status } : {}),
       ...(query.flow_id ? { flowId: query.flow_id } : {}),
       ...(query.workflow_id ? { workflowId: query.workflow_id } : {}),
@@ -604,6 +612,7 @@ export interface RuntimeApiTaskServiceHandle {
   evaluationRunService?: EvaluationRunService;
   db?: Kysely<Database>;
   routeSource?: RouteSpecSource;
+  config: RuntimeConfig;
   close(): Promise<void>;
 }
 
@@ -645,6 +654,7 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
       evaluationRunService: new EvaluationRunService({ db, config }),
       db,
       routeSource,
+      config,
       close: async () => closeDb(db),
     };
   }
@@ -659,6 +669,7 @@ export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()
     humanTaskService: new HumanTaskService(),
     agentRunService: new AgentRunService(),
     routeSource,
+    config,
     close: async () => undefined,
   };
 }

@@ -21,6 +21,7 @@ const {
   loadAgentExecutionPlanByRefActivity,
   loadTenantPolicySnapshotActivity,
   deriveTenantPolicySnapshotActivity,
+  finalizeConversationTurnActivity,
   updateTaskRunStatusActivity,
 } = proxyActivities<{
   normalizeInput: FlowExecutionActivities['normalizeInput'];
@@ -56,13 +57,22 @@ const {
     tenant_policy_snapshot_ref?: string;
     tenant_policy_hash?: string;
   }): Promise<EffectiveTenantPolicy>;
+  finalizeConversationTurnActivity(input: {
+    tenant_id: string;
+    assistant_message_id: string;
+    task_run_id: string;
+    agent_run_id?: string;
+    final_text?: string;
+    error_code?: string;
+    safe_error_message_key?: string;
+  }): Promise<void>;
   updateTaskRunStatusActivity(input: {
     tenant_id: string;
     user_id: string;
     task_run_id: string;
     workflow_id: string;
     request_id: string;
-    status: 'running' | 'waiting_human' | 'completed' | 'failed';
+    status: 'running' | 'waiting_human' | 'waiting_user' | 'completed' | 'failed';
     error_code?: string;
     error_message?: string;
   }): Promise<void>;
@@ -87,6 +97,7 @@ export async function configDrivenWorkflow(input: ConfigDrivenWorkflowArgs): Pro
     task_run_id: input.task_run_id,
     workflow_id: input.workflow_id ?? `task-${input.tenant_id}-${input.task_run_id}`,
     request_id: input.request_id,
+    ...(input.conversation_runtime ? { conversation_runtime: input.conversation_runtime } : {}),
     ...(input.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: input.tenant_policy_snapshot_ref } : {}),
     ...(input.tenant_policy_hash ? { tenant_policy_hash: input.tenant_policy_hash } : {}),
     ...(input.tenant_admission_id ? { tenant_admission_id: input.tenant_admission_id } : {}),
@@ -157,8 +168,40 @@ export async function configDrivenWorkflow(input: ConfigDrivenWorkflowArgs): Pro
       ...(result.error_code ? { error_code: result.error_code } : {}),
       ...(result.error_message ? { error_message: result.error_message } : {}),
     });
+
+    if (input.conversation_runtime && result.status === 'completed') {
+      const finalText = extractConversationFinalText(result);
+      if (!finalText) {
+        throw new Error('CONVERSATION_FINAL_TEXT_MISSING');
+      }
+      await finalizeConversationTurnActivity({
+        tenant_id: input.tenant_id,
+        assistant_message_id: input.conversation_runtime.assistant_message_id,
+        task_run_id: input.task_run_id,
+        final_text: finalText,
+      });
+    }
+
+    if (input.conversation_runtime && result.status === 'failed') {
+      await finalizeConversationTurnActivity({
+        tenant_id: input.tenant_id,
+        assistant_message_id: input.conversation_runtime.assistant_message_id,
+        task_run_id: input.task_run_id,
+        error_code: result.error_code ?? 'WORKFLOW_FAILED',
+        safe_error_message_key: conversationErrorMessageKey(result.error_code),
+      });
+    }
     return result;
   } catch (error) {
+    if (input.conversation_runtime) {
+      await finalizeConversationTurnActivity({
+        tenant_id: input.tenant_id,
+        assistant_message_id: input.conversation_runtime.assistant_message_id,
+        task_run_id: input.task_run_id,
+        error_code: 'WORKFLOW_FAILED',
+        safe_error_message_key: conversationErrorMessageKey('WORKFLOW_FAILED'),
+      });
+    }
     await updateOwnedTaskRunStatus(input, {
       ...context,
       status: 'failed',
@@ -194,6 +237,7 @@ async function runAgentChildWorkflow(
     task_run_id: string;
     workflow_id: string;
     request_id: string;
+    conversation_runtime?: ConfigDrivenWorkflowInput['conversation_runtime'];
     execution_plan_ref?: string;
     execution_plan_hash?: string;
     tenant_policy_snapshot_ref?: string;
@@ -231,7 +275,11 @@ async function runAgentChildWorkflow(
       agent_execution_plan_ref: plannedAgent.agent_execution_plan_ref,
       task_status_owner: false,
       execution_mode: 'mediated_tool_call',
-      initial_user_input: JSON.stringify(input),
+      initial_user_input:
+        typeof input.text === 'string'
+          ? input.text
+          : JSON.stringify(input),
+      ...(context.conversation_runtime ? { conversation_runtime: context.conversation_runtime } : {}),
       ...(childPolicy ? { tenant_policy_snapshot_ref: childPolicy.snapshot_ref } : context.tenant_policy_snapshot_ref ? { tenant_policy_snapshot_ref: context.tenant_policy_snapshot_ref } : {}),
       ...(childPolicy ? { tenant_policy_hash: childPolicy.snapshot_hash } : context.tenant_policy_hash ? { tenant_policy_hash: context.tenant_policy_hash } : {}),
       ...(context.tenant_admission_id ? { tenant_admission_id: context.tenant_admission_id } : {}),
@@ -297,4 +345,44 @@ function sanitizeWorkflowId(value: string): string {
 
 function workflowErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Workflow failed';
+}
+
+function extractConversationFinalText(result: FlowExecutionResult): string | undefined {
+  let finalText: string | undefined;
+  for (const [key, value] of Object.entries(result.steps)) {
+    if (key === 'steps' || !isRecord(value)) {
+      continue;
+    }
+    if (value.status === 'final' && typeof value.final_answer === 'string' && value.final_answer.trim().length > 0) {
+      finalText = value.final_answer;
+    }
+  }
+  return finalText;
+}
+
+function conversationErrorMessageKey(errorCode?: string): string {
+  switch (errorCode) {
+    case 'AGENT_CANCELLED':
+      return 'errors.agentCancelled';
+    case 'AGENT_BUDGET_EXCEEDED':
+    case 'AGENT_SEGMENT_BUDGET_EXCEEDED':
+    case 'AGENT_MODEL_TURN_BUDGET_EXCEEDED':
+    case 'AGENT_TOKEN_BUDGET_EXCEEDED':
+    case 'AGENT_DURATION_BUDGET_EXCEEDED':
+    case 'AGENT_CONTEXT_BUDGET_EXCEEDED':
+      return 'errors.agentBudgetExceeded';
+    case 'HUMAN_TASK_REJECTED':
+      return 'errors.humanTaskRejected';
+    case 'PI_SEGMENT_FAILED':
+    case 'AGENT_RUN_FAILED':
+      return 'errors.agentFailed';
+    case 'WORKFLOW_START_FAILED':
+      return 'errors.workflowStartFailed';
+    default:
+      return 'errors.workflowFailed';
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

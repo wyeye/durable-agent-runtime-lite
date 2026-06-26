@@ -154,11 +154,27 @@ export async function executeFlowSpec(
 
     if (step.type === 'agent') {
       const plannedAgent = resolvePlannedAgent(plan, step.id, step.agent_id);
-      setStepResult(
-        state,
-        step.id,
-        await activities.runAgent(context, plannedAgent, resolveStepInput(step.input, state, input)),
+      const agentResult = await activities.runAgent(
+        context,
+        plannedAgent,
+        resolveStepInput(step.input, state, input),
       );
+      setStepResult(state, step.id, agentResult);
+      if (agentResult.status === 'final') {
+        continue;
+      }
+      if (agentResult.status === 'need_user') {
+        return {
+          status: 'waiting_human',
+          steps: state,
+        };
+      }
+      return {
+        status: 'failed',
+        steps: state,
+        error_code: agentResult.error?.code ?? 'AGENT_RUN_FAILED',
+        error_message: agentResult.error?.message ?? 'Agent run failed',
+      };
       continue;
     }
 

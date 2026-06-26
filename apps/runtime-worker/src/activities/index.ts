@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
 import { ApplicationFailure, CancelledFailure, Context } from '@temporalio/activity';
 import {
   agentUsageSchema,
+  conversationMessageSchema,
   effectiveTenantPolicySchema,
   piSegmentRequestSchema,
   piSegmentResultSchema,
@@ -40,7 +42,7 @@ import {
   type EvaluationSubjectSnapshot,
 } from '@dar/contracts';
 import { ToolGatewayClient } from '@dar/tool-client';
-import type { UserMessage } from '@earendil-works/pi-ai';
+import type { AssistantMessage, UserMessage } from '@earendil-works/pi-ai';
 import { getToolGatewayUrl, loadConfig, type RuntimeConfig } from '@dar/config';
 import {
   AgentContextSnapshotRepository,
@@ -49,6 +51,7 @@ import {
   AgentStepRepository,
   AuditEventRepository,
   closeDb,
+  ConversationMessageRepository,
   createDb,
   FlowExecutionPlanRepository,
   FlowDefinitionRepository,
@@ -71,7 +74,6 @@ import {
   type EvaluationEvidenceSnapshot,
   assertCandidateFidelity,
   hashEvaluationSubjectSnapshot,
-  hashJson,
   stableStringify,
   TenantRuntimePolicyResolver,
   TenantRuntimePolicySnapshotRepository,
@@ -106,6 +108,9 @@ const NON_RETRYABLE_ERROR_CODES = new Set([
   'HUMAN_CONFIRMATION_REQUIRED',
   'IDEMPOTENCY_CONFLICT',
   'PI_SEGMENT_NON_RETRYABLE',
+  'CONVERSATION_CONTEXT_HASH_MISMATCH',
+  'CONVERSATION_FINALIZATION_CONFLICT',
+  'CONVERSATION_MESSAGE_NOT_FOUND',
 ]);
 
 const sampleFlowSpec: FlowSpec = {
@@ -116,7 +121,7 @@ const sampleFlowSpec: FlowSpec = {
   steps: [
     { id: 'input_normalize', type: 'activity', activity: 'input.normalize' },
     { id: 'knowledge_search', type: 'tool', tool: 'knowledge.search', tool_version: '1.0.0' },
-    { id: 'agent_plan', type: 'agent', agent_id: 'sample_agent', input: { agent_version: 1 } },
+    { id: 'agent_plan', type: 'agent', agent_id: 'sample_agent', input: { agent_version: 1, text: '${input.text}' } },
     {
       id: 'record_write',
       type: 'tool',
@@ -216,7 +221,7 @@ export interface CreateHumanTaskActivityInput {
 }
 
 export interface UpdateTaskRunStatusActivityInput extends ActivityContext {
-  status: 'running' | 'waiting_human' | 'completed' | 'failed';
+  status: 'running' | 'waiting_human' | 'waiting_user' | 'completed' | 'failed';
   error_code?: string;
   error_message?: string;
 }
@@ -259,6 +264,28 @@ export interface AppendUserInputActivityInput {
   responded_by: string;
   max_context_bytes: number;
   request_context: ActivityContext;
+}
+
+export interface ConversationContextActivityInput {
+  tenant_id: string;
+  owner_user_id: string;
+  conversation_id: string;
+  context_message_ids: string[];
+  context_hash: string;
+}
+
+export interface ConversationContextActivityResult {
+  seed_messages: Array<Record<string, unknown>>;
+}
+
+export interface FinalizeConversationTurnActivityInput {
+  tenant_id: string;
+  assistant_message_id: string;
+  task_run_id: string;
+  agent_run_id?: string;
+  final_text?: string;
+  error_code?: string;
+  safe_error_message_key?: string;
 }
 
 export interface UpdateAgentStepActivityInput {
@@ -440,8 +467,52 @@ export async function createAgentRunActivity(
         agentRun.agent_run_id,
       );
     }
+    const taskRun = await new TaskRunRepository(db).get(input.task_run_id);
+    if (
+      taskRun
+      && taskRun.tenant_id === input.tenant_id
+      && taskRun.user_id === input.user_id
+      && taskRun.assistant_message_id
+    ) {
+      await new ConversationMessageRepository(db).linkAgentRun(taskRun.assistant_message_id, {
+        tenantId: input.tenant_id,
+        agentRunId: agentRun.agent_run_id,
+      });
+    }
     await new AgentRunRepository(db).update(agentRun.agent_run_id, { status: 'running' });
     return agentRun;
+  });
+}
+
+export async function loadConversationContextActivity(
+  input: ConversationContextActivityInput,
+): Promise<ConversationContextActivityResult> {
+  return classifyActivityFailure('loadConversationContextActivity', async () => {
+    const db = getProcessDb();
+    const repository = new ConversationMessageRepository(db);
+    const loaded = await Promise.all(
+      input.context_message_ids.map(async (messageId) => {
+        const message = await repository.get(messageId, {
+          tenantId: input.tenant_id,
+          ownerUserId: input.owner_user_id,
+        });
+        if (!message) {
+          throw new Error('CONVERSATION_MESSAGE_NOT_FOUND');
+        }
+        if (message.conversation_id !== input.conversation_id || message.status !== 'completed') {
+          throw new Error('CONVERSATION_CONTEXT_HASH_MISMATCH');
+        }
+        return conversationMessageSchema.parse(message);
+      }),
+    );
+    const ordered = loaded.slice().sort((left, right) => left.sequence_no - right.sequence_no);
+    const hash = hashConversationMessages(ordered);
+    if (hash !== input.context_hash) {
+      throw new Error('CONVERSATION_CONTEXT_HASH_MISMATCH');
+    }
+    return {
+      seed_messages: ordered.map((message) => conversationMessageToPiSeed(message)),
+    };
   });
 }
 
@@ -560,6 +631,9 @@ export async function runPiSegmentActivity(request: PiSegmentRequest): Promise<P
       }
       if (snapshot?.messages) {
         adapterInput.contextMessages = snapshot.messages;
+      }
+      if (parsed.seed_messages?.length) {
+        adapterInput.contextMessages = parsed.seed_messages;
       }
       if (parsed.initial_user_input) {
         adapterInput.initialUserInput = parsed.initial_user_input;
@@ -696,6 +770,32 @@ export async function appendUserInputToPiContextActivity(
   });
 }
 
+export async function finalizeConversationTurnActivity(
+  input: FinalizeConversationTurnActivityInput,
+): Promise<void> {
+  return classifyActivityFailure('finalizeConversationTurnActivity', async () => {
+    const repository = new ConversationMessageRepository(getProcessDb());
+    if (input.final_text) {
+      await repository.completeAssistant({
+        assistantMessageId: input.assistant_message_id,
+        tenantId: input.tenant_id,
+        contentText: input.final_text,
+        ...(input.task_run_id ? { taskRunId: input.task_run_id } : {}),
+        ...(input.agent_run_id ? { agentRunId: input.agent_run_id } : {}),
+      });
+      return;
+    }
+    await repository.failAssistant({
+      assistantMessageId: input.assistant_message_id,
+      tenantId: input.tenant_id,
+      errorCode: input.error_code ?? 'WORKFLOW_FAILED',
+      errorMessageKey: input.safe_error_message_key ?? 'errors.workflowFailed',
+      ...(input.task_run_id ? { taskRunId: input.task_run_id } : {}),
+      ...(input.agent_run_id ? { agentRunId: input.agent_run_id } : {}),
+    });
+  });
+}
+
 export async function updateAgentStepActivity(
   input: UpdateAgentStepActivityInput,
 ): Promise<AgentStepRecord> {
@@ -752,7 +852,9 @@ export async function createHumanTaskActivity(
         request_id: context.request_id,
       }),
     );
-    await new TaskRunRepository(db).updateStatus(context.task_run_id, { status: 'waiting_human' });
+    await new TaskRunRepository(db).updateStatus(context.task_run_id, {
+      status: input.kind === 'user_input' ? 'waiting_user' : 'waiting_human',
+    });
     await new AuditEventRepository(db).append({
       event_key: `agent.human_task.created:${context.tenant_id}:${humanTask.human_task_id}`,
       tenant_id: context.tenant_id,
@@ -1218,7 +1320,7 @@ export async function collectAndScoreEvaluationCaseActivity(input: {
       workflow_id: input.workflow_id,
       ...(input.workflow_run_id ? { workflow_run_id: input.workflow_run_id } : {}),
       evidence_snapshot: evidenceWithLimits as unknown as Record<string, unknown>,
-      evidence_hash: hashJson(evidenceWithLimits),
+      evidence_hash: stableHash(evidenceWithLimits),
       candidate_fidelity_verified: true,
       assertion_failure_count: scored.metric_results.filter((metric) => !metric.hard_gate && !metric.passed).length,
       hard_gate_failure_count: scored.metric_results.filter((metric) => metric.hard_gate && !metric.passed).length,
@@ -1295,7 +1397,7 @@ export async function recordEvaluationCaseSystemErrorActivity(input: {
         },
       ],
       evidence_snapshot: collectedEvidence as unknown as Record<string, unknown>,
-      evidence_hash: hashJson(collectedEvidence),
+      evidence_hash: stableHash(collectedEvidence),
       candidate_fidelity_verified: true,
       assertion_failure_count: 0,
       hard_gate_failure_count: input.cancelled ? 0 : 1,
@@ -1776,12 +1878,12 @@ async function classifyActivityFailure<T>(activityName: string, fn: () => Promis
 
 function classifyErrorCode(message: string): string | undefined {
   if (
-    /TENANT_POLICY_HASH_MISMATCH|EXECUTION_PLAN_HASH_MISMATCH|AGENT_MODEL_DENIED_BY_TENANT_POLICY|HANDOFF_DENIED_BY_TENANT_POLICY|TOOL_DENIED_BY_TENANT_POLICY/u.test(
+    /TENANT_POLICY_HASH_MISMATCH|EXECUTION_PLAN_HASH_MISMATCH|AGENT_MODEL_DENIED_BY_TENANT_POLICY|HANDOFF_DENIED_BY_TENANT_POLICY|TOOL_DENIED_BY_TENANT_POLICY|CONVERSATION_CONTEXT_HASH_MISMATCH|CONVERSATION_FINALIZATION_CONFLICT|CONVERSATION_MESSAGE_NOT_FOUND/u.test(
       message,
     )
   ) {
     return message.match(
-      /TENANT_POLICY_HASH_MISMATCH|EXECUTION_PLAN_HASH_MISMATCH|AGENT_MODEL_DENIED_BY_TENANT_POLICY|HANDOFF_DENIED_BY_TENANT_POLICY|TOOL_DENIED_BY_TENANT_POLICY/u,
+      /TENANT_POLICY_HASH_MISMATCH|EXECUTION_PLAN_HASH_MISMATCH|AGENT_MODEL_DENIED_BY_TENANT_POLICY|HANDOFF_DENIED_BY_TENANT_POLICY|TOOL_DENIED_BY_TENANT_POLICY|CONVERSATION_CONTEXT_HASH_MISMATCH|CONVERSATION_FINALIZATION_CONFLICT|CONVERSATION_MESSAGE_NOT_FOUND/u,
     )?.[0];
   }
   if (/validation|invalid|schema|parse/iu.test(message)) {
@@ -1822,6 +1924,54 @@ function throwIfActivityCancelled(message: string): void {
   }
 }
 
+function conversationMessageToPiSeed(
+  message: ReturnType<typeof conversationMessageSchema.parse>,
+): Record<string, unknown> {
+  if (message.role === 'user') {
+    const seed: UserMessage = {
+      role: 'user',
+      content: message.content_text ?? '',
+      timestamp: 0,
+    };
+    return seed as unknown as Record<string, unknown>;
+  }
+  const seed: AssistantMessage = {
+    role: 'assistant',
+    content: message.content_text
+      ? [{ type: 'text', text: message.content_text }]
+      : [],
+    api: 'conversation-history',
+    provider: 'conversation-history',
+    model: 'conversation-history',
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: 'stop',
+    timestamp: 0,
+  };
+  return seed as unknown as Record<string, unknown>;
+}
+
+function hashConversationMessages(
+  messages: Array<ReturnType<typeof conversationMessageSchema.parse>>,
+): string {
+  return createHash('sha256').update(
+    JSON.stringify(
+      messages.map((message) => ({
+        message_id: message.message_id,
+        sequence_no: message.sequence_no,
+        role: message.role,
+        content_text: message.content_text ?? '',
+      })),
+    ),
+  ).digest('hex');
+}
+
 function startHeartbeatLoop(activity: string, details: Record<string, unknown>): { stop(): void } {
   let stopped = false;
   const tick = () => {
@@ -1842,4 +1992,8 @@ function startHeartbeatLoop(activity: string, details: Record<string, unknown>):
       clearInterval(interval);
     },
   };
+}
+
+function stableHash(value: unknown): string {
+  return createHash('sha256').update(stableStringify(value)).digest('hex');
 }

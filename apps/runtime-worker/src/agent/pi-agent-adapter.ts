@@ -51,6 +51,7 @@ export async function runPiAgentSegment(input: PiAgentAdapterInput): Promise<PiA
   const restoredMessages = input.contextMessages
     ? restorePiMessages({ schema_version: 'pi-context/v1', messages: input.contextMessages })
     : [];
+  const initialMessages = appendCurrentUserMessage(restoredMessages, input.initialUserInput);
   const tools = buildDeferredPiTools(input.executionPlan.allowed_tools, input.executionPlan.allowed_handoffs);
   const proposals: ProposedToolCall[] = [];
   const usage: AgentUsage = agentUsageSchema.parse({});
@@ -64,7 +65,7 @@ export async function runPiAgentSegment(input: PiAgentAdapterInput): Promise<PiA
       systemPrompt: input.executionPlan.plan.system_prompt,
       model: input.model,
       tools,
-      messages: restoredMessages,
+      messages: initialMessages,
       thinkingLevel: 'off',
     },
     streamFn: input.streamFn,
@@ -106,7 +107,7 @@ export async function runPiAgentSegment(input: PiAgentAdapterInput): Promise<PiA
   }
 
   try {
-    if (input.contextMessages && input.contextMessages.length > 0) {
+    if (initialMessages.length > 0) {
       await agent.continue();
     } else {
       await agent.prompt(input.initialUserInput ?? '');
@@ -141,6 +142,24 @@ export async function runPiAgentSegment(input: PiAgentAdapterInput): Promise<PiA
     context,
     messages,
   };
+}
+
+function appendCurrentUserMessage(
+  messages: AgentMessage[],
+  initialUserInput: string | undefined,
+): AgentMessage[] {
+  const text = initialUserInput?.trim();
+  if (!text) {
+    return messages;
+  }
+  return [
+    ...messages,
+    {
+      role: 'user',
+      content: text,
+      timestamp: 0,
+    },
+  ];
 }
 
 function buildSegmentResult(input: {

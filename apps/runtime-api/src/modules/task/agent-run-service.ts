@@ -11,7 +11,7 @@ import {
 } from '@dar/db';
 
 export interface AgentRunStore {
-  get(agentRunId: string, options?: { tenantId?: string }): Promise<AgentRunRecord | undefined>;
+  get(agentRunId: string, options?: { tenantId?: string; userId?: string }): Promise<AgentRunRecord | undefined>;
   list(options?: ListAgentRunsOptions): Promise<AgentRunRecord[]>;
 }
 
@@ -32,6 +32,7 @@ export class AgentRunService {
     }
     const agentRuns = await this.runStore.list({
       tenantId: query.tenant_id,
+      ...(query.user_id ? { userId: query.user_id } : {}),
       ...(query.task_run_id ? { taskRunId: query.task_run_id } : {}),
       ...(query.agent_id ? { agentId: query.agent_id } : {}),
       ...(query.status ? { status: query.status } : {}),
@@ -46,7 +47,10 @@ export class AgentRunService {
     if (!query.tenant_id) {
       throw new Error('tenant_id is required for agent_run query');
     }
-    const agentRun = await this.runStore.get(agentRunId, { tenantId: query.tenant_id });
+    const agentRun = await this.runStore.get(agentRunId, {
+      tenantId: query.tenant_id,
+      ...(query.user_id ? { userId: query.user_id } : {}),
+    });
     return agentRun ? { agent_run: agentRun } : undefined;
   }
 
@@ -63,7 +67,10 @@ export class AgentRunService {
 export class DbAgentRunStore implements AgentRunStore {
   constructor(private readonly repository: AgentRunRepository) {}
 
-  get(agentRunId: string, options: { tenantId?: string } = {}): Promise<AgentRunRecord | undefined> {
+  get(
+    agentRunId: string,
+    options: { tenantId?: string; userId?: string } = {},
+  ): Promise<AgentRunRecord | undefined> {
     return this.repository.get(agentRunId, options);
   }
 

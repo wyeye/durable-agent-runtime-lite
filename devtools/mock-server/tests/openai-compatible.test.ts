@@ -144,4 +144,43 @@ describe('mock OpenAI-compatible endpoint', () => {
     expect(recovered.statusCode).toBe(200);
     expect(recovered.json().id).toMatch(/^gateway-b_/u);
   });
+
+  it('returns the remembered codename only when prior conversation history is present', async () => {
+    const server = buildServer();
+    servers.push(server);
+
+    await server.inject({
+      method: 'POST',
+      url: '/__test/scenario',
+      payload: { scenario: 'conversation_memory' },
+    });
+
+    const withHistory = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'dar-local-model',
+        messages: [
+          { role: 'user', content: '请记住项目代号是蓝鲸' },
+          { role: 'assistant', content: '已记住项目代号“蓝鲸”。' },
+          { role: 'user', content: '项目代号是什么？' },
+        ],
+      },
+    });
+    expect(withHistory.statusCode).toBe(200);
+    expect(withHistory.json().choices[0].message.content).toBe('项目代号是“蓝鲸”。');
+
+    const withoutHistory = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'dar-local-model',
+        messages: [
+          { role: 'user', content: '项目代号是什么？' },
+        ],
+      },
+    });
+    expect(withoutHistory.statusCode).toBe(200);
+    expect(withoutHistory.json().choices[0].message.content).toBe('项目代号是“海豚”。');
+  });
 });

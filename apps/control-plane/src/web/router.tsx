@@ -1,6 +1,7 @@
 import { createBrowserRouter, Navigate } from 'react-router';
 import { AppLayout } from './layout/AppLayout.js';
 import { DashboardPage } from './pages/DashboardPage.js';
+import { ChatPage } from './pages/chat/ChatPage.js';
 import { FlowsPage } from './pages/flows/FlowsPage.js';
 import { RoutesPage } from './pages/routes/RoutesPage.js';
 import { ToolsPage } from './pages/tools/ToolsPage.js';
@@ -33,7 +34,9 @@ export const router = createBrowserRouter([
     path: '/',
     element: <AppLayout />,
     children: [
-      { index: true, element: <Navigate to="/dashboard" replace /> },
+      { index: true, element: <Navigate to="/chat" replace /> },
+      { path: 'chat', element: <ChatPage /> },
+      { path: 'chat/:conversationId', element: <ChatPage /> },
       { path: 'dashboard', element: <DashboardPage /> },
       { path: 'registry/flows', element: <FlowsPage /> },
       { path: 'registry/routes', element: <RoutesPage /> },
@@ -62,7 +65,7 @@ export const router = createBrowserRouter([
       { path: 'iam/tenants', element: <TenantsPage /> },
       { path: 'iam/users', element: <UsersPage /> },
       { path: 'iam/roles', element: <RolesPage /> },
-      { path: '*', element: <Navigate to="/dashboard" replace /> },
+      { path: '*', element: <Navigate to="/chat" replace /> },
     ],
   },
 ]);

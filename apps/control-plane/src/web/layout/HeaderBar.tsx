@@ -47,12 +47,12 @@ export function HeaderBar() {
       <Form.Item
         label="roles"
         name="roles"
-        rules={[{ required: true, message: '请选择角色' }]}
       >
         <Select
           data-testid="identity-roles"
           mode="multiple"
           options={roleOptions}
+          placeholder="可留空，表示仅有 active membership"
         />
       </Form.Item>
       <Space>
@@ -80,7 +80,7 @@ export function HeaderBar() {
           <>
             <Tag color="blue">{identity.tenant_id}</Tag>
             <Typography.Text>{identity.user_id}</Typography.Text>
-            {identity.roles.map((role) => <Tag key={role}>{displayRole(role)}</Tag>)}
+            {identity.roles.length > 0 ? identity.roles.map((role) => <Tag key={role}>{displayRole(role)}</Tag>) : <Tag>runtime member</Tag>}
           </>
         ) : (
           <Tag color="red">未配置身份</Tag>

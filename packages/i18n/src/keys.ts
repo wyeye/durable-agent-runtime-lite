@@ -221,6 +221,17 @@ export const ERROR_MESSAGE_KEYS = {
   IAM_LAST_PLATFORM_ADMIN_REQUIRED: 'errors.iamLastPlatformAdminRequired',
   IAM_REVISION_CONFLICT: 'errors.iamRevisionConflict',
   IAM_EMAIL_CONFLICT: 'errors.iamEmailConflict',
+  CONVERSATION_NOT_FOUND: 'errors.conversationNotFound',
+  CONVERSATION_ARCHIVED: 'errors.conversationArchived',
+  CONVERSATION_REVISION_CONFLICT: 'errors.conversationRevisionConflict',
+  CONVERSATION_TURN_IN_PROGRESS: 'errors.conversationTurnInProgress',
+  CONVERSATION_MESSAGE_NOT_FOUND: 'errors.conversationMessageNotFound',
+  CONVERSATION_MESSAGE_TOO_LARGE: 'errors.conversationMessageTooLarge',
+  CONVERSATION_MESSAGE_IDEMPOTENCY_CONFLICT: 'errors.conversationMessageIdempotencyConflict',
+  CONVERSATION_CONTEXT_HASH_MISMATCH: 'errors.conversationContextHashMismatch',
+  CONVERSATION_CONTEXT_TOO_LARGE: 'errors.conversationContextTooLarge',
+  CONVERSATION_FINALIZATION_CONFLICT: 'errors.conversationFinalizationConflict',
+  CONVERSATION_ACCESS_DENIED: 'errors.conversationAccessDenied',
 } as const;
 
 export const LOG_MESSAGE_KEYS = {
@@ -272,6 +283,14 @@ export const AUDIT_MESSAGE_KEYS = {
   'human_task.respond': 'audit.humanTaskRespond',
   'evaluation.run_completed': 'audit.evaluationRunCompleted',
   'evaluation.gate_evaluated': 'audit.evaluationGateEvaluated',
+  'conversation.created': 'audit.conversationCreated',
+  'conversation.renamed': 'audit.conversationRenamed',
+  'conversation.archived': 'audit.conversationArchived',
+  'conversation.unarchived': 'audit.conversationUnarchived',
+  'conversation.message.accepted': 'audit.conversationMessageAccepted',
+  'conversation.turn.started': 'audit.conversationTurnStarted',
+  'conversation.turn.completed': 'audit.conversationTurnCompleted',
+  'conversation.turn.failed': 'audit.conversationTurnFailed',
 } as const;
 
 export type ErrorCodeWithMessage = keyof typeof ERROR_MESSAGE_KEYS;

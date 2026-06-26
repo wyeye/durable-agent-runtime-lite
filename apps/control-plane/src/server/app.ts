@@ -15,6 +15,7 @@ import { errorHandlerPlugin } from './plugins/error-handler.js';
 import { openApiPlugin } from './plugins/openapi.js';
 import { staticFilesPlugin } from './plugins/static-files.js';
 import { healthRoutes } from './routes/health.js';
+import { conversationRoutes } from './routes/conversations.js';
 import { evaluationRoutes } from './routes/evaluation.js';
 import { operationsRoutes } from './routes/operations.js';
 import { registryRoutes } from './routes/registry.js';
@@ -141,6 +142,7 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
   await registryRoutes(app, { service: registryService });
   await modelCatalogRoutes(app, { service: modelCatalogService });
   await evaluationRoutes(app, { service: evaluationService });
+  await conversationRoutes(app, { runtimeApiClient });
   await operationsRoutes(app, { registryService, runtimeApiClient, toolGatewayClient });
 
   app.addHook('onResponse', async (request, reply) => {
