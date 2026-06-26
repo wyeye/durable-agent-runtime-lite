@@ -5,7 +5,6 @@ services:
     environment:
       NODE_ENV: development
       APP_ENV: development
-      PI_AGENT_MODE: model_gateway
       MODEL_GATEWAY_MODE: openai_compatible
       MODEL_GATEWAY_PROTOCOL: openai_chat_completions
       MODEL_CREDENTIAL_MASTER_KEY: ${MODEL_CREDENTIAL_MASTER_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}

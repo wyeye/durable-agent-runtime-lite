@@ -1547,7 +1547,7 @@ async function assertWorkerUsesModelGateway(): Promise<void> {
       task_queues?: string[];
     };
   };
-  assert.equal(body.checks?.pi_agent_mode, 'model_gateway', 'Evaluation backend smoke requires runtime-worker PI_AGENT_MODE=model_gateway');
+  assert.equal(body.checks?.pi_agent_mode, 'model_gateway', 'Evaluation backend smoke requires runtime-worker model gateway chain');
   assert.equal(
     body.checks?.evaluation_worker_enabled,
     true,

@@ -41,7 +41,7 @@ docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml 
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml up -d mock-server tool-gateway runtime-worker runtime-api control-plane
 ```
 
-该 override 默认 `PI_AGENT_MODE=model_gateway`，并指向 `mock-server` 的 OpenAI-compatible API。`mock-server` 不在 production compose 中。
+该 override 会把 `runtime-worker` 指向 `mock-server` 的 OpenAI-compatible API。`mock-server` 不在 production compose 中。
 
 Ollama gate 是手动/self-hosted 路径：Ollama 在宿主机，四个生产 app 来自 Docker 镜像。
 

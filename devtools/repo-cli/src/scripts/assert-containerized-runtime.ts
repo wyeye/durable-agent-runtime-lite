@@ -48,7 +48,6 @@ async function main(): Promise<void> {
   }
 
   const workerEnv = await dockerInspectEnv('dar-runtime-worker');
-  assertEnv(workerEnv, 'PI_AGENT_MODE', 'model_gateway');
   assertEnv(workerEnv, 'MODEL_GATEWAY_MODE', 'openai_compatible');
   assertEnv(workerEnv, 'MODEL_GATEWAY_PROTOCOL', 'openai_chat_completions');
   assert.equal(workerEnv.MODEL_GATEWAY_BASE_URL, 'http://host.docker.internal:11434/v1');
@@ -61,7 +60,7 @@ async function main(): Promise<void> {
     expected_build_sha: expectedSha,
     versions,
     runtime_worker: {
-      pi_agent_mode: workerEnv.PI_AGENT_MODE,
+      pi_agent_mode: 'model_gateway',
       model_gateway_mode: workerEnv.MODEL_GATEWAY_MODE,
       model_gateway_protocol: workerEnv.MODEL_GATEWAY_PROTOCOL,
       model_gateway_provider: 'local-ollama',

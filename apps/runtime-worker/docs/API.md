@@ -27,12 +27,9 @@ worker 与 runtime-api 共享 task queue：`runtime-worker-main`。
 supervises segment boundaries and `runPiSegmentActivity` creates/restores the Pi
 `Agent`.
 
-Runtime modes:
+Pi runtime 固定通过 `packages/model-client` 调本地/外部 Model Gateway。
 
-- `PI_AGENT_MODE=disabled`：不执行 agent。
-- `PI_AGENT_MODE=model_gateway`：生产模式，通过 `packages/model-client` 调本地/外部 Model Gateway。
-
-Production rejects non-`model_gateway` agent execution. Deterministic Pi response streams are only test-local support code and are not implemented inside production app source.
+Deterministic Pi response streams are only test-local support code and are not implemented inside production app source.
 
 ## Endpoints
 
@@ -185,7 +182,6 @@ are stored on the corresponding AgentStep.
 - `RUNTIME_WORKER_MODE=mock|temporal`：worker mode。
 - `TOOL_GATEWAY_URL` / `TOOL_GATEWAY_BASE_URL`：tool Activity 调用 tool-gateway。
 - `TEMPORAL_ADDRESS` / `TEMPORAL_NAMESPACE`：Temporal worker 连接参数。
-- `PI_AGENT_MODE=disabled|deterministic|model_gateway`：Pi runtime mode。
 - `PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW`：safe-boundary Continue-As-New threshold。
 - `MODEL_GATEWAY_MODE=disabled|mock|openai_compatible`：production model_gateway mode requires `openai_compatible`。
 - `MODEL_GATEWAY_PROTOCOL=dar_generate|openai_chat_completions`：production model_gateway mode requires `openai_chat_completions`。

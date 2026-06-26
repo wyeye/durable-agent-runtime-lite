@@ -244,7 +244,6 @@ export const smokeCatalog: SmokeScenario[] = [
     command: script('smoke-chat-e2e.ts'),
     env: {
       IAM_DIRECTORY_MODE: 'db',
-      CHAT_ENABLED: 'true',
       MODEL_CREDENTIAL_MASTER_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
       SMOKE_RESULT_PATH: 'artifacts/chat-mvp/result.json',
     },

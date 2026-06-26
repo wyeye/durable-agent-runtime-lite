@@ -44,8 +44,6 @@
 | `MODEL_GATEWAY_ALLOW_INSECURE_HTTP` | `true` | `runtime-worker` | 是否允许开发场景下的非 HTTPS 模型网关。 |
 | `MODEL_GATEWAY_IDEMPOTENCY_HEADER` | `Idempotency-Key` | `runtime-worker` | 调用模型网关时使用的幂等 header 名称。 |
 | `MODEL_GATEWAY_USER_AGENT` | `durable-agent-runtime-lite/runtime-worker` | `runtime-worker` | 模型网关请求的 User-Agent。 |
-| `PI_AGENT_MODE` | `disabled` | `runtime-worker` | Pi agent 模式，决定是否禁用、确定性运行或走模型网关。 |
-| `CHAT_ENABLED` | `false` | `runtime-api`、`control-plane` | 是否启用聊天功能入口。 |
 | `CHAT_CONTEXT_MAX_MESSAGES` | `20` | `runtime-api` | 聊天上下文最多保留的消息数。 |
 | `CHAT_CONTEXT_MAX_BYTES` | `32768` | `runtime-api` | 聊天上下文字节上限。 |
 | `CHAT_MESSAGE_MAX_CHARS` | `8000` | `runtime-api` | 单条聊天消息字符上限。 |
@@ -163,8 +161,8 @@
 
 - `MODEL_GATEWAY_*` 系列变量控制模型网关地址、协议、超时、凭据和客户端缓存。
 - `MODEL_CREDENTIAL_MASTER_KEY` 是模型凭据安全边界的核心变量。
-- `PI_AGENT_MODE` 和 `PI_*` 系列变量限定 Pi loop 的运行模式与预算。
-- `CHAT_*` 系列变量控制聊天功能开关、消息大小和上下文截断策略。
+- Pi 运行时固定走 `model_gateway`；`PI_*` 系列变量限定 Pi loop 的预算。
+- `CHAT_*` 系列变量控制聊天消息大小、轮询频率和上下文截断策略。
 
 ### Tool Gateway 安全边界
 

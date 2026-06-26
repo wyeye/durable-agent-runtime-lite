@@ -63,7 +63,6 @@ export class ConversationService {
   }
 
   async list(auth: AuthContext, input: unknown): Promise<ConversationListResponse> {
-    this.assertChatEnabled();
     const query = conversationQuerySchema.parse(input);
     const result = await this.conversationRepository.listOwned({
       tenantId: auth.tenant_id,
@@ -81,7 +80,6 @@ export class ConversationService {
   }
 
   async get(auth: AuthContext, conversationId: string): Promise<Conversation | undefined> {
-    this.assertChatEnabled();
     return this.conversationRepository.getOwned(conversationId, {
       tenantId: auth.tenant_id,
       ownerUserId: auth.user_id,
@@ -92,7 +90,6 @@ export class ConversationService {
     auth: AuthContext,
     input: ConversationCreateRequest,
   ): Promise<Conversation> {
-    this.assertChatEnabled();
     const parsed = conversationCreateRequestSchema.parse(input);
     const conversation = await this.conversationRepository.create({
       conversationId: createConversationId(),
@@ -112,7 +109,6 @@ export class ConversationService {
     conversationId: string,
     input: ConversationUpdateRequest,
   ): Promise<Conversation> {
-    this.assertChatEnabled();
     try {
       const parsed = conversationUpdateRequestSchema.parse(input);
       const conversation = await this.conversationRepository.updateTitle({
@@ -133,7 +129,6 @@ export class ConversationService {
   }
 
   async archive(auth: AuthContext, conversationId: string): Promise<Conversation> {
-    this.assertChatEnabled();
     try {
       const conversation = await this.conversationRepository.archive({
         conversationId,
@@ -151,7 +146,6 @@ export class ConversationService {
   }
 
   async unarchive(auth: AuthContext, conversationId: string): Promise<Conversation> {
-    this.assertChatEnabled();
     try {
       const conversation = await this.conversationRepository.unarchive({
         conversationId,
@@ -173,7 +167,6 @@ export class ConversationService {
     conversationId: string,
     input: unknown,
   ): Promise<ConversationMessageListResponse> {
-    this.assertChatEnabled();
     const query = conversationMessageQuerySchema.parse(input);
     await this.requireConversation(auth, conversationId);
     const result = await this.messageRepository.listByConversation({
@@ -203,7 +196,6 @@ export class ConversationService {
     conversationId: string,
     input: ConversationSendMessageRequest,
   ): Promise<ConversationSendMessageResponse> {
-    this.assertChatEnabled();
     const parsed = conversationSendMessageRequestSchema.parse(input);
     if (parsed.content.length > this.options.config.CHAT_MESSAGE_MAX_CHARS) {
       throw new ConversationServiceError('CONVERSATION_MESSAGE_TOO_LARGE', 422, {
@@ -528,14 +520,6 @@ export class ConversationService {
       trace_id: auth.request_id,
       payload,
     });
-  }
-
-  private assertChatEnabled(): void {
-    if (!this.options.config.CHAT_ENABLED) {
-      throw new ConversationServiceError('DOWNSTREAM_UNAVAILABLE', 503, {
-        feature: 'chat',
-      });
-    }
   }
 }
 

@@ -1773,37 +1773,31 @@ function createPiRuntime(input: {
   cleanup?: () => void;
 } {
   const config = loadConfig();
-  if (isProductionRuntime(config) && config.PI_AGENT_MODE !== 'model_gateway') {
-    throw new Error('PI_AGENT_MODE=model_gateway is required in production');
+  const target = input.executionPlan.resolved_model_policy.resolved_targets[0];
+  if (!target) {
+    throw new Error(
+      `ModelPolicy has no executable targets: ${input.executionPlan.model_policy_id}@${input.executionPlan.model_policy_version}`,
+    );
   }
-  if (config.PI_AGENT_MODE === 'model_gateway') {
-    const target = input.executionPlan.resolved_model_policy.resolved_targets[0];
-    if (!target) {
-      throw new Error(
-        `ModelPolicy has no executable targets: ${input.executionPlan.model_policy_id}@${input.executionPlan.model_policy_version}`,
-      );
-    }
-    return {
-      model: createModelGatewayModel(target),
-      streamFn: createModelGatewayPiStream({
-        db: input.db,
-        credentialMasterKey: config.MODEL_CREDENTIAL_MASTER_KEY,
-        clientCacheTtlMs: config.MODEL_GATEWAY_CLIENT_CACHE_TTL_MS,
-        executionPlan: input.executionPlan,
-        agentRun: input.agentRun,
-        segmentIndex: input.segmentIndex,
-        timeoutMs: config.MODEL_GATEWAY_TIMEOUT_MS,
-        maxRetries: config.MODEL_GATEWAY_MAX_RETRIES,
-        maxResponseBytes: config.MODEL_GATEWAY_MAX_RESPONSE_BYTES,
-        maxLedgerResponseBytes: config.MODEL_CALL_LEDGER_MAX_RESPONSE_BYTES,
-        allowInsecureHttp: config.MODEL_GATEWAY_ALLOW_INSECURE_HTTP,
-        idempotencyHeader: config.MODEL_GATEWAY_IDEMPOTENCY_HEADER,
-        userAgent: config.MODEL_GATEWAY_USER_AGENT,
-        ...(input.allowedModelIds ? { allowedModelIds: input.allowedModelIds } : {}),
-      }),
-    };
-  }
-  throw new Error('PI_AGENT_MODE must be model_gateway; app-local deterministic Pi is not available');
+  return {
+    model: createModelGatewayModel(target),
+    streamFn: createModelGatewayPiStream({
+      db: input.db,
+      credentialMasterKey: config.MODEL_CREDENTIAL_MASTER_KEY,
+      clientCacheTtlMs: config.MODEL_GATEWAY_CLIENT_CACHE_TTL_MS,
+      executionPlan: input.executionPlan,
+      agentRun: input.agentRun,
+      segmentIndex: input.segmentIndex,
+      timeoutMs: config.MODEL_GATEWAY_TIMEOUT_MS,
+      maxRetries: config.MODEL_GATEWAY_MAX_RETRIES,
+      maxResponseBytes: config.MODEL_GATEWAY_MAX_RESPONSE_BYTES,
+      maxLedgerResponseBytes: config.MODEL_CALL_LEDGER_MAX_RESPONSE_BYTES,
+      allowInsecureHttp: config.MODEL_GATEWAY_ALLOW_INSECURE_HTTP,
+      idempotencyHeader: config.MODEL_GATEWAY_IDEMPOTENCY_HEADER,
+      userAgent: config.MODEL_GATEWAY_USER_AGENT,
+      ...(input.allowedModelIds ? { allowedModelIds: input.allowedModelIds } : {}),
+    }),
+  };
 }
 
 function decisionSummaryForSegment(segmentResult: PiSegmentResult): string {

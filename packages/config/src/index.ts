@@ -90,11 +90,6 @@ export const runtimeConfigSchema = z.object({
   MODEL_GATEWAY_ALLOW_INSECURE_HTTP: booleanEnvSchema(true),
   MODEL_GATEWAY_IDEMPOTENCY_HEADER: stringSchema('Idempotency-Key'),
   MODEL_GATEWAY_USER_AGENT: stringSchema('durable-agent-runtime-lite/runtime-worker'),
-  PI_AGENT_MODE: z.preprocess(
-    emptyToUndefined,
-    z.enum(['disabled', 'deterministic', 'model_gateway']).default('disabled'),
-  ),
-  CHAT_ENABLED: booleanEnvSchema(false),
   CHAT_CONTEXT_MAX_MESSAGES: positiveIntSchema(20),
   CHAT_CONTEXT_MAX_BYTES: positiveIntSchema(32_768),
   CHAT_MESSAGE_MAX_CHARS: positiveIntSchema(8_000),

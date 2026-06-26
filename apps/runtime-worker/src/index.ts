@@ -58,7 +58,7 @@ export function buildServer(
         evaluation_worker_enabled: config.EVALUATION_WORKER_ENABLED,
         evaluation_task_queue: config.EVALUATION_TASK_QUEUE,
         evaluation_worker_status: worker.evaluationState?.status ?? 'disabled',
-        pi_agent_mode: config.PI_AGENT_MODE,
+        pi_agent_mode: 'model_gateway',
         pi_agent: piReady.status,
         ...(worker.state.error ? { worker_error: worker.state.error } : {}),
         ...(worker.evaluationState?.error ? { evaluation_worker_error: worker.evaluationState.error } : {}),
@@ -107,27 +107,17 @@ export async function start(): Promise<void> {
 
 function piReadiness(config: RuntimeConfig): { ready: boolean; status: string; error?: string } {
   const production = config.NODE_ENV === 'production' || config.APP_ENV === 'production';
-  if (production && config.PI_AGENT_MODE !== 'model_gateway') {
+  try {
+    parseModelCredentialMasterKey(config.MODEL_CREDENTIAL_MASTER_KEY);
+  } catch {
     return {
       ready: false,
       status: 'not_ready',
-      error: 'PI_AGENT_MODE=model_gateway is required in production',
+      error: 'MODEL_CREDENTIAL_MASTER_KEY must be a base64 encoded 32-byte key',
     };
-  }
-  if (config.PI_AGENT_MODE === 'model_gateway') {
-    try {
-      parseModelCredentialMasterKey(config.MODEL_CREDENTIAL_MASTER_KEY);
-    } catch {
-      return {
-        ready: false,
-        status: 'not_ready',
-        error: 'MODEL_CREDENTIAL_MASTER_KEY must be a base64 encoded 32-byte key',
-      };
-    }
   }
   if (
     production &&
-    config.PI_AGENT_MODE === 'model_gateway' &&
     config.MODEL_GATEWAY_ALLOW_INSECURE_HTTP
   ) {
     return {
@@ -136,7 +126,7 @@ function piReadiness(config: RuntimeConfig): { ready: boolean; status: string; e
       error: 'Production Model Gateway must not allow insecure HTTP',
     };
   }
-  return { ready: true, status: config.PI_AGENT_MODE };
+  return { ready: true, status: 'model_gateway' };
 }
 
 const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;

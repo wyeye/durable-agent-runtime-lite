@@ -137,4 +137,4 @@ corepack pnpm dar smoke suite ui
 
 UI smoke 需要 control-plane、runtime-api、runtime-worker、tool-gateway、PostgreSQL、Temporal 已运行。它会在浏览器中设置开发身份，验证页面渲染，创建并发布 Registry 资源和 Model Catalog 资源，执行 router preview、rollback，并通过 Human Task 页面 approve 一个 L3 pending task。
 
-Evaluation UI smoke 还需要 mock-server 和 `PI_AGENT_MODE=model_gateway` 的 runtime-worker。它通过浏览器完成 Dataset/Case、Gate Policy、Run、Gate Decision、Registry Gate Card 和 Override/RBAC 操作；setup 只准备 UI 当前不负责创建的 immutable candidate snapshot / execution plan。当前可写配置 smoke 不应驱动 `json-editor-textarea`。
+Evaluation UI smoke 还需要 mock-server 和接入模型网关链路的 runtime-worker。它通过浏览器完成 Dataset/Case、Gate Policy、Run、Gate Decision、Registry Gate Card 和 Override/RBAC 操作；setup 只准备 UI 当前不负责创建的 immutable candidate snapshot / execution plan。当前可写配置 smoke 不应驱动 `json-editor-textarea`。

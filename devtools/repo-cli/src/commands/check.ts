@@ -142,11 +142,8 @@ async function checkMocks(): Promise<void> {
   if (!piCompose.includes('mock-server')) {
     failures.push('pi smoke compose must include mock-server');
   }
-  if (/PI_AGENT_MODE:\s*\$\{PI_AGENT_MODE:-deterministic\}/u.test(piCompose)) {
-    failures.push('pi smoke compose must default to PI_AGENT_MODE=model_gateway');
-  }
   const integration = await readTextIfExists('.github/workflows/integration.yml');
-  if (/PI_AGENT_MODE:\s*deterministic/u.test(integration) || /deterministic smoke/u.test(integration)) {
+  if (/PI_SMOKE_MODE:\s*deterministic/u.test(integration) || /deterministic smoke/u.test(integration)) {
     failures.push('integration workflow must not use deterministic app mode');
   }
   const rootPackage = await readTextIfExists('package.json');

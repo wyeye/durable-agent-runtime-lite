@@ -51,7 +51,7 @@ Deferred Pi tools 只能产生 proposal，不得持有 Tool Gateway、DB、Tempo
 ## AR-1.1 运行时要求
 
 - 每个 AgentRun 必须使用不可变 `agent_execution_plan_ref` 和 plan hash。
-- `PI_AGENT_MODE=model_gateway` 时，模型调用必须从 AgentExecutionPlan 的 `resolved_model_policy.targets[].model_ref` 出发，经 DB 精确解析 ModelDefinition 和 ModelGatewayProfile；不得回退到部署级 `MODEL_GATEWAY_BASE_URL` / `MODEL_GATEWAY_API_KEY`。
+- Pi 运行时固定通过 `model_gateway`；模型调用必须从 AgentExecutionPlan 的 `resolved_model_policy.targets[].model_ref` 出发，经 DB 精确解析 ModelDefinition 和 ModelGatewayProfile；不得回退到部署级 `MODEL_GATEWAY_BASE_URL` / `MODEL_GATEWAY_API_KEY`。
 - Client cache key 必须包含 `profile_id`、`config_hash` 和 `credential_revision`；凭据轮换后下一次调用自动使用新 credential revision。
 - ModelCall / Attempt ledger 必须记录 gateway profile、profile config hash、credential fingerprint/revision、model id/version/hash、upstream model id 和 provider，不得记录 API Key、Authorization、ciphertext、IV、auth tag 或 raw provider response。
 - Segment 之间必须累计 `AgentBudgetLedger`。
@@ -59,7 +59,7 @@ Deferred Pi tools 只能产生 proposal，不得持有 Tool Gateway、DB、Tempo
 - Context Snapshot 使用执行计划的 `max_context_bytes`。
 - Continue-As-New 只允许在工具/人审/用户输入/handoff 边界完全处理并持久化 snapshot 后执行。
 - `handoff_to_workflow` 只能启动 allowed handoff 中的精确 `ConfigDrivenWorkflow` child。
-- production 只允许 `PI_AGENT_MODE=model_gateway`；deterministic stream 仅限 development/test。
+- production 固定使用 `model_gateway`；deterministic stream 仅限 development/test。
 
 ## 测试要求
 

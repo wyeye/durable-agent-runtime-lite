@@ -10,7 +10,7 @@
 - Running workflow 不受新发布 FlowSpec 影响。
 - DB、HTTP、LLM、Pi、tool call 都在 Activity 或 service adapter 中执行。
 - 大文档、长 prompt、大 tool result 和附件不进入 Temporal history，只保存引用。
-- `PI_AGENT_MODE=model_gateway` 是生产要求。
-- `PI_AGENT_MODE=deterministic` 仅允许测试支持代码，不作为生产 app 内外部响应生成器。
+- `runtime-worker` 内建使用 `model_gateway` 驱动 Pi。
+- deterministic Pi 仅允许测试支持代码，不作为生产 app 内外部响应生成器。
 
 Model call ledger 记录 provider、model、gateway profile、credential fingerprint/revision、response id、attempt 和 fallback index。Replay fixture 由 `pnpm dar replay export` 导出，并由 `pnpm dar replay test` 验证 deterministic workflow compatibility。

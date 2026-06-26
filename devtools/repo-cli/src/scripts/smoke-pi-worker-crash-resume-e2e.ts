@@ -166,7 +166,6 @@ const runtimeHeaders = authHeaders(`${requestPrefix}_runtime`);
 const repoRoot = fileURLToPath(new URL('../../../..', import.meta.url));
 const resultFile = process.env.PI_CRASH_RESULT_FILE;
 const dockerCommandTimeoutMs = Number(process.env.PI_CRASH_DOCKER_COMMAND_TIMEOUT_MS ?? 120_000);
-const workerPiAgentMode = process.env.PI_AGENT_MODE ?? process.env.PI_SMOKE_MODE ?? 'deterministic';
 let workerRestartNeeded = false;
 
 async function main(): Promise<void> {
@@ -1109,7 +1108,7 @@ async function runCommand(
     const child = spawn(command, args, {
       cwd: repoRoot,
       stdio: options.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, PI_AGENT_MODE: workerPiAgentMode },
+      env: process.env,
     });
     const timeout =
       options.timeoutMs && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0

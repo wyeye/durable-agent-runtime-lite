@@ -8,7 +8,7 @@
 
 Production readiness 必须 fail closed：
 
-- runtime-worker production 只允许 `PI_AGENT_MODE=model_gateway`。
+- runtime-worker production 固定使用 `model_gateway`。
 - runtime-api production 不回退 memory route/sample flow。
 - tool-gateway production 不回退 memory registry/mock facts。
 - mock-server 不在 production compose。

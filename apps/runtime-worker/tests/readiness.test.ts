@@ -118,26 +118,6 @@ describe('runtime-worker readiness', () => {
     await notReadyServer.close();
   });
 
-  it('reports not_ready when production Pi mode is deterministic', async () => {
-    const server = buildServer({
-      mode: 'temporal',
-      state: { status: 'running', ready: true },
-    }, { ...config(), NODE_ENV: 'production', APP_ENV: 'production', PI_AGENT_MODE: 'deterministic' });
-
-    const response = await server.inject({ method: 'GET', url: '/readyz' });
-    expect(response.statusCode).toBe(503);
-    expect(response.json()).toMatchObject({
-      status: 'not_ready',
-      checks: {
-        pi_agent_mode: 'deterministic',
-        pi_agent: 'not_ready',
-        pi_error: 'PI_AGENT_MODE=model_gateway is required in production',
-      },
-    });
-
-    await server.close();
-  });
-
   it('reports not_ready when production Model Gateway uses an invalid credential master key', async () => {
     const server = buildServer({
       mode: 'temporal',
@@ -146,7 +126,6 @@ describe('runtime-worker readiness', () => {
       ...config(),
       NODE_ENV: 'production',
       APP_ENV: 'production',
-      PI_AGENT_MODE: 'model_gateway',
       MODEL_CREDENTIAL_MASTER_KEY: 'not-base64',
       MODEL_GATEWAY_ALLOW_INSECURE_HTTP: false,
     });
@@ -173,7 +152,6 @@ describe('runtime-worker readiness', () => {
       ...config(),
       NODE_ENV: 'production',
       APP_ENV: 'production',
-      PI_AGENT_MODE: 'model_gateway',
       MODEL_GATEWAY_ALLOW_INSECURE_HTTP: true,
     });
 
@@ -215,7 +193,6 @@ function config(): RuntimeConfig {
     MODEL_GATEWAY_ALLOW_INSECURE_HTTP: true,
     MODEL_GATEWAY_IDEMPOTENCY_HEADER: 'Idempotency-Key',
     MODEL_GATEWAY_USER_AGENT: 'durable-agent-runtime-lite/runtime-worker',
-    PI_AGENT_MODE: 'disabled',
     PI_CONTEXT_MAX_BYTES: 262_144,
     PI_SEGMENT_TIMEOUT_MS: 120_000,
     PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW: 20,
