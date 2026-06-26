@@ -25,6 +25,7 @@
 ## Reference
 
 - [Configuration Contracts And Errors](reference/configuration-contracts-and-errors.md)
+- [Configuration Variables](reference/configuration-variables.md)
 - [Technology Stack](reference/technology-stack.md)
 
 ## Project

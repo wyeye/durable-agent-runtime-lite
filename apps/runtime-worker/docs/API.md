@@ -189,4 +189,4 @@ are stored on the corresponding AgentStep.
 - `PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW`：safe-boundary Continue-As-New threshold。
 - `MODEL_GATEWAY_MODE=disabled|mock|openai_compatible`：production model_gateway mode requires `openai_compatible`。
 - `MODEL_GATEWAY_PROTOCOL=dar_generate|openai_chat_completions`：production model_gateway mode requires `openai_chat_completions`。
-- `MODEL_GATEWAY_BASE_URL` / `MODEL_GATEWAY_API_KEY` / `MODEL_GATEWAY_MODEL`：model_gateway mode。
+- `MODEL_GATEWAY_BASE_URL` / `MODEL_GATEWAY_API_KEY`：model_gateway mode。

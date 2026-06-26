@@ -7,7 +7,7 @@ Model Gateway 事实源是 DB-backed catalog：
 - `model_policy` target 选择已发布 `model_ref`。
 - `runtime-worker` 在 AgentRun 时解析当前 profile、model 和凭据。
 
-生产模型调用不得回退到部署级 `MODEL_GATEWAY_BASE_URL`、`MODEL_GATEWAY_API_KEY`、`MODEL_GATEWAY_MODEL` 或默认/latest 模型。
+生产模型调用不得回退到部署级 `MODEL_GATEWAY_BASE_URL`、`MODEL_GATEWAY_API_KEY` 或默认/latest 模型。
 
 Routing 使用 rule match、vector recall、Top-K LLM/Pi classification 和 policy fallback 的混合方向。低置信路由不得静默执行高风险 flow，必须 clarification、fallback 或 escalation。
 

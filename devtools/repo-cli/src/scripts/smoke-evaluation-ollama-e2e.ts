@@ -879,7 +879,6 @@ async function assertWorkerUsesOllamaEvaluationWorker(): Promise<void> {
   const body = await response.json() as {
     checks?: {
       pi_agent_mode?: string;
-      model_gateway_profile?: string;
       evaluation_worker_enabled?: boolean;
       evaluation_worker_status?: string;
       evaluation_task_queue?: string;
@@ -887,7 +886,6 @@ async function assertWorkerUsesOllamaEvaluationWorker(): Promise<void> {
     };
   };
   assert.equal(body.checks?.pi_agent_mode, 'model_gateway', 'runtime-worker must use model_gateway Pi mode');
-  assert.equal(body.checks?.model_gateway_profile, provider, 'runtime-worker must use local-ollama profile');
   assert.equal(body.checks?.evaluation_worker_enabled, true, 'evaluation worker must be enabled');
   assert.equal(body.checks?.evaluation_worker_status, 'running', 'evaluation worker must be running');
   assert.ok(body.checks?.evaluation_task_queue && body.checks.task_queues?.includes(body.checks.evaluation_task_queue), 'evaluation task queue must be polled');

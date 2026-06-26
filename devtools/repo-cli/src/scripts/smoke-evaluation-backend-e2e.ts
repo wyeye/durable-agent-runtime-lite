@@ -47,7 +47,6 @@ import {
 } from '@dar/db';
 import {
   LOCAL_OLLAMA_MODEL_ID,
-  applySmokeModelGatewayReadiness,
   ensureModelCatalogEntry,
   localMockModelCatalogEntryInput,
   localOllamaModelCatalogEntryInput,
@@ -134,7 +133,6 @@ const artifactDir = process.env.EVALUATION_SMOKE_ARTIFACT_DIR
   ? process.env.EVALUATION_SMOKE_ARTIFACT_DIR
   : join(repoRoot, 'artifacts/evaluation-backend-e2e');
 let modelGatewayProfile = process.env.EVALUATION_SMOKE_MODEL_PROVIDER ?? 'local-mock';
-let modelGatewayModel = process.env.EVALUATION_SMOKE_MODEL_ID ?? 'dar-local-model';
 let modelGatewayBaseUrl = process.env.MODEL_GATEWAY_BASE_URL ?? 'http://mock-server:4100';
 
 const adminHeaders = authHeaders('platform_admin', `${requestPrefix}_admin`);
@@ -815,7 +813,7 @@ async function seedTenantPolicy(db: Db): Promise<TenantRuntimePolicy> {
     ],
     denied_tools: [],
     allowed_models: [
-      { model_id: modelGatewayModel },
+      { model_id: selectedEvaluationSmokeModelId() },
       { model_id: 'final_only' },
       { model_id: 'readonly_tool' },
       { model_id: 'model_gateway:final_only' },
@@ -874,6 +872,7 @@ async function seedTools(
 
 async function seedModelPolicy(db: Db, modelPolicyId: string, status: 'published' | 'validated'): Promise<ModelPolicy> {
   const repository = new ModelPolicyRepository(db);
+  const modelGatewayModel = selectedEvaluationSmokeModelId();
   const catalog = await ensureModelCatalogEntry(
     db,
     modelGatewayProfile === 'local-mock' && modelGatewayModel === 'dar-local-model'
@@ -1542,26 +1541,12 @@ async function assertWorkerUsesModelGateway(): Promise<void> {
   const body = await response.json() as {
     checks?: {
       pi_agent_mode?: string;
-      model_gateway_profile?: string;
-      model_gateway_model?: string;
       evaluation_worker_enabled?: boolean;
       evaluation_worker_status?: string;
       evaluation_task_queue?: string;
       task_queues?: string[];
     };
   };
-  ({
-    profile: modelGatewayProfile,
-    model: modelGatewayModel,
-    baseUrl: modelGatewayBaseUrl,
-  } = applySmokeModelGatewayReadiness(
-    {
-      profile: modelGatewayProfile,
-      model: modelGatewayModel,
-      baseUrl: modelGatewayBaseUrl,
-    },
-    body.checks,
-  ));
   assert.equal(body.checks?.pi_agent_mode, 'model_gateway', 'Evaluation backend smoke requires runtime-worker PI_AGENT_MODE=model_gateway');
   assert.equal(
     body.checks?.evaluation_worker_enabled,
@@ -1686,6 +1671,13 @@ function scenarioFromEnv(): Scenario {
 
 function usesOllamaModelGateway(): boolean {
   return modelGatewayProfile === 'local-ollama';
+}
+
+function selectedEvaluationSmokeModelId(): string {
+  if (modelGatewayProfile === 'local-ollama') {
+    return LOCAL_OLLAMA_MODEL_ID;
+  }
+  return 'dar-local-model';
 }
 
 function trimTrailingSlash(value: string): string {

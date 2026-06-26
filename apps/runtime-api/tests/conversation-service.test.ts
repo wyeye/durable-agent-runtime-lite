@@ -330,7 +330,6 @@ function testConfig(): RuntimeConfig {
     TEMPORAL_NAMESPACE: 'default',
     MODEL_GATEWAY_BASE_URL: 'http://localhost:4100',
     MODEL_GATEWAY_API_KEY: 'test',
-    MODEL_GATEWAY_MODEL: 'test',
     MODEL_GATEWAY_MODE: 'disabled',
     MODEL_GATEWAY_PROTOCOL: 'dar_generate',
     MODEL_GATEWAY_TIMEOUT_MS: 30_000,

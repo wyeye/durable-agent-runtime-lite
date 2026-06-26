@@ -44,7 +44,6 @@ const tenantId =
   process.env.SMOKE_TENANT_ID ??
   (mode === 'model_gateway' ? `pi_smoke_${scenario}_${runId}` : 'default');
 const userId = process.env.SMOKE_USER_ID ?? 'pi_smoke_user';
-const modelGatewayModel = process.env.MODEL_GATEWAY_MODEL ?? 'dar-local-model';
 const modelGatewayProvider = process.env.MODEL_GATEWAY_PROVIDER ?? 'local-mock';
 const modelGatewayBaseUrl = process.env.MODEL_GATEWAY_BASE_URL ?? 'http://mock-server:4100';
 const requestId = `pi_smoke_${scenario}_${Date.now()}`;
@@ -132,6 +131,7 @@ async function seedAgentPlan(db: ReturnType<typeof createDb>): Promise<string> {
     mode === 'model_gateway'
       ? `model_gateway:${scenario}`
       : `deterministic:${deterministicScenario(scenario)}`;
+  const modelGatewayModel = selectedModelGatewayModelId();
   const modelPolicyId =
     mode === 'model_gateway'
       ? `pi_smoke_model_${scenario}_${mode}_${safeId(modelGatewayProvider)}_${hashJson(modelGatewayModel).slice(0, 8)}`
@@ -309,6 +309,7 @@ async function seedModelPolicy(
 }
 
 function modelCatalogInput(displayPolicy: string): EnsureModelCatalogEntryInput {
+  const modelGatewayModel = selectedModelGatewayModelId();
   if (mode === 'model_gateway' && modelGatewayProvider === 'local-mock' && modelGatewayModel === 'dar-local-model') {
     return localMockModelCatalogEntryInput('pi-smoke');
   }
@@ -330,6 +331,13 @@ function modelCatalogInput(displayPolicy: string): EnsureModelCatalogEntryInput 
     capabilities: ['text', 'tools', 'usage'],
     operatorId: 'pi-smoke',
   };
+}
+
+function selectedModelGatewayModelId(): string {
+  if (modelGatewayProvider === 'local-ollama') {
+    return LOCAL_OLLAMA_MODEL_ID;
+  }
+  return 'dar-local-model';
 }
 
 async function seedTools(db: ReturnType<typeof createDb>) {

@@ -60,8 +60,6 @@ export function buildServer(
         evaluation_worker_status: worker.evaluationState?.status ?? 'disabled',
         pi_agent_mode: config.PI_AGENT_MODE,
         pi_agent: piReady.status,
-        model_gateway_config_source: config.MODEL_GATEWAY_CONFIG_SOURCE,
-        ...(config.PI_AGENT_MODE === 'model_gateway' ? { model_gateway_profile: config.MODEL_GATEWAY_PROFILE_ID } : {}),
         ...(worker.state.error ? { worker_error: worker.state.error } : {}),
         ...(worker.evaluationState?.error ? { evaluation_worker_error: worker.evaluationState.error } : {}),
         ...(piReady.error ? { pi_error: piReady.error } : {}),

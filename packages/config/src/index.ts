@@ -67,12 +67,6 @@ export const runtimeConfigSchema = z.object({
   TEMPORAL_NAMESPACE: stringSchema('default'),
   MODEL_GATEWAY_BASE_URL: urlSchema('http://localhost:4100'),
   MODEL_GATEWAY_API_KEY: stringSchema('dev-only-placeholder'),
-  MODEL_GATEWAY_MODEL: stringSchema('dar-local-model'),
-  MODEL_GATEWAY_PROFILE_ID: stringSchema('local-dev'),
-  MODEL_GATEWAY_CONFIG_SOURCE: z.preprocess(
-    emptyToUndefined,
-    z.enum(['db']).default('db'),
-  ),
   MODEL_CREDENTIAL_MASTER_KEY: stringSchema('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='),
   MODEL_GATEWAY_CLIENT_CACHE_TTL_MS: z.preprocess(
     emptyToUndefined,

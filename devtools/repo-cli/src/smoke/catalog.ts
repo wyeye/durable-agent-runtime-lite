@@ -296,7 +296,6 @@ export const smokeCatalog: SmokeScenario[] = [
       PI_SMOKE_MODE: 'model_gateway',
       MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions',
       MODEL_GATEWAY_PROVIDER: 'local-ollama',
-      MODEL_GATEWAY_MODEL: 'qwen2.5:7b-instruct-q4_K_M',
     },
   },
   {
@@ -311,7 +310,6 @@ export const smokeCatalog: SmokeScenario[] = [
       PI_SMOKE_MODE: 'model_gateway',
       MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions',
       MODEL_GATEWAY_PROVIDER: 'local-ollama',
-      MODEL_GATEWAY_MODEL: 'qwen2.5:7b-instruct-q4_K_M',
     },
   },
   {
@@ -326,7 +324,6 @@ export const smokeCatalog: SmokeScenario[] = [
       PI_SMOKE_MODE: 'model_gateway',
       MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions',
       MODEL_GATEWAY_PROVIDER: 'local-ollama',
-      MODEL_GATEWAY_MODEL: 'qwen2.5:7b-instruct-q4_K_M',
     },
   },
   {

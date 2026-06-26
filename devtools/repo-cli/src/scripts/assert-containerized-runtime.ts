@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { LOCAL_OLLAMA_MODEL_ID } from './model-catalog-seed.js';
 
 const expectedSha = process.env.BUILD_SHA ?? await commandOutput('git', ['rev-parse', 'HEAD']);
 const services = [
@@ -50,8 +51,6 @@ async function main(): Promise<void> {
   assertEnv(workerEnv, 'PI_AGENT_MODE', 'model_gateway');
   assertEnv(workerEnv, 'MODEL_GATEWAY_MODE', 'openai_compatible');
   assertEnv(workerEnv, 'MODEL_GATEWAY_PROTOCOL', 'openai_chat_completions');
-  assertEnv(workerEnv, 'MODEL_GATEWAY_PROFILE_ID', 'local-ollama');
-  assertEnv(workerEnv, 'MODEL_GATEWAY_MODEL', 'qwen2.5:7b-instruct-q4_K_M');
   assert.equal(workerEnv.MODEL_GATEWAY_BASE_URL, 'http://host.docker.internal:11434/v1');
 
   const logs = await dockerLogs(services.map((target) => target.container));
@@ -65,8 +64,8 @@ async function main(): Promise<void> {
       pi_agent_mode: workerEnv.PI_AGENT_MODE,
       model_gateway_mode: workerEnv.MODEL_GATEWAY_MODE,
       model_gateway_protocol: workerEnv.MODEL_GATEWAY_PROTOCOL,
-      model_gateway_profile_id: workerEnv.MODEL_GATEWAY_PROFILE_ID,
-      model_gateway_model: workerEnv.MODEL_GATEWAY_MODEL,
+      model_gateway_provider: 'local-ollama',
+      model_gateway_model: LOCAL_OLLAMA_MODEL_ID,
       model_gateway_base_url: workerEnv.MODEL_GATEWAY_BASE_URL,
     },
     mock_server_running: false,
