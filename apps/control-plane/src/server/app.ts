@@ -194,7 +194,7 @@ function validateControlPlaneConfig(config: RuntimeConfig): void {
   if (isProduction && !config.RUNTIME_API_URL) {
     throw new Error('RUNTIME_API_URL is required in production');
   }
-  if (isProduction && !config.TOOL_GATEWAY_URL && !config.TOOL_GATEWAY_BASE_URL) {
+  if (isProduction && !config.TOOL_GATEWAY_URL) {
     throw new Error('TOOL_GATEWAY_URL is required in production');
   }
   if (isProduction && !config.CONTROL_PLANE_TOOL_GATEWAY_TOKEN) {

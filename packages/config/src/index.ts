@@ -62,23 +62,12 @@ export const runtimeConfigSchema = z.object({
   DATABASE_URL: urlSchema(
     'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime',
   ),
-  VALKEY_URL: urlSchema('redis://localhost:16380'),
   TEMPORAL_ADDRESS: stringSchema('localhost:7233'),
   TEMPORAL_NAMESPACE: stringSchema('default'),
-  MODEL_GATEWAY_BASE_URL: urlSchema('http://localhost:4100'),
-  MODEL_GATEWAY_API_KEY: stringSchema('dev-only-placeholder'),
   MODEL_CREDENTIAL_MASTER_KEY: stringSchema('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='),
   MODEL_GATEWAY_CLIENT_CACHE_TTL_MS: z.preprocess(
     emptyToUndefined,
     z.coerce.number().int().nonnegative().default(60_000),
-  ),
-  MODEL_GATEWAY_MODE: z.preprocess(
-    emptyToUndefined,
-    z.enum(['disabled', 'mock', 'openai_compatible']).default('disabled'),
-  ),
-  MODEL_GATEWAY_PROTOCOL: z.preprocess(
-    emptyToUndefined,
-    z.enum(['dar_generate', 'openai_chat_completions']).default('dar_generate'),
   ),
   MODEL_GATEWAY_TIMEOUT_MS: positiveIntSchema(30_000),
   MODEL_GATEWAY_MAX_RETRIES: z.preprocess(
@@ -93,12 +82,7 @@ export const runtimeConfigSchema = z.object({
   CHAT_CONTEXT_MAX_MESSAGES: positiveIntSchema(20),
   CHAT_CONTEXT_MAX_BYTES: positiveIntSchema(32_768),
   CHAT_MESSAGE_MAX_CHARS: positiveIntSchema(8_000),
-  CHAT_TITLE_MAX_CHARS: positiveIntSchema(100),
-  CHAT_POLL_INTERVAL_MS: positiveIntSchema(1_500),
-  PI_CONTEXT_MAX_BYTES: positiveIntSchema(262_144),
-  PI_SEGMENT_TIMEOUT_MS: positiveIntSchema(120_000),
   PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW: positiveIntSchema(20),
-  TOOL_GATEWAY_BASE_URL: optionalUrlSchema,
   TOOL_GATEWAY_URL: optionalUrlSchema,
   RUNTIME_API_URL: optionalUrlSchema,
   RUNTIME_API_AUTH_MODE: z.preprocess(
@@ -113,7 +97,6 @@ export const runtimeConfigSchema = z.object({
     emptyToUndefined,
     z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent']).default('info'),
   ),
-  OTEL_EXPORTER_OTLP_ENDPOINT: optionalUrlSchema,
   CONTROL_PLANE_PORT: portSchema(3000),
   RUNTIME_API_PORT: portSchema(3001),
   RUNTIME_WORKER_PORT: portSchema(3002),
@@ -144,16 +127,8 @@ export const runtimeConfigSchema = z.object({
     emptyToUndefined,
     z.enum(['required', 'optional']).default('optional'),
   ),
-  TENANT_POLICY_CACHE_TTL_MS: z.preprocess(
-    emptyToUndefined,
-    z.coerce.number().int().nonnegative().default(5_000),
-  ),
-  TENANT_ADMISSION_RECONCILE_ENABLED: booleanEnvSchema(false),
-  TENANT_ADMISSION_STALE_AFTER_MS: positiveIntSchema(300_000),
-  TENANT_ADMISSION_MAX_RECONCILE_BATCH: positiveIntSchema(50),
   EVALUATION_WORKER_ENABLED: booleanEnvSchema(false),
   EVALUATION_TASK_QUEUE: stringSchema('evaluation-worker-main'),
-  EVALUATION_MAX_CONCURRENT_RUNS: positiveIntSchema(1),
   EVALUATION_MAX_CONCURRENT_CASES: positiveIntSchema(2),
   EVALUATION_CASE_TIMEOUT_MS: positiveIntSchema(120_000),
   EVALUATION_GATE_MODE: z.preprocess(
@@ -162,8 +137,6 @@ export const runtimeConfigSchema = z.object({
   ),
   EVALUATION_OUTPUT_MAX_BYTES: positiveIntSchema(1_000_000),
   EVALUATION_EVIDENCE_MAX_BYTES: positiveIntSchema(2_000_000),
-  EVALUATION_REGEX_TIMEOUT_MS: positiveIntSchema(250),
-  SEED_EVALUATION_DATASETS: booleanEnvSchema(false),
   TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED: booleanEnvSchema(false),
   TOOL_GATEWAY_RUNTIME_WORKER_TOKEN: optionalStringSchema,
   TOOL_GATEWAY_CONTROL_PLANE_TOKEN: optionalStringSchema,
@@ -200,7 +173,10 @@ export interface BuildInfo {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
-  return runtimeConfigSchema.parse(env);
+  const normalizedEnv = env.TOOL_GATEWAY_URL || !env.TOOL_GATEWAY_BASE_URL
+    ? env
+    : { ...env, TOOL_GATEWAY_URL: env.TOOL_GATEWAY_BASE_URL };
+  return runtimeConfigSchema.parse(normalizedEnv);
 }
 
 export function getAppPort(app: AppName, config: RuntimeConfig): number {
@@ -223,7 +199,7 @@ export function getAppPort(app: AppName, config: RuntimeConfig): number {
 }
 
 export function getToolGatewayUrl(config: RuntimeConfig): string {
-  return config.TOOL_GATEWAY_BASE_URL ?? config.TOOL_GATEWAY_URL ?? 'http://localhost:3003';
+  return config.TOOL_GATEWAY_URL ?? 'http://localhost:3003';
 }
 
 export function getRuntimeApiUrl(config: RuntimeConfig): string {

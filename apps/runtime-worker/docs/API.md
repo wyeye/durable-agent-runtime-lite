@@ -180,9 +180,7 @@ are stored on the corresponding AgentStep.
 
 - `DATABASE_URL`：DB FlowSpec Activity 使用的 PostgreSQL URL。
 - `RUNTIME_WORKER_MODE=mock|temporal`：worker mode。
-- `TOOL_GATEWAY_URL` / `TOOL_GATEWAY_BASE_URL`：tool Activity 调用 tool-gateway。
+- `TOOL_GATEWAY_URL`：tool Activity 调用 tool-gateway。兼容旧环境时，`TOOL_GATEWAY_BASE_URL` 仍会在配置加载阶段映射到这里。
 - `TEMPORAL_ADDRESS` / `TEMPORAL_NAMESPACE`：Temporal worker 连接参数。
 - `PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW`：safe-boundary Continue-As-New threshold。
-- `MODEL_GATEWAY_MODE=disabled|mock|openai_compatible`：production model_gateway mode requires `openai_compatible`。
-- `MODEL_GATEWAY_PROTOCOL=dar_generate|openai_chat_completions`：production model_gateway mode requires `openai_chat_completions`。
-- `MODEL_GATEWAY_BASE_URL` / `MODEL_GATEWAY_API_KEY`：model_gateway mode。
+- `MODEL_GATEWAY_*` 的部署级地址与 API Key 仅用于 seed、smoke 或本地辅助脚本；生产运行时固定从 DB-backed model catalog 解析网关配置与凭据。

@@ -53,7 +53,7 @@ export const smokeCatalog: SmokeScenario[] = [
     mode: 'ci',
     timeoutMs: 180_000,
     command: script('smoke-pi-e2e.ts'),
-    env: { PI_SMOKE_SCENARIO: 'readonly_tool', PI_SMOKE_MODE: 'model_gateway', MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions' },
+    env: { PI_SMOKE_SCENARIO: 'readonly_tool', PI_SMOKE_MODE: 'model_gateway' },
   },
   {
     id: 'pi-l3',
@@ -62,7 +62,7 @@ export const smokeCatalog: SmokeScenario[] = [
     mode: 'ci',
     timeoutMs: 180_000,
     command: script('smoke-pi-e2e.ts'),
-    env: { PI_SMOKE_SCENARIO: 'l3_tool', PI_SMOKE_MODE: 'model_gateway', MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions' },
+    env: { PI_SMOKE_SCENARIO: 'l3_tool', PI_SMOKE_MODE: 'model_gateway' },
   },
   {
     id: 'pi-user-input',
@@ -71,7 +71,7 @@ export const smokeCatalog: SmokeScenario[] = [
     mode: 'ci',
     timeoutMs: 180_000,
     command: script('smoke-pi-e2e.ts'),
-    env: { PI_SMOKE_SCENARIO: 'user_input', PI_SMOKE_MODE: 'model_gateway', MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions' },
+    env: { PI_SMOKE_SCENARIO: 'user_input', PI_SMOKE_MODE: 'model_gateway' },
   },
   {
     id: 'pi-handoff',
@@ -80,7 +80,7 @@ export const smokeCatalog: SmokeScenario[] = [
     mode: 'ci',
     timeoutMs: 180_000,
     command: script('smoke-pi-e2e.ts'),
-    env: { PI_SMOKE_SCENARIO: 'handoff', PI_SMOKE_MODE: 'model_gateway', MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions' },
+    env: { PI_SMOKE_SCENARIO: 'handoff', PI_SMOKE_MODE: 'model_gateway' },
   },
   {
     id: 'pi-model-gateway',
@@ -89,7 +89,7 @@ export const smokeCatalog: SmokeScenario[] = [
     mode: 'ci',
     timeoutMs: 180_000,
     command: script('smoke-pi-e2e.ts'),
-    env: { PI_SMOKE_SCENARIO: 'model_gateway', PI_SMOKE_MODE: 'model_gateway', MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions' },
+    env: { PI_SMOKE_SCENARIO: 'model_gateway', PI_SMOKE_MODE: 'model_gateway' },
   },
   {
     id: 'pi-model-gateway-retry',
@@ -98,7 +98,7 @@ export const smokeCatalog: SmokeScenario[] = [
     mode: 'ci',
     timeoutMs: 180_000,
     command: script('smoke-pi-e2e.ts'),
-    env: { PI_SMOKE_SCENARIO: 'rate_limit_then_success', PI_SMOKE_MODE: 'model_gateway', MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions' },
+    env: { PI_SMOKE_SCENARIO: 'rate_limit_then_success', PI_SMOKE_MODE: 'model_gateway' },
   },
   {
     id: 'pi-restart-resume',
@@ -107,7 +107,7 @@ export const smokeCatalog: SmokeScenario[] = [
     mode: 'ci',
     timeoutMs: 180_000,
     command: script('smoke-pi-e2e.ts'),
-    env: { PI_SMOKE_SCENARIO: 'restart_resume', PI_SMOKE_MODE: 'model_gateway', MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions' },
+    env: { PI_SMOKE_SCENARIO: 'restart_resume', PI_SMOKE_MODE: 'model_gateway' },
   },
   {
     id: 'worker-crash-resume',
@@ -116,7 +116,7 @@ export const smokeCatalog: SmokeScenario[] = [
     mode: 'ci',
     timeoutMs: 240_000,
     command: script('smoke-pi-worker-crash-resume-e2e.ts'),
-    env: { PI_SMOKE_MODE: 'model_gateway', MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions' },
+    env: { PI_SMOKE_MODE: 'model_gateway' },
     artifacts: ['artifacts/pi-worker-crash-resume/result.json'],
   },
   {
@@ -293,7 +293,6 @@ export const smokeCatalog: SmokeScenario[] = [
     env: {
       PI_SMOKE_SCENARIO: 'model_gateway_final',
       PI_SMOKE_MODE: 'model_gateway',
-      MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions',
       MODEL_GATEWAY_PROVIDER: 'local-ollama',
     },
   },
@@ -307,7 +306,6 @@ export const smokeCatalog: SmokeScenario[] = [
     env: {
       PI_SMOKE_SCENARIO: 'readonly_tool',
       PI_SMOKE_MODE: 'model_gateway',
-      MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions',
       MODEL_GATEWAY_PROVIDER: 'local-ollama',
     },
   },
@@ -321,7 +319,6 @@ export const smokeCatalog: SmokeScenario[] = [
     env: {
       PI_SMOKE_SCENARIO: 'l3_tool',
       PI_SMOKE_MODE: 'model_gateway',
-      MODEL_GATEWAY_PROTOCOL: 'openai_chat_completions',
       MODEL_GATEWAY_PROVIDER: 'local-ollama',
     },
   },

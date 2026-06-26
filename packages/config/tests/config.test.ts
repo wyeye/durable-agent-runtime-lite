@@ -24,6 +24,11 @@ describe('runtime config', () => {
     expect(getAppPort('tool-gateway', config)).toBe(3003);
   });
 
+  it('maps legacy TOOL_GATEWAY_BASE_URL into TOOL_GATEWAY_URL', () => {
+    const config = loadConfig({ TOOL_GATEWAY_BASE_URL: 'http://legacy-tool-gateway.test' });
+    expect(getToolGatewayUrl(config)).toBe('http://legacy-tool-gateway.test');
+  });
+
   it('parses explicit boolean environment flags without truthy string fallback', () => {
     expect(loadConfig({ CONTROL_PLANE_STATIC_ENABLED: 'true' }).CONTROL_PLANE_STATIC_ENABLED).toBe(true);
     expect(loadConfig({ CONTROL_PLANE_STATIC_ENABLED: 'false' }).CONTROL_PLANE_STATIC_ENABLED).toBe(false);

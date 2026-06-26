@@ -15,7 +15,7 @@ vi.mock('@dar/config', () => ({
   getToolGatewayUrl: () => 'http://localhost:3003',
   loadConfig: () => ({
     DATABASE_URL: 'postgres://user:pass@localhost:5432/db',
-    TOOL_GATEWAY_BASE_URL: 'http://localhost:3003',
+    TOOL_GATEWAY_URL: 'http://localhost:3003',
   }),
 }));
 

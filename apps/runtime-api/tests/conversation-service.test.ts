@@ -325,13 +325,8 @@ function testConfig(): RuntimeConfig {
     BUILD_TIME: '2026-01-01T00:00:00Z',
     HOST: '0.0.0.0',
     DATABASE_URL: 'postgres://test',
-    VALKEY_URL: 'redis://test',
     TEMPORAL_ADDRESS: 'localhost:7233',
     TEMPORAL_NAMESPACE: 'default',
-    MODEL_GATEWAY_BASE_URL: 'http://localhost:4100',
-    MODEL_GATEWAY_API_KEY: 'test',
-    MODEL_GATEWAY_MODE: 'disabled',
-    MODEL_GATEWAY_PROTOCOL: 'dar_generate',
     MODEL_GATEWAY_TIMEOUT_MS: 30_000,
     MODEL_GATEWAY_MAX_RETRIES: 1,
     MODEL_GATEWAY_MAX_RESPONSE_BYTES: 1_000_000,
@@ -341,8 +336,6 @@ function testConfig(): RuntimeConfig {
     MODEL_CREDENTIAL_MASTER_KEY: '0'.repeat(64),
     MODEL_GATEWAY_CLIENT_CACHE_TTL_MS: 60_000,
     MODEL_CALL_LEDGER_MAX_RESPONSE_BYTES: 65_536,
-    PI_CONTEXT_MAX_BYTES: 262_144,
-    PI_SEGMENT_TIMEOUT_MS: 120_000,
     PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW: 20,
     RUNTIME_API_AUTH_MODE: 'header',
     JWT_ISSUER: 'http://localhost:3000',
@@ -360,8 +353,6 @@ function testConfig(): RuntimeConfig {
     CHAT_CONTEXT_MAX_MESSAGES: 20,
     CHAT_CONTEXT_MAX_BYTES: 32_768,
     CHAT_MESSAGE_MAX_CHARS: 8_000,
-    CHAT_TITLE_MAX_CHARS: 100,
-    CHAT_POLL_INTERVAL_MS: 1_500,
   } as RuntimeConfig;
 }
 

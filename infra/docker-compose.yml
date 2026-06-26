@@ -67,14 +67,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      valkey:
-        condition: service_healthy
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 3200
       DATABASE_URL: postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
-      VALKEY_URL: redis://valkey:6379
       TOOL_GATEWAY_AUTH_MODE: service_token
       TENANT_RUNTIME_POLICY_MODE: required
       TOOL_HTTP_ALLOWED_HOSTS: ${TOOL_HTTP_ALLOWED_HOSTS:-}
@@ -108,14 +105,11 @@ services:
       HOST: 0.0.0.0
       PORT: 3300
       DATABASE_URL: postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
-      VALKEY_URL: redis://valkey:6379
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
       TOOL_GATEWAY_URL: http://tool-gateway:3200
       RUNTIME_WORKER_TOOL_GATEWAY_TOKEN: ${RUNTIME_WORKER_TOOL_GATEWAY_TOKEN:-dev-only-runtime-worker-token}
       RUNTIME_WORKER_MODE: temporal
-      MODEL_GATEWAY_MODE: ${MODEL_GATEWAY_MODE:-disabled}
-      MODEL_GATEWAY_PROTOCOL: ${MODEL_GATEWAY_PROTOCOL:-dar_generate}
       MODEL_CREDENTIAL_MASTER_KEY: ${MODEL_CREDENTIAL_MASTER_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
       MODEL_GATEWAY_CLIENT_CACHE_TTL_MS: ${MODEL_GATEWAY_CLIENT_CACHE_TTL_MS:-60000}
       MODEL_GATEWAY_TIMEOUT_MS: ${MODEL_GATEWAY_TIMEOUT_MS:-30000}
@@ -124,8 +118,6 @@ services:
       MODEL_GATEWAY_ALLOW_INSECURE_HTTP: ${MODEL_GATEWAY_ALLOW_INSECURE_HTTP:-false}
       MODEL_GATEWAY_IDEMPOTENCY_HEADER: ${MODEL_GATEWAY_IDEMPOTENCY_HEADER:-Idempotency-Key}
       MODEL_GATEWAY_USER_AGENT: ${MODEL_GATEWAY_USER_AGENT:-durable-agent-runtime-lite/runtime-worker}
-      PI_CONTEXT_MAX_BYTES: ${PI_CONTEXT_MAX_BYTES:-262144}
-      PI_SEGMENT_TIMEOUT_MS: ${PI_SEGMENT_TIMEOUT_MS:-120000}
       PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW: ${PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW:-20}
       LOG_LEVEL: info
     ports:
@@ -144,8 +136,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      valkey:
-        condition: service_healthy
       temporal:
         condition: service_started
       tool-gateway:
@@ -155,7 +145,6 @@ services:
       HOST: 0.0.0.0
       PORT: 3000
       DATABASE_URL: postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
-      VALKEY_URL: redis://valkey:6379
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
       RUNTIME_API_WORKFLOW_STARTER: temporal
