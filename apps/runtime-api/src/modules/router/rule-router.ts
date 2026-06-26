@@ -96,6 +96,9 @@ function scoreRuleRoute(route: RouteSpec, input: TaskInput): number {
 
   const keywordHits = route.route.keywords.filter((keyword) => text.includes(keyword.toLowerCase())).length;
   const exampleHits = route.route.examples.filter((example) => text.includes(example.toLowerCase())).length;
+  if (keywordHits === 0 && exampleHits === 0) {
+    return 0;
+  }
 
   const keywordScore = Math.min(keywordHits * 0.65, 0.9);
   const exampleScore = Math.min(exampleHits * 0.35, 0.7);

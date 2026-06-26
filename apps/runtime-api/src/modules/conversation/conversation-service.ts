@@ -449,6 +449,7 @@ export class ConversationService {
         assistantMessageId,
         tenantId: auth.tenant_id,
         contentText: decision.question,
+        clarifyCandidates: decision.candidates.map(toClarifyOption),
       });
     }
     if (decision.decision === 'reject') {
@@ -521,6 +522,15 @@ export class ConversationService {
       payload,
     });
   }
+}
+
+function toClarifyOption(candidate: ConversationMessage['clarify_candidates'][number]): ConversationMessage['clarify_candidates'][number] {
+  return {
+    ...candidate,
+    label: candidate.route_id
+      ? `${candidate.route_id} -> ${candidate.flow_id}@${candidate.version}`
+      : `${candidate.flow_id}@${candidate.version}`,
+  };
 }
 
 function createConversationId(): string {

@@ -245,6 +245,7 @@ export interface CompleteAssistantMessageInput {
   contentText: string;
   taskRunId?: string;
   agentRunId?: string;
+  clarifyCandidates?: ConversationMessage['clarify_candidates'];
 }
 
 export interface FailAssistantMessageInput {
@@ -3806,6 +3807,7 @@ export class ConversationMessageRepository {
         reply_to_message_id: null,
         task_run_id: null,
         agent_run_id: null,
+        clarify_candidates_json: toDbJson([]),
         context_message_ids_json: toDbJson([]),
         context_hash: null,
         error_code: null,
@@ -3826,6 +3828,7 @@ export class ConversationMessageRepository {
         reply_to_message_id: input.userMessageId,
         task_run_id: null,
         agent_run_id: null,
+        clarify_candidates_json: toDbJson([]),
         context_message_ids_json: toDbJson(input.contextMessageIds),
         context_hash: input.contextHash,
         error_code: null,
@@ -3910,6 +3913,7 @@ export class ConversationMessageRepository {
         completed_at: new Date(),
         ...(input.taskRunId ? { task_run_id: input.taskRunId } : {}),
         ...(input.agentRunId ? { agent_run_id: input.agentRunId } : {}),
+        clarify_candidates_json: toDbJson(input.clarifyCandidates ?? []),
         error_code: null,
         error_message_key: null,
       })
@@ -7110,6 +7114,7 @@ function mapConversationMessage(
     reply_to_message_id: row.reply_to_message_id,
     task_run_id: row.task_run_id,
     agent_run_id: row.agent_run_id,
+    clarify_candidates: jsonArray(row.clarify_candidates_json).map((value) => conversationMessageSchema.shape.clarify_candidates.unwrap().element.parse(value)),
     context_message_ids: jsonArray(row.context_message_ids_json).filter(
       (value): value is string => typeof value === 'string' && value.length > 0,
     ),

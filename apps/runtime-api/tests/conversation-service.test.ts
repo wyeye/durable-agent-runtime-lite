@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
+  CandidateFlow,
   Conversation,
   ConversationMessage,
   RunTaskResponse,
@@ -26,6 +27,7 @@ const state = vi.hoisted(() => ({
   taskRun: undefined as TaskRun | undefined,
   taskRunByAssistantMessageId: undefined as TaskRun | undefined,
   routeResponse: undefined as RunTaskResponse | undefined,
+  completedAssistantInputs: [] as Array<Record<string, unknown>>,
   createdTaskCalls: [] as unknown[],
   audits: [] as Array<{ action: string; payload: Record<string, unknown> }>,
 }));
@@ -76,7 +78,8 @@ vi.mock('@dar/db', async (importActual) => {
         return state.linkedAssistant;
       }
 
-      async completeAssistant() {
+      async completeAssistant(input: Record<string, unknown>) {
+        state.completedAssistantInputs.push(input);
         return state.linkedAssistant ?? state.createdTurn?.assistantMessage;
       }
 
@@ -107,6 +110,84 @@ vi.mock('@dar/db', async (importActual) => {
 });
 
 describe('ConversationService.sendMessage', () => {
+  it('returns clarify candidates for immediate need_clarify responses', async () => {
+    const conversation = baseConversation();
+    const clarifyCandidates: CandidateFlow[] = [{
+      route_id: 'local_real_pi_route',
+      flow_id: 'local_real_pi_flow',
+      version: 1,
+      score: 0.82,
+      reason: 'semantic_match',
+    }];
+    const userMessage = baseMessage({
+      message_id: 'msg_user_3',
+      role: 'user',
+      status: 'completed',
+      content_text: '你好',
+      sequence_no: 1,
+      client_message_id: 'client-msg-3',
+      completed_at: '2026-01-01T00:00:00.000Z',
+    });
+    const assistantMessage = baseMessage({
+      message_id: 'msg_assistant_3',
+      role: 'assistant',
+      status: 'completed',
+      content_text: '请确认要执行的流程。',
+      sequence_no: 2,
+      reply_to_message_id: userMessage.message_id,
+      task_run_id: null,
+      client_message_id: null,
+      completed_at: '2026-01-01T00:00:00.000Z',
+      clarify_candidates: clarifyCandidates,
+    });
+
+    resetState({
+      conversation,
+      createdTurn: {
+        userMessage,
+        assistantMessage,
+      },
+      linkedAssistant: assistantMessage,
+      routeResponse: {
+        task_run_id: 'task_chat_3',
+        workflow_id: 'workflow_chat_3',
+        status: 'failed',
+        route_decision: {
+          decision: 'need_clarify',
+          question: '请确认要执行的流程。',
+          candidates: clarifyCandidates,
+        },
+      },
+    });
+
+    const service = new ConversationService({
+      db: {} as never,
+      taskService: {
+        create: vi.fn(async (input: unknown) => {
+          state.createdTaskCalls.push(input);
+          return state.routeResponse ?? baseRouteResponse();
+        }),
+      } as never,
+      config: testConfig(),
+    });
+
+    const response = await service.sendMessage(auth(), conversation.conversation_id, {
+      content: '你好',
+      client_message_id: 'client-msg-3',
+    });
+
+    expect(response.assistant_message.clarify_candidates).toEqual(clarifyCandidates);
+    expect(state.completedAssistantInputs).toContainEqual(expect.objectContaining({
+      contentText: '请确认要执行的流程。',
+      clarifyCandidates: [
+        {
+          ...clarifyCandidates[0],
+          label: 'local_real_pi_route -> local_real_pi_flow@1',
+        },
+      ],
+    }));
+  });
+
   it('returns the original turn for idempotent replay without creating a new task', async () => {
     const conversation = baseConversation();
     const userMessage = baseMessage({
@@ -303,6 +384,7 @@ function resetState(input: {
   state.taskRun = input.taskRun;
   state.taskRunByAssistantMessageId = input.taskRunByAssistantMessageId;
   state.routeResponse = input.routeResponse;
+  state.completedAssistantInputs.length = 0;
   state.createdTaskCalls.length = 0;
   state.audits.length = 0;
 }
@@ -381,6 +463,7 @@ function baseMessage(overrides: Partial<ConversationMessage>): ConversationMessa
     status: 'completed',
     content_text: 'hello',
     client_message_id: 'client-msg-1',
+    clarify_candidates: [],
     context_message_ids: [],
     context_hash: undefined,
     created_at: '2026-01-01T00:00:00.000Z',

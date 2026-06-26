@@ -1080,6 +1080,10 @@ export const candidateFlowSchema = z.object({
   matched_source_hash: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
 });
 
+export const conversationClarifyOptionSchema = candidateFlowSchema.extend({
+  label: z.string().min(1).max(200).optional(),
+});
+
 export const routeDecisionSchema = z.discriminatedUnion('decision', [
   z.object({
     decision: z.literal('matched'),
@@ -2219,6 +2223,7 @@ export type FlowSpec = z.infer<typeof flowSpecSchema>;
 export type FlowStep = z.infer<typeof flowStepSchema>;
 export type RouteSpec = z.infer<typeof routeSpecSchema>;
 export type CandidateFlow = z.infer<typeof candidateFlowSchema>;
+export type ConversationClarifyOption = z.infer<typeof conversationClarifyOptionSchema>;
 export type RouteDecision = z.infer<typeof routeDecisionSchema>;
 export type RouteResult = z.infer<typeof routeResultSchema>;
 export type AgentSpec = z.infer<typeof agentSpecSchema>;
@@ -2329,6 +2334,7 @@ export const conversationMessageSchema = z.object({
   reply_to_message_id: z.string().min(1).max(128).nullable().optional(),
   task_run_id: z.string().min(1).max(128).nullable().optional(),
   agent_run_id: z.string().min(1).max(128).nullable().optional(),
+  clarify_candidates: z.array(conversationClarifyOptionSchema).default([]),
   context_message_ids: z.array(z.string().min(1).max(128)).default([]),
   context_hash: sha256Schema.nullable().optional(),
   error_code: z.string().min(1).nullable().optional(),

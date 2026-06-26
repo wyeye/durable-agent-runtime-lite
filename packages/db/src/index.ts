@@ -124,6 +124,7 @@ export interface ConversationMessageTable {
   reply_to_message_id: string | null;
   task_run_id: string | null;
   agent_run_id: string | null;
+  clarify_candidates_json: Json;
   context_message_ids_json: Json;
   context_hash: string | null;
   error_code: string | null;

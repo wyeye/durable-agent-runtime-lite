@@ -289,6 +289,39 @@ describe('runtime-api router and task endpoints', () => {
     }
   });
 
+  it('rejects zero-hit rules instead of clarifying on priority alone', () => {
+    const result = routeByRules(
+      { input: { text: '你好', payload: {} }, channel: 'chat', allowMockFallback: false },
+      [
+        {
+          route_id: 'local_real_pi_route',
+          flow_id: 'local_real_pi_flow',
+          version: 1,
+          status: 'published',
+          route: {
+            priority: 95,
+            keywords: ['真实pi', '真实链路', 'ollama', 'local-real'],
+            examples: ['本地真实链路测试', '用 ollama 跑 pi 流程', '验证 route 到 pi'],
+            negative_examples: ['不要走真实链路', '不要调用 ollama'],
+            supported_channels: ['web', 'api', 'control-plane', 'chat'],
+            role_constraints: [],
+            confidence_threshold: 0.7,
+            ambiguous_threshold: 0.5,
+          },
+        },
+      ],
+    );
+
+    expect(result).toMatchObject({
+      decision_stage: 'reject',
+      route_decision: {
+        decision: 'reject',
+        reason: 'no_published_route_match',
+      },
+      candidates: [],
+    });
+  });
+
   it('keeps action and high-confidence rules ahead of semantic recall', async () => {
     const adapter = new FixedSemanticAdapter({
       ticket_route: 0.98,
@@ -533,9 +566,9 @@ describe('runtime-api router and task endpoints', () => {
       },
     });
     expect(defaultPreview.json().data.route_decision).toMatchObject({
-      decision: 'need_clarify',
+      decision: 'reject',
+      reason: 'no_published_route_match',
     });
-    expect(defaultPreview.json().data.route_decision.flow_id).not.toBe('sample_flow');
 
     await server.close();
   });

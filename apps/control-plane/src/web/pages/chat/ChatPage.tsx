@@ -254,7 +254,24 @@ export function ChatPage() {
                   <EmptyState description="还没有消息，发一条开始吧" />
                 ) : (
                   messages.map((messageItem) => (
-                    <MessageBubble key={messageItem.message_id} message={messageItem} />
+                    <MessageBubble
+                      key={messageItem.message_id}
+                      message={messageItem}
+                      disabled={sendDisabled}
+                      onSelectClarifyCandidate={(candidate) => {
+                        if (!selectedConversationId) {
+                          return;
+                        }
+                        sendMutation.mutate({
+                          conversationId: selectedConversationId,
+                          content: candidate.label ?? buildClarifyFollowup(candidate),
+                        }, {
+                          onError: () => {
+                            message.error('发送失败，请检查错误信息后重试。');
+                          },
+                        });
+                      }}
+                    />
                   ))
                 )}
               </div>
@@ -327,9 +344,20 @@ export function ChatPage() {
   );
 }
 
-function MessageBubble({ message }: { message: ConversationMessage }) {
+function MessageBubble(
+  {
+    message,
+    disabled,
+    onSelectClarifyCandidate,
+  }: {
+    message: ConversationMessage;
+    disabled: boolean;
+    onSelectClarifyCandidate: (candidate: ConversationMessage['clarify_candidates'][number]) => void;
+  },
+) {
   const effectiveStatus = message.effective_status ?? message.status;
   const isAssistant = message.role === 'assistant';
+  const clarifyCandidates = message.clarify_candidates ?? [];
   return (
     <div className={isAssistant ? 'cp-chat-message cp-chat-message-assistant' : 'cp-chat-message cp-chat-message-user'}>
       <div className="cp-chat-message-header">
@@ -351,7 +379,27 @@ function MessageBubble({ message }: { message: ConversationMessage }) {
               : '等待回答中...'}
           </Typography.Text>
         )}
+        {isAssistant && clarifyCandidates.length > 0 ? (
+          <Space wrap style={{ marginTop: 12 }}>
+            {clarifyCandidates.map((candidate) => (
+              <Button
+                key={`${candidate.route_id ?? candidate.flow_id}:${candidate.version}`}
+                size="small"
+                disabled={disabled}
+                onClick={() => onSelectClarifyCandidate(candidate)}
+              >
+                {candidate.label ?? buildClarifyFollowup(candidate)}
+              </Button>
+            ))}
+          </Space>
+        ) : null}
       </div>
     </div>
   );
+}
+
+function buildClarifyFollowup(candidate: ConversationMessage['clarify_candidates'][number]): string {
+  return candidate.route_id
+    ? `请执行 ${candidate.route_id} 对应的流程`
+    : `请执行 ${candidate.flow_id}@${candidate.version}`;
 }
