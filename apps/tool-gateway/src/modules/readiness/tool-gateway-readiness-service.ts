@@ -90,9 +90,6 @@ export class ToolGatewayReadinessService {
   private checkConfig(): void {
     const { config } = this.options;
     if (isProductionRuntime(config)) {
-      if (config.TOOL_GATEWAY_REGISTRY_SOURCE !== 'db') {
-        throw new Error('invalid_registry_source');
-      }
       if (config.TOOL_GATEWAY_AUTH_MODE !== 'service_token') {
         throw new Error('invalid_auth_mode');
       }
@@ -108,20 +105,14 @@ export class ToolGatewayReadinessService {
       return;
     }
     if (!this.options.db) {
-      if (this.options.config.TOOL_GATEWAY_REGISTRY_SOURCE === 'db') {
-        throw new Error('database_not_configured');
-      }
-      return;
+      throw new Error('database_not_configured');
     }
     await sql`select 1`.execute(this.options.db);
   }
 
   private async checkToolRegistry(): Promise<void> {
     if (!this.options.registry) {
-      if (this.options.config.TOOL_GATEWAY_REGISTRY_SOURCE === 'db') {
-        throw new Error('tool_registry_not_configured');
-      }
-      return;
+      throw new Error('tool_registry_not_configured');
     }
     await this.options.registry.list('__readiness__');
   }

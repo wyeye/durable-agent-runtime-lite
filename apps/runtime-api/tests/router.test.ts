@@ -213,8 +213,6 @@ const headerAuthConfig: RuntimeConfig = {
   TOOL_GATEWAY_PORT: 3003,
   RUNTIME_WORKER_MODE: 'mock',
   RUNTIME_API_WORKFLOW_STARTER: 'mock',
-  RUNTIME_API_ROUTE_SOURCE: 'memory',
-  TOOL_GATEWAY_REGISTRY_SOURCE: 'memory',
   TOOL_GATEWAY_AUTH_MODE: 'disabled',
   CONTROL_PLANE_AUTH_MODE: 'header',
   CONTROL_PLANE_SWAGGER_ENABLED: true,
@@ -781,53 +779,6 @@ describe('runtime-api router and task endpoints', () => {
     });
 
     await server.close();
-  });
-
-  it('requires DB RouteSpec source in production', () => {
-    expect(() =>
-      createRuntimeApiTaskService({
-        NODE_ENV: 'production',
-        APP_ENV: 'production',
-        APP_VERSION: '0.8.0',
-  BUILD_SHA: 'test-sha',
-  BUILD_TIME: '2026-01-01T00:00:00Z',
-        HOST: '0.0.0.0',
-        DATABASE_URL: 'postgres://dar:dar_local_password@localhost:15432/durable_agent_runtime',
-        VALKEY_URL: 'redis://localhost:16380',
-        TEMPORAL_ADDRESS: 'localhost:7233',
-        TEMPORAL_NAMESPACE: 'default',
-        MODEL_GATEWAY_BASE_URL: 'http://localhost:4100',
-        MODEL_GATEWAY_API_KEY: 'dev-only-placeholder',
-        MODEL_GATEWAY_MODE: 'disabled',
-        MODEL_GATEWAY_PROTOCOL: 'dar_generate',
-        MODEL_GATEWAY_TIMEOUT_MS: 30_000,
-        MODEL_GATEWAY_MAX_RETRIES: 1,
-        MODEL_GATEWAY_MAX_RESPONSE_BYTES: 1_000_000,
-        MODEL_GATEWAY_ALLOW_INSECURE_HTTP: true,
-        MODEL_GATEWAY_IDEMPOTENCY_HEADER: 'Idempotency-Key',
-        MODEL_GATEWAY_USER_AGENT: 'durable-agent-runtime-lite/runtime-worker',
-        PI_CONTEXT_MAX_BYTES: 262_144,
-        PI_SEGMENT_TIMEOUT_MS: 120_000,
-        PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW: 20,
-        JWT_ISSUER: 'http://localhost:3000',
-        JWT_AUDIENCE: 'durable-agent-runtime-lite',
-        LOG_LEVEL: 'info',
-        CONTROL_PLANE_PORT: 3000,
-        RUNTIME_API_PORT: 3001,
-        RUNTIME_WORKER_PORT: 3002,
-        TOOL_GATEWAY_PORT: 3003,
-        RUNTIME_WORKER_MODE: 'mock',
-        RUNTIME_API_WORKFLOW_STARTER: 'mock',
-        RUNTIME_API_ROUTE_SOURCE: 'memory',
-        TOOL_GATEWAY_REGISTRY_SOURCE: 'db',
-        RUNTIME_API_AUTH_MODE: 'header',
-        TOOL_GATEWAY_AUTH_MODE: 'service_token',
-        TOOL_GATEWAY_RUNTIME_WORKER_TOKEN: 'runtime-worker-token-for-tests',
-        TOOL_GATEWAY_CONTROL_PLANE_TOKEN: 'control-plane-token-for-tests',
-        CONTROL_PLANE_AUTH_MODE: 'header',
-        CONTROL_PLANE_SWAGGER_ENABLED: true,
-      }),
-    ).toThrow('RUNTIME_API_ROUTE_SOURCE=db is required in production');
   });
 
   it('lists, reads, approves, and rejects human tasks with tenant/user context', async () => {

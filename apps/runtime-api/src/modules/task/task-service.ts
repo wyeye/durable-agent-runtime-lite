@@ -617,60 +617,40 @@ export interface RuntimeApiTaskServiceHandle {
 }
 
 export function createRuntimeApiTaskService(config: RuntimeConfig = loadConfig()): RuntimeApiTaskServiceHandle {
-  if (isProductionRuntime(config) && config.RUNTIME_API_ROUTE_SOURCE !== 'db') {
-    throw new Error('RUNTIME_API_ROUTE_SOURCE=db is required in production');
-  }
-
-  if (config.RUNTIME_API_ROUTE_SOURCE === 'db') {
-    const db: Kysely<Database> = createDb({ databaseUrl: config.DATABASE_URL });
-    const routeSource = new DbRouteSpecSource(db);
-    const semanticRouting = createSemanticRouting(config, db);
-    return {
-      taskService: new TaskService({
-        routeSource,
-        taskStore: new DbTaskRunStore(new TaskRunRepository(db)),
-        workflowStarter: createWorkflowStarter(config),
-        executionPlanResolver: new DbExecutionPlanResolver(db),
-        agentExecutionPlanResolver: new DbAgentExecutionPlanResolver(db),
-        tenantPolicyResolver: new TenantRuntimePolicyResolver(db),
-        admissionRepository: new TenantAgentAdmissionRepository(db),
-        tenantPolicyMode: config.TENANT_RUNTIME_POLICY_MODE,
-        allowMockRouteFallback: false,
-        buildFlowSnapshotRef: buildDbFlowSnapshotRef,
-        semanticRouting,
-      }),
-      humanTaskService: new HumanTaskService({
-        store: new HumanTaskRepository(db),
-        auditStore: new AuditEventRepository(db),
-        toolCallLogStore: new ToolCallLogRepository(db),
-        ...(config.RUNTIME_API_WORKFLOW_STARTER === 'temporal'
-          ? { signalSender: new TemporalHumanTaskSignalSender(config) }
-          : {}),
-      }),
-      agentRunService: new AgentRunService(
-        new DbAgentRunStore(new AgentRunRepository(db)),
-        new DbAgentStepStore(new AgentStepRepository(db)),
-      ),
-      evaluationRunService: new EvaluationRunService({ db, config }),
-      db,
-      routeSource,
-      config,
-      close: async () => closeDb(db),
-    };
-  }
-
-  const routeSource = new MemoryRouteSpecSource();
+  const db: Kysely<Database> = createDb({ databaseUrl: config.DATABASE_URL });
+  const routeSource = new DbRouteSpecSource(db);
+  const semanticRouting = createSemanticRouting(config, db);
   return {
     taskService: new TaskService({
       routeSource,
+      taskStore: new DbTaskRunStore(new TaskRunRepository(db)),
       workflowStarter: createWorkflowStarter(config),
-      allowMockRouteFallback: true,
+      executionPlanResolver: new DbExecutionPlanResolver(db),
+      agentExecutionPlanResolver: new DbAgentExecutionPlanResolver(db),
+      tenantPolicyResolver: new TenantRuntimePolicyResolver(db),
+      admissionRepository: new TenantAgentAdmissionRepository(db),
+      tenantPolicyMode: config.TENANT_RUNTIME_POLICY_MODE,
+      allowMockRouteFallback: false,
+      buildFlowSnapshotRef: buildDbFlowSnapshotRef,
+      semanticRouting,
     }),
-    humanTaskService: new HumanTaskService(),
-    agentRunService: new AgentRunService(),
+    humanTaskService: new HumanTaskService({
+      store: new HumanTaskRepository(db),
+      auditStore: new AuditEventRepository(db),
+      toolCallLogStore: new ToolCallLogRepository(db),
+      ...(config.RUNTIME_API_WORKFLOW_STARTER === 'temporal'
+        ? { signalSender: new TemporalHumanTaskSignalSender(config) }
+        : {}),
+    }),
+    agentRunService: new AgentRunService(
+      new DbAgentRunStore(new AgentRunRepository(db)),
+      new DbAgentStepStore(new AgentStepRepository(db)),
+    ),
+    evaluationRunService: new EvaluationRunService({ db, config }),
+    db,
     routeSource,
     config,
-    close: async () => undefined,
+    close: async () => closeDb(db),
   };
 }
 
@@ -678,9 +658,6 @@ function createSemanticRouting(
   config: RuntimeConfig,
   db: Kysely<Database>,
 ): Partial<SemanticRoutingOptions> {
-  if (!config.ROUTER_SEMANTIC_ENABLED) {
-    return { enabled: false };
-  }
   if (!config.ROUTER_EMBEDDING_MODEL_ID || !config.ROUTER_EMBEDDING_MODEL_VERSION) {
     throw new Error('ROUTER_EMBEDDING_MODEL_NOT_CONFIGURED: ROUTER_EMBEDDING_MODEL_ID and ROUTER_EMBEDDING_MODEL_VERSION are required');
   }
@@ -752,8 +729,4 @@ export class DbAgentExecutionPlanResolver implements AgentExecutionPlanResolver 
       ? { executionPlanRef: plan.execution_plan_ref, executionPlanHash: plan.execution_plan_hash }
       : undefined;
   }
-}
-
-function isProductionRuntime(config: RuntimeConfig): boolean {
-  return config.NODE_ENV === 'production' || config.APP_ENV === 'production';
 }

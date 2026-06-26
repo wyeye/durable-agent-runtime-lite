@@ -71,10 +71,8 @@ describe('docker deployment files', () => {
     expect(compose.match(/BUILD_SHA: \${BUILD_SHA:-unknown}/g)?.length).toBe(4);
     expect(compose).toContain('dockerfile: apps/runtime-api/Dockerfile');
     expect(compose).toContain('dockerfile: apps/tool-gateway/Dockerfile');
-    expect(compose).toContain('RUNTIME_API_ROUTE_SOURCE: db');
     expect(compose).toContain('RUNTIME_API_WORKFLOW_STARTER: temporal');
     expect(compose).toContain('RUNTIME_WORKER_MODE: temporal');
-    expect(compose).toContain('TOOL_GATEWAY_REGISTRY_SOURCE: db');
     expect(compose).toContain('CONTROL_PLANE_AUTH_MODE: header');
     expect(compose).toContain('RUNTIME_API_URL: http://runtime-api:3000');
     expect(compose).toContain('TOOL_GATEWAY_URL: http://tool-gateway:3200');

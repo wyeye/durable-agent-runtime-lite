@@ -33,6 +33,7 @@ export interface RuntimeApiReadinessServiceOptions {
   probeTimeoutMs?: number;
   cacheTtlMs?: number;
   databaseProbe?: () => Promise<void>;
+  semanticRouterProbe?: () => Promise<void>;
   temporalProbe?: () => Promise<void>;
   tenantPolicyProbe?: () => Promise<void>;
 }
@@ -93,9 +94,6 @@ export class RuntimeApiReadinessService {
       if (config.RUNTIME_API_AUTH_MODE !== 'header') {
         throw new Error('invalid_auth_mode');
       }
-      if (config.RUNTIME_API_ROUTE_SOURCE !== 'db') {
-        throw new Error('invalid_route_source');
-      }
       if (config.RUNTIME_API_WORKFLOW_STARTER !== 'temporal') {
         throw new Error('invalid_workflow_starter');
       }
@@ -111,31 +109,26 @@ export class RuntimeApiReadinessService {
       return;
     }
     if (!this.options.db) {
-      if (this.options.config.RUNTIME_API_ROUTE_SOURCE === 'db') {
-        throw new Error('database_not_configured');
-      }
-      return;
+      throw new Error('database_not_configured');
     }
     await sql`select 1`.execute(this.options.db);
   }
 
   private async checkRouteRegistry(): Promise<void> {
     if (!this.options.routeSource) {
-      if (this.options.config.RUNTIME_API_ROUTE_SOURCE === 'db') {
-        throw new Error('route_registry_not_configured');
-      }
-      return;
+      throw new Error('route_registry_not_configured');
     }
     await this.options.routeSource.listPublished('__readiness__', '__readiness__');
   }
 
   private async checkSemanticRouter(): Promise<void> {
     const { config, db } = this.options;
-    if (!config.ROUTER_SEMANTIC_ENABLED) {
-      return;
-    }
     if (!config.ROUTER_EMBEDDING_MODEL_ID || !config.ROUTER_EMBEDDING_MODEL_VERSION) {
       throw new Error('router_embedding_model_not_configured');
+    }
+    if (this.options.semanticRouterProbe) {
+      await this.options.semanticRouterProbe();
+      return;
     }
     if (!db) {
       throw new Error('semantic_router_database_not_configured');

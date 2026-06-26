@@ -516,8 +516,8 @@ function routeSpec(routeId: string, flowId: string) {
 }
 
 function assertSemanticEnvironment(): void {
-  if ((process.env.ROUTER_SEMANTIC_ENABLED ?? '').toLowerCase() === 'false') {
-    throw new Error('HTTP readonly smoke requires semantic router enabled; use ROUTER_SEMANTIC_ENABLED=true');
+  if (!process.env.ROUTER_EMBEDDING_MODEL_ID || !process.env.ROUTER_EMBEDDING_MODEL_VERSION) {
+    throw new Error('HTTP readonly smoke requires ROUTER_EMBEDDING_MODEL_ID and ROUTER_EMBEDDING_MODEL_VERSION');
   }
 }
 

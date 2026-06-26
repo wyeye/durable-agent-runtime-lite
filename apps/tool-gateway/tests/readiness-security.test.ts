@@ -83,8 +83,6 @@ const config: RuntimeConfig = {
   TOOL_GATEWAY_PORT: 3003,
   RUNTIME_WORKER_MODE: 'temporal',
   RUNTIME_API_WORKFLOW_STARTER: 'temporal',
-  RUNTIME_API_ROUTE_SOURCE: 'db',
-  TOOL_GATEWAY_REGISTRY_SOURCE: 'db',
   TOOL_GATEWAY_AUTH_MODE: 'service_token',
   TENANT_RUNTIME_POLICY_MODE: 'required',
   TENANT_POLICY_CACHE_TTL_MS: 5000,
@@ -219,7 +217,7 @@ describe('tool-gateway debug idempotency endpoint', () => {
   });
 
   it('requires idempotency:debug permission and allows control-plane when enabled', async () => {
-    const debugConfig = { ...config, NODE_ENV: 'test' as const, APP_ENV: 'test', TOOL_GATEWAY_REGISTRY_SOURCE: 'memory' as const, TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED: true };
+    const debugConfig = { ...config, NODE_ENV: 'test' as const, APP_ENV: 'test', TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED: true };
     const server = buildServerWithReadiness(
       new ToolService({ idempotencyRepository: new FakeIdempotencyRepository() as never }),
       debugConfig,

@@ -215,11 +215,8 @@ function routeEmbeddingIndexServiceOption(
   config: RuntimeConfig,
   db: Kysely<Database>,
 ): { routeEmbeddingIndexService?: RouteEmbeddingIndexService } {
-  if (!config.ROUTER_SEMANTIC_ENABLED) {
-    return {};
-  }
   if (!config.ROUTER_EMBEDDING_MODEL_ID || !config.ROUTER_EMBEDDING_MODEL_VERSION) {
-    throw new Error('ROUTER_EMBEDDING_MODEL_ID and ROUTER_EMBEDDING_MODEL_VERSION are required when semantic routing is enabled');
+    throw new Error('ROUTER_EMBEDDING_MODEL_ID and ROUTER_EMBEDDING_MODEL_VERSION are required');
   }
   return {
     routeEmbeddingIndexService: new RouteEmbeddingIndexService(db, {

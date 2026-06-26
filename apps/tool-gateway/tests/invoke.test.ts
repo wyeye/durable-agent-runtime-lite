@@ -194,8 +194,6 @@ const productionConfig = {
   TOOL_GATEWAY_PORT: 3003,
   RUNTIME_WORKER_MODE: 'mock',
   RUNTIME_API_WORKFLOW_STARTER: 'mock',
-  RUNTIME_API_ROUTE_SOURCE: 'db',
-  TOOL_GATEWAY_REGISTRY_SOURCE: 'memory',
   PI_CONTEXT_MAX_BYTES: 262_144,
   PI_SEGMENT_TIMEOUT_MS: 120_000,
   PI_MAX_SEGMENTS_BEFORE_CONTINUE_AS_NEW: 20,
@@ -211,7 +209,6 @@ const serviceAuthConfig: RuntimeConfig = {
   ...productionConfig,
   NODE_ENV: 'test',
   APP_ENV: 'test',
-  TOOL_GATEWAY_REGISTRY_SOURCE: 'memory',
 };
 
 const runtimeWorkerHeaders = buildServiceIdentityHeaders({
@@ -1342,12 +1339,6 @@ describe('tool-gateway invoke', () => {
     expect(afterDelete.json().error.code).toBe('TOOL_NOT_FOUND');
 
     await server.close();
-  });
-
-  it('requires DB ToolManifest registry in production', () => {
-    expect(() => createToolGatewayService(productionConfig)).toThrow(
-      'TOOL_GATEWAY_REGISTRY_SOURCE=db is required in production',
-    );
   });
 
   it('requires service token for Tool Gateway operations when enabled', async () => {

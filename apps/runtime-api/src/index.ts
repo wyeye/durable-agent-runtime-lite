@@ -135,7 +135,7 @@ function getTraceId(body: unknown): string | undefined {
 }
 
 export interface RuntimeApiReadiness {
-  routeSource: 'db' | 'memory';
+  routeSource: 'db';
   workflowStarter: 'mock' | 'temporal';
 }
 
@@ -162,7 +162,7 @@ export function buildServer(
 ): FastifyInstance;
 export function buildServer(
   taskService: TaskService = new TaskService(),
-  readiness: RuntimeApiReadiness | RuntimeApiReadinessChecker = { routeSource: 'memory', workflowStarter: 'mock' },
+  readiness: RuntimeApiReadiness | RuntimeApiReadinessChecker = { routeSource: 'db', workflowStarter: 'mock' },
   third?: ConversationService | HumanTaskService,
   fourth?: HumanTaskService | AgentRunService,
   fifth?: AgentRunService | EvaluationRunService,

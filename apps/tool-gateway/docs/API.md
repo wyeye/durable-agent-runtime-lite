@@ -4,12 +4,7 @@
 
 ## Source of Truth
 
-`tool-gateway` 支持两种 ToolManifest 来源：
-
-- `TOOL_GATEWAY_REGISTRY_SOURCE=memory`：默认开发/测试模式，使用内置 mock tool manifest。
-- `TOOL_GATEWAY_REGISTRY_SOURCE=db`：从 PostgreSQL `tool_manifest` 表读取 `published` / `gray` ToolManifest。
-
-`NODE_ENV=production` 或 `APP_ENV=production` 时必须配置 `TOOL_GATEWAY_REGISTRY_SOURCE=db`，避免生产路径使用内置 mock ToolManifest。
+`tool-gateway` 固定从 PostgreSQL `tool_manifest` 表读取 `published` / `gray` ToolManifest。
 
 DB 模式不会回退到内置 `knowledge.search` 或 `record.write.mock`。未注册工具返回标准 `TOOL_NOT_FOUND`。
 
@@ -24,7 +19,6 @@ DB 模式下：
 真实 Docker smoke 使用：
 
 ```text
-TOOL_GATEWAY_REGISTRY_SOURCE=db
 TOOL_GATEWAY_AUTH_MODE=service_token
 DATABASE_URL=postgres://dar:dar_local_password@postgres:5432/durable_agent_runtime
 HOST=0.0.0.0
@@ -175,8 +169,7 @@ TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED=false
 
 ## Environment
 
-- `DATABASE_URL`：DB 模式使用的 PostgreSQL URL。
-- `TOOL_GATEWAY_REGISTRY_SOURCE=memory|db`：ToolManifest source。
+- `DATABASE_URL`：tool-gateway 使用的 PostgreSQL URL。
 - `TOOL_GATEWAY_AUTH_MODE=disabled|service_token`：service identity mode；production requires `service_token`。
 - `TOOL_GATEWAY_RUNTIME_WORKER_TOKEN`：token accepted for the `runtime-worker` service.
 - `TOOL_GATEWAY_CONTROL_PLANE_TOKEN`：token accepted for the `control-plane` service.
@@ -199,14 +192,14 @@ TOOL_GATEWAY_DEBUG_ENDPOINTS_ENABLED=false
 - Tenant Policy Snapshot store 读取；
 - service-token 配置。
 
-production 下 readiness 要求 `TOOL_GATEWAY_REGISTRY_SOURCE=db`、`TOOL_GATEWAY_AUTH_MODE=service_token`、`TENANT_RUNTIME_POLICY_MODE=required`。
+production 下 readiness 要求 `TOOL_GATEWAY_AUTH_MODE=service_token`、`TENANT_RUNTIME_POLICY_MODE=required`。
 
 ## Local DB Registry Flow
 
 ```bash
 corepack pnpm dar db migrate
 corepack pnpm dar db seed
-TOOL_GATEWAY_REGISTRY_SOURCE=db corepack pnpm --filter @dar/tool-gateway dev
+corepack pnpm --filter @dar/tool-gateway dev
 ```
 
 ## Temporal DB smoke checks

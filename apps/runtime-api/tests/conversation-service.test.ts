@@ -354,8 +354,6 @@ function testConfig(): RuntimeConfig {
     TOOL_GATEWAY_PORT: 3003,
     RUNTIME_WORKER_MODE: 'mock',
     RUNTIME_API_WORKFLOW_STARTER: 'mock',
-    RUNTIME_API_ROUTE_SOURCE: 'memory',
-    TOOL_GATEWAY_REGISTRY_SOURCE: 'memory',
     TOOL_GATEWAY_AUTH_MODE: 'disabled',
     CONTROL_PLANE_AUTH_MODE: 'header',
     CONTROL_PLANE_SWAGGER_ENABLED: true,

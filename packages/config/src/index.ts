@@ -123,11 +123,6 @@ export const runtimeConfigSchema = z.object({
     emptyToUndefined,
     z.enum(['mock', 'temporal']).default('mock'),
   ),
-  RUNTIME_API_ROUTE_SOURCE: z.preprocess(
-    emptyToUndefined,
-    z.enum(['db', 'memory']).default('memory'),
-  ),
-  ROUTER_SEMANTIC_ENABLED: booleanEnvSchema(false),
   ROUTER_EMBEDDING_MODEL_ID: optionalStringSchema,
   ROUTER_EMBEDDING_MODEL_VERSION: z.preprocess(
     emptyToUndefined,
@@ -141,10 +136,6 @@ export const runtimeConfigSchema = z.object({
   ROUTER_SEMANTIC_CLARIFY_THRESHOLD: boundedNumberSchema(0.65),
   ROUTER_SEMANTIC_MIN_MARGIN: boundedNumberSchema(0.05),
   ROUTER_EMBEDDING_TIMEOUT_MS: positiveIntSchema(10_000),
-  TOOL_GATEWAY_REGISTRY_SOURCE: z.preprocess(
-    emptyToUndefined,
-    z.enum(['db', 'memory']).default('memory'),
-  ),
   TOOL_GATEWAY_AUTH_MODE: z.preprocess(
     emptyToUndefined,
     z.enum(['service_token', 'disabled']).default('disabled'),

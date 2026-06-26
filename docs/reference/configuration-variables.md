@@ -68,8 +68,6 @@
 | `TOOL_GATEWAY_PORT` | `3003` | `tool-gateway` | tool-gateway 默认监听端口。 |
 | `RUNTIME_WORKER_MODE` | `mock` | `runtime-worker` | 控制 runtime-worker 只起 mock handle 还是连接 Temporal。 |
 | `RUNTIME_API_WORKFLOW_STARTER` | `mock` | `runtime-api` | 控制 workflow starter 走 mock 还是 Temporal client。 |
-| `RUNTIME_API_ROUTE_SOURCE` | `memory` | `runtime-api` | 路由定义从内存还是数据库读取。 |
-| `ROUTER_SEMANTIC_ENABLED` | `false` | `runtime-api` | 是否启用向量语义路由。 |
 | `ROUTER_EMBEDDING_MODEL_ID` | 空 | `runtime-api` | 路由 embedding 使用的模型 ID。 |
 | `ROUTER_EMBEDDING_MODEL_VERSION` | 空 | `runtime-api` | 路由 embedding 使用的模型版本。 |
 | `ROUTER_VECTOR_TOP_K` | `5` | `runtime-api` | 语义召回 Top-K。 |
@@ -77,7 +75,6 @@
 | `ROUTER_SEMANTIC_CLARIFY_THRESHOLD` | `0.65` | `runtime-api` | 进入 clarify 的阈值。 |
 | `ROUTER_SEMANTIC_MIN_MARGIN` | `0.05` | `runtime-api` | 第一候选与第二候选的最小分差要求。 |
 | `ROUTER_EMBEDDING_TIMEOUT_MS` | `10000` | `runtime-api` | embedding 调用超时。 |
-| `TOOL_GATEWAY_REGISTRY_SOURCE` | `memory` | `tool-gateway` | Tool Manifest 从内存还是数据库读取。 |
 | `TOOL_GATEWAY_AUTH_MODE` | `disabled` | `tool-gateway` | 是否启用服务间 token 鉴权。 |
 | `TENANT_RUNTIME_POLICY_MODE` | `optional` | `runtime-api`、`tool-gateway`、`runtime-worker` | 租户运行策略是可选还是必需。 |
 | `TENANT_POLICY_CACHE_TTL_MS` | `5000` | `runtime-api`、`tool-gateway`、`runtime-worker` | 租户策略缓存 TTL。 |
@@ -155,7 +152,7 @@
 
 - `RUNTIME_WORKER_MODE=mock|temporal` 控制 worker 是否真的连接 Temporal。
 - `RUNTIME_API_WORKFLOW_STARTER=mock|temporal` 控制 API 是返回 mock run id，还是通过 Temporal client 启动真实 workflow。
-- `RUNTIME_API_ROUTE_SOURCE` 与 `TOOL_GATEWAY_REGISTRY_SOURCE` 决定路由和工具注册信息是来自内存还是数据库。
+- `runtime-api` 固定从数据库读取已发布 RouteSpec，`tool-gateway` 固定从数据库读取已发布 ToolManifest。
 
 ### 模型、Pi 与聊天
 

@@ -371,9 +371,6 @@ export interface ToolGatewayServiceHandle {
 }
 
 export function createToolGatewayService(config: RuntimeConfig = loadConfig()): ToolGatewayServiceHandle {
-  if (isProductionRuntime(config) && config.TOOL_GATEWAY_REGISTRY_SOURCE !== 'db') {
-    throw new Error('TOOL_GATEWAY_REGISTRY_SOURCE=db is required in production');
-  }
   if (isProductionRuntime(config) && config.TOOL_GATEWAY_AUTH_MODE !== 'service_token') {
     throw new Error('TOOL_GATEWAY_AUTH_MODE=service_token is required in production');
   }
@@ -391,31 +388,24 @@ export function createToolGatewayService(config: RuntimeConfig = loadConfig()): 
     }).validateConfiguration();
   }
 
-  if (config.TOOL_GATEWAY_REGISTRY_SOURCE === 'db') {
-    const db: Kysely<Database> = createDb({ databaseUrl: config.DATABASE_URL });
-    const registry = new DbToolManifestRegistry(db);
-    const tenantPolicySnapshotStore = new TenantRuntimePolicySnapshotRepository(db);
-    return {
-      toolService: new ToolService({
-        registry,
-        auditStore: new DbAuditStore(new AuditEventRepository(db)),
-        idempotencyRepository: new IdempotencyRecordRepository(db),
-        toolCallLogStore: new ToolCallLogRepository(db),
-        humanTaskStore: new DbHumanTaskLookupStore(new HumanTaskRepository(db)),
-        tenantPolicySnapshotStore,
-        tenantPolicyMode: config.TENANT_RUNTIME_POLICY_MODE,
-        adapterDispatcher: ToolAdapterDispatcher.fromConfig(config),
-      }),
-      db,
-      registry,
-      tenantPolicySnapshotStore,
-      close: async () => closeDb(db),
-    };
-  }
-
+  const db: Kysely<Database> = createDb({ databaseUrl: config.DATABASE_URL });
+  const registry = new DbToolManifestRegistry(db);
+  const tenantPolicySnapshotStore = new TenantRuntimePolicySnapshotRepository(db);
   return {
-    toolService: new ToolService({ adapterDispatcher: ToolAdapterDispatcher.fromConfig(config) }),
-    close: async () => undefined,
+    toolService: new ToolService({
+      registry,
+      auditStore: new DbAuditStore(new AuditEventRepository(db)),
+      idempotencyRepository: new IdempotencyRecordRepository(db),
+      toolCallLogStore: new ToolCallLogRepository(db),
+      humanTaskStore: new DbHumanTaskLookupStore(new HumanTaskRepository(db)),
+      tenantPolicySnapshotStore,
+      tenantPolicyMode: config.TENANT_RUNTIME_POLICY_MODE,
+      adapterDispatcher: ToolAdapterDispatcher.fromConfig(config),
+    }),
+    db,
+    registry,
+    tenantPolicySnapshotStore,
+    close: async () => closeDb(db),
   };
 }
 

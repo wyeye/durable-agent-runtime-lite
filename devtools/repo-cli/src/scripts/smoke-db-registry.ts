@@ -18,7 +18,6 @@ async function main(): Promise<void> {
   const runtimeApi = createRuntimeApiTaskService(loadConfig({
     ...process.env,
     DATABASE_URL: databaseUrl,
-    RUNTIME_API_ROUTE_SOURCE: 'db',
     RUNTIME_API_WORKFLOW_STARTER: 'mock',
   }));
   const server = buildServer(runtimeApi.taskService);
