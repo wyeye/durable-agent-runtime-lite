@@ -197,6 +197,8 @@ export const runtimeConfigSchema = z.object({
     emptyToUndefined,
     z.enum(['header', 'disabled']).default('header'),
   ),
+  CONTROL_PLANE_LOCAL_DEV_LOGIN_ENABLED: booleanEnvSchema(false),
+  CONTROL_PLANE_LOCAL_DEV_PASSWORD: optionalStringSchema,
   IAM_DIRECTORY_MODE: z.preprocess(
     emptyToUndefined,
     z.enum(['header', 'db']).default('header'),

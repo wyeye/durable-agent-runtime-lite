@@ -59,17 +59,6 @@ export function readStoredIdentity(): ControlPlaneIdentity | undefined {
   if (fromStorage) {
     return fromStorage;
   }
-
-  if (import.meta.env.DEV) {
-    return {
-      user_id: 'dev_operator',
-      tenant_id: 'default',
-      roles: ['capability_operator'],
-      membership_roles: ['capability_operator'],
-      platform_roles: [],
-    };
-  }
-
   return undefined;
 }
 

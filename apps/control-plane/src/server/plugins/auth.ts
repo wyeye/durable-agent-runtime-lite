@@ -26,6 +26,9 @@ export async function authPlugin(server: FastifyInstance, options: ControlPlaneA
     if (!request.url.startsWith('/api/')) {
       return;
     }
+    if (isLocalDevAuthRoute(request.url)) {
+      return;
+    }
 
     // DB mode: resolve identity from database
     if (config.IAM_DIRECTORY_MODE === 'db' && identityDirectory) {
@@ -91,4 +94,8 @@ function headerValue(request: FastifyRequest, name: string): string | undefined 
     return value[0];
   }
   return typeof value === 'string' ? value : undefined;
+}
+
+function isLocalDevAuthRoute(url: string): boolean {
+  return url === '/api/v1/auth/dev-login';
 }

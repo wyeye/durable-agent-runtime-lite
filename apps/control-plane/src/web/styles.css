@@ -13,6 +13,40 @@ body {
   min-height: 100vh;
 }
 
+.cp-login-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(320px, 1.1fr) minmax(320px, 440px);
+  gap: 28px;
+  align-items: center;
+  padding: 32px;
+  background:
+    radial-gradient(circle at top left, rgba(35, 100, 170, 0.16), transparent 32%),
+    radial-gradient(circle at bottom right, rgba(240, 181, 56, 0.14), transparent 28%),
+    linear-gradient(135deg, #eef4ff 0%, #f9fafc 46%, #fff8ed 100%);
+}
+
+.cp-login-hero {
+  max-width: 640px;
+}
+
+.cp-login-eyebrow {
+  display: inline-block;
+  margin-bottom: 12px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(35, 100, 170, 0.12);
+  color: #2364aa;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.cp-login-card {
+  border-radius: 20px;
+  box-shadow: 0 24px 60px rgba(23, 32, 51, 0.12);
+}
+
 .cp-sider {
   border-right: 1px solid #e6e8ec;
 }

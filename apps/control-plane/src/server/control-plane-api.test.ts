@@ -126,6 +126,91 @@ describe('control-plane API', () => {
     await close();
   });
 
+  it('allows local dev password login when explicitly enabled', async () => {
+    const identityDirectory = {
+      async resolve(input: { user_id: string; tenant_id: string; request_id?: string }) {
+        return {
+          user_id: input.user_id,
+          tenant_id: input.tenant_id,
+          display_name: 'Dev Admin',
+          platform_roles: ['platform_admin'],
+          membership_roles: [],
+          roles: ['platform_admin'],
+          identity_source: 'directory' as const,
+          request_id: input.request_id,
+        };
+      },
+    };
+    const { app, close } = await testApp({
+      configEnv: {
+        APP_ENV: 'local',
+        IAM_DIRECTORY_MODE: 'db',
+        CONTROL_PLANE_LOCAL_DEV_LOGIN_ENABLED: 'true',
+        CONTROL_PLANE_LOCAL_DEV_PASSWORD: 'local-dev-pass',
+      },
+      identityDirectory,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/dev-login',
+      payload: {
+        user_id: 'dev_admin',
+        tenant_id: 'development',
+        password: 'local-dev-pass',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<StandardSuccessResponse>().data).toMatchObject({
+      user_id: 'dev_admin',
+      tenant_id: 'development',
+      roles: ['platform_admin'],
+      identity_source: 'directory',
+    });
+    await close();
+  });
+
+  it('rejects local dev password login with wrong password', async () => {
+    const identityDirectory = {
+      async resolve(input: { user_id: string; tenant_id: string; request_id?: string }) {
+        return {
+          user_id: input.user_id,
+          tenant_id: input.tenant_id,
+          display_name: 'Dev Admin',
+          platform_roles: ['platform_admin'],
+          membership_roles: [],
+          roles: ['platform_admin'],
+          identity_source: 'directory' as const,
+          request_id: input.request_id,
+        };
+      },
+    };
+    const { app, close } = await testApp({
+      configEnv: {
+        APP_ENV: 'local',
+        IAM_DIRECTORY_MODE: 'db',
+        CONTROL_PLANE_LOCAL_DEV_LOGIN_ENABLED: 'true',
+        CONTROL_PLANE_LOCAL_DEV_PASSWORD: 'local-dev-pass',
+      },
+      identityDirectory,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/dev-login',
+      payload: {
+        user_id: 'dev_admin',
+        tenant_id: 'development',
+        password: 'wrong-pass',
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json().error.code).toBe('UNAUTHORIZED');
+    await close();
+  });
+
   it('returns 403 when auditor performs a write operation', async () => {
     const { app, close } = await testApp();
     const response = await app.inject({
@@ -667,6 +752,7 @@ async function testApp(options: {
   runtimeApiClient?: FakeRuntimeApiClient;
   toolGatewayClient?: FakeToolGatewayClient;
   staticRoot?: string;
+  identityDirectory?: import('@dar/security').IdentityDirectory;
 } = {}) {
   return createApp({
     config: loadConfig({
@@ -683,6 +769,7 @@ async function testApp(options: {
     modelCatalogService: options.modelCatalogService ?? new FakeModelCatalogApi(),
     runtimeApiClient: options.runtimeApiClient ?? new FakeRuntimeApiClient(),
     toolGatewayClient: options.toolGatewayClient ?? new FakeToolGatewayClient(),
+    ...(options.identityDirectory ? { identityDirectory: options.identityDirectory } : {}),
     readyCheck: async () => undefined,
     ...(options.staticRoot ? { staticRoot: options.staticRoot } : {}),
   });

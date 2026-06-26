@@ -17,7 +17,17 @@ corepack pnpm build
 corepack pnpm dar dev up
 corepack pnpm dar db migrate
 corepack pnpm dar db seed
+corepack pnpm dar iam seed-local
 corepack pnpm dar dev down
+```
+
+本地控制台登录：
+
+```text
+URL: http://127.0.0.1:3100/login
+默认密码: dar-local-login
+推荐账号: dev_admin
+默认租户: development
 ```
 
 `devtools/repo-cli` 是统一开发命令入口，不是生产 app：

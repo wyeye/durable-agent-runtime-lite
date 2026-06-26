@@ -1,5 +1,6 @@
 import { Button, Form, Input, Popover, Select, Space, Tag, Typography } from 'antd';
 import { useState } from 'react';
+import { useNavigate } from 'react-router';
 import type { ControlPlaneIdentity } from '../auth/identity-context.js';
 import { useIdentity } from '../auth/identity-context.js';
 import { displayRole } from '../utils/i18n-labels.js';
@@ -12,6 +13,7 @@ const roleOptions = [
 
 export function HeaderBar() {
   const { identity, setIdentity, clearIdentity } = useIdentity();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm<ControlPlaneIdentity>();
 
@@ -97,6 +99,14 @@ export function HeaderBar() {
         >
           <Button data-testid="identity-panel">身份</Button>
         </Popover>
+        <Button
+          onClick={() => {
+            clearIdentity();
+            navigate('/login', { replace: true });
+          }}
+        >
+          退出
+        </Button>
       </Space>
     </header>
   );

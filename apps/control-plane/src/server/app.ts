@@ -21,6 +21,7 @@ import { operationsRoutes } from './routes/operations.js';
 import { registryRoutes } from './routes/registry.js';
 import { modelCatalogRoutes } from './routes/model-catalog.js';
 import { iamRoutes } from './routes/iam.js';
+import { localDevAuthRoutes } from './routes/local-dev-auth.js';
 import { EvaluationApiService, type EvaluationApi } from './services/evaluation-api-service.js';
 import { ModelCatalogService, type ModelCatalogApi } from './services/model-catalog-service.js';
 import { RegistryApiService, type RegistryApi } from './services/registry-api-service.js';
@@ -32,6 +33,7 @@ import { RouteEmbeddingIndexService } from '../modules/registry/route-embedding-
 export interface ControlPlaneAppOptions {
   config?: RuntimeConfig;
   db?: Kysely<Database>;
+  identityDirectory?: IdentityDirectory;
   runtimeApiClient?: RuntimeApiOperationsClient;
   toolGatewayClient?: ToolGatewayOperationsClient;
   registryService?: RegistryApi;
@@ -86,8 +88,8 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
   await openApiPlugin(app, { config });
 
   // IAM Identity Directory
-  let identityDirectory: IdentityDirectory | undefined;
-  if (config.IAM_DIRECTORY_MODE === 'db' && db) {
+  let identityDirectory: IdentityDirectory | undefined = options.identityDirectory;
+  if (!identityDirectory && config.IAM_DIRECTORY_MODE === 'db' && db) {
     const tenantRepo = new TenantRepository(db);
     const userRepo = new UserAccountRepository(db);
     const membershipRepo = new TenantMembershipRepository(db);
@@ -100,6 +102,10 @@ export async function createApp(options: ControlPlaneAppOptions = {}): Promise<C
   }
 
   await authPlugin(app, { config, identityDirectory });
+
+  if (shouldEnableLocalDevLogin(config, identityDirectory)) {
+    await localDevAuthRoutes(app, { config, identityDirectory });
+  }
 
   // IAM Services and Routes
   if (db) {
@@ -230,6 +236,17 @@ function routeEmbeddingIndexServiceOption(
 function defaultStaticRoot(): string {
   const current = dirname(fileURLToPath(import.meta.url));
   return join(current, '..', '..', 'public');
+}
+
+function shouldEnableLocalDevLogin(
+  config: RuntimeConfig,
+  identityDirectory: IdentityDirectory | undefined,
+): identityDirectory is IdentityDirectory {
+  return config.APP_ENV === 'local'
+    && config.CONTROL_PLANE_LOCAL_DEV_LOGIN_ENABLED
+    && Boolean(config.CONTROL_PLANE_LOCAL_DEV_PASSWORD)
+    && config.IAM_DIRECTORY_MODE === 'db'
+    && identityDirectory !== undefined;
 }
 
 function requireDb(db: Kysely<Database> | undefined): Kysely<Database> {
