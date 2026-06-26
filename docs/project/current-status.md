@@ -2,7 +2,7 @@
 
 当前平台版本：0.8.0。
 
-当前 migration head：`002_iam_directory.sql`。
+当前 migration head：`003_conversation_mvp.sql`。
 
 已完成能力：
 
@@ -19,14 +19,16 @@
 - IAM Directory：租户、用户、成员关系和固定角色的 DB-backed 身份目录。
 - DB mode 身份解析：不信任 Header Roles，从数据库查询角色和成员关系。
 - IAM 管理 API 和前端页面（租户管理、用户管理、角色说明）。
+- 本地开发密码登录页和 `dev_admin` 开发态登录链路。
+- Chat MVP：Conversation 数据模型、Control-plane 聊天页面与会话持久化多轮消息链路。
 
 真实未完成项：
 
 - V1 GA release 尚未创建。
 - 真实 live model provider gate 仍需显式 secret 与人工触发。
 - 写侧业务 adapter、MCP tools、OAuth tools、SQL/browser automation tools 不在当前范围。
-- 密码登录、SSO、JWT 签发不在 IAM-MVP-1 范围。
-- Chat 页面和 Conversation 数据模型不在当前范围。
+- 生产级密码登录、SSO、JWT 签发与长期会话鉴权不在当前范围。
+- Chat 当前主要覆盖本地开发与控制台会话链路，未扩展为独立产品级终端能力。
 
 已知风险：
 
@@ -36,4 +38,4 @@
 
 下一步一项：
 
-- CHAT-MVP-1：基于 IAM Directory 的用户、租户和会话所有权基础。
+- 在现有 Conversation / IAM 基础上继续补齐会话所有权、鉴权边界与更完整的聊天运行时治理。

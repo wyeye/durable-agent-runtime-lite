@@ -45,6 +45,8 @@ docker compose -f infra/docker-compose.yml -f infra/docker-compose.pi-smoke.yml 
 
 Ollama gate 是手动/self-hosted 路径：Ollama 在宿主机，四个生产 app 来自 Docker 镜像。
 
+本地开发若要直接走这条链路，优先使用 `corepack pnpm dar dev up --ollama`；开发态 seed 和聊天验证步骤见 [Local Development](./local-development.md)。
+
 ```bash
 ollama show qwen2.5:7b-instruct-q4_K_M
 corepack pnpm ollama:probe

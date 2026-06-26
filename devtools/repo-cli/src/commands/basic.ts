@@ -42,17 +42,21 @@ export async function handleIam(args: string[]): Promise<void> {
 }
 
 export async function handleDev(args: string[]): Promise<void> {
-  const [command] = args;
+  const [command, ...rest] = args;
   if (!command || command === '--help' || command === 'help') {
-    console.log('Usage: pnpm dar dev up|down');
+    console.log('Usage: pnpm dar dev up|down [--ollama]');
     return;
   }
+  const useOllama = rest.includes('--ollama');
+  const composeArgs = useOllama
+    ? ['compose', '-f', 'infra/docker-compose.yml', '-f', 'infra/docker-compose.ollama.yml']
+    : ['compose', '-f', 'infra/docker-compose.yml'];
   if (command === 'up') {
-    assertSuccess(await runCommand('docker', ['compose', '-f', 'infra/docker-compose.yml', 'up', '-d'], { inherit: true }), 'dev up');
+    assertSuccess(await runCommand('docker', [...composeArgs, 'up', '-d'], { inherit: true }), useOllama ? 'dev up --ollama' : 'dev up');
     return;
   }
   if (command === 'down') {
-    assertSuccess(await runCommand('docker', ['compose', '-f', 'infra/docker-compose.yml', 'down'], { inherit: true }), 'dev down');
+    assertSuccess(await runCommand('docker', [...composeArgs, 'down'], { inherit: true }), useOllama ? 'dev down --ollama' : 'dev down');
     return;
   }
   throw new Error(`Unknown dev command: ${command}`);

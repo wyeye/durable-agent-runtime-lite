@@ -281,7 +281,7 @@ async function ensureRoute(db: Db, flow: FlowSpec): Promise<RouteSpec> {
       keywords: ['真实pi', '真实链路', 'ollama', 'local-real'],
       examples: ['本地真实链路测试', '用 ollama 跑 pi 流程', '验证 route 到 pi'],
       negative_examples: ['不要走真实链路', '不要调用 ollama'],
-      supported_channels: ['web', 'api', 'control-plane'],
+      supported_channels: ['web', 'api', 'control-plane', 'chat'],
       role_constraints: [],
       confidence_threshold: 0.7,
       ambiguous_threshold: 0.5,
