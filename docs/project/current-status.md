@@ -2,7 +2,7 @@
 
 当前平台版本：0.8.0。
 
-当前 migration head：`003_conversation_mvp.sql`。
+当前 migration head：`004_conversation_clarify_candidates.sql`。
 
 已完成能力：
 

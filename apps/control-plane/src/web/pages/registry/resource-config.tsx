@@ -70,10 +70,11 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
         examples: ['example input'],
         negative_examples: [],
         supported_channels: ['web'],
+        tenant_constraints: [],
         role_constraints: [],
         confidence_threshold: 0.7,
         ambiguous_threshold: 0.5,
-        fallback_agent_ref: 'agent_id@1',
+        fallback_enabled: false,
       },
     }),
     renderSummary: renderRouteSummary,
@@ -346,8 +347,14 @@ function renderRouteSummary(record: RegistryRecord) {
       <Descriptions.Item label="channels">
         {formatList(readStringArray(route.supported_channels))}
       </Descriptions.Item>
+      <Descriptions.Item label="tenants">
+        {formatList(readStringArray(route.tenant_constraints))}
+      </Descriptions.Item>
       <Descriptions.Item label="roles">
         {formatList(readStringArray(route.role_constraints))}
+      </Descriptions.Item>
+      <Descriptions.Item label="fallback_enabled">
+        {route.fallback_enabled === true ? 'true' : 'false'}
       </Descriptions.Item>
       <Descriptions.Item label="fallback_agent_ref">
         {readString(route.fallback_agent_ref) ?? '-'}

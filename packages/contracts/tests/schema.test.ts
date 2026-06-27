@@ -176,9 +176,19 @@ describe('contracts schemas', () => {
       routeSpecSchema.parse({
         flow_id: 'sample_flow',
         version: 1,
+        route: { keywords: ['mvp'], tenant_constraints: ['tenant_1'], fallback_agent_ref: 'sample_agent@1' },
+      }).route,
+    ).toMatchObject({
+      tenant_constraints: ['tenant_1'],
+      fallback_agent_ref: 'sample_agent@1',
+    });
+    const routeWithoutFallbackEnabled = routeSpecSchema.parse({
+        flow_id: 'sample_flow',
+        version: 1,
         route: { keywords: ['mvp'], fallback_agent_ref: 'sample_agent@1' },
-      }).route.fallback_agent_ref,
-    ).toBe('sample_agent@1');
+      }).route;
+    expect(routeWithoutFallbackEnabled).toMatchObject({ tenant_constraints: [] });
+    expect(routeWithoutFallbackEnabled).not.toHaveProperty('fallback_enabled');
 
     expect(
       toolManifestSchema.parse({

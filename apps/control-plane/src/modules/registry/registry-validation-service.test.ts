@@ -150,7 +150,7 @@ describe('RegistryValidationService', () => {
           flow_id: 'sample_flow',
           version: 1,
           status: 'published',
-          route: { keywords: ['shared'], examples: [], negative_examples: [], supported_channels: [], role_constraints: [], priority: 50, confidence_threshold: 0.7, ambiguous_threshold: 0.5 },
+          route: { keywords: ['shared'], examples: [], negative_examples: [], supported_channels: [], tenant_constraints: [], role_constraints: [], priority: 50, confidence_threshold: 0.7, ambiguous_threshold: 0.5 },
         },
       }],
     ]));
@@ -159,7 +159,7 @@ describe('RegistryValidationService', () => {
       flow_id: 'sample_flow',
       version: 1,
       status: 'draft',
-      route: { keywords: ['shared'], examples: [], negative_examples: [], supported_channels: [], role_constraints: [], priority: 50, confidence_threshold: 0.2, ambiguous_threshold: 0.5 },
+      route: { keywords: ['shared'], examples: [], negative_examples: [], supported_channels: [], tenant_constraints: [], role_constraints: [], priority: 50, confidence_threshold: 0.2, ambiguous_threshold: 0.5 },
     };
     const result = await service({ routes }).validateRoute(route);
     expect(result.errors.map((error: RegistryValidationIssue) => error.code)).toContain('ROUTE_THRESHOLD_ORDER_INVALID');
@@ -173,19 +173,27 @@ describe('RegistryValidationService', () => {
       version: 1,
       status: 'draft',
       route: {
-        keywords: ['fallback'],
+        keywords: [],
         examples: [],
         negative_examples: [],
         supported_channels: [],
+        tenant_constraints: [],
         role_constraints: [],
         priority: 50,
         confidence_threshold: 0.7,
         ambiguous_threshold: 0.5,
+        fallback_enabled: true,
         fallback_agent_ref: 'sample_agent@1',
       },
     };
     const valid = await service().validateRoute(route);
     expect(valid.can_publish).toBe(true);
+
+    const missingRef = await service().validateRoute({
+      ...route,
+      route: { ...route.route, fallback_agent_ref: undefined },
+    });
+    expect(missingRef.errors.map((error: RegistryValidationIssue) => error.code)).toContain('ROUTE_FALLBACK_AGENT_REQUIRED');
 
     const invalidRef = await service().validateRoute({
       ...route,
@@ -200,6 +208,35 @@ describe('RegistryValidationService', () => {
     expect(missing.errors.map((error: RegistryValidationIssue) => error.code)).toContain('ROUTE_FALLBACK_AGENT_NOT_FOUND');
   });
 
+  it('validates route tenant constraints as safe identifiers', async () => {
+    const route: RouteSpec = {
+      route_id: 'tenant_route',
+      flow_id: 'sample_flow',
+      version: 1,
+      status: 'draft',
+      route: {
+        keywords: ['tenant'],
+        examples: [],
+        negative_examples: [],
+        supported_channels: [],
+        tenant_constraints: ['tenant_1', 'tenant-two'],
+        role_constraints: [],
+        priority: 50,
+        confidence_threshold: 0.7,
+        ambiguous_threshold: 0.5,
+      },
+    };
+
+    const valid = await service().validateRoute(route);
+    expect(valid.errors.map((error: RegistryValidationIssue) => error.code)).not.toContain('ROUTE_TENANT_INVALID');
+
+    const invalid = await service().validateRoute({
+      ...route,
+      route: { ...route.route, tenant_constraints: ['tenant ok?'] },
+    });
+    expect(invalid.errors.map((error: RegistryValidationIssue) => error.code)).toContain('ROUTE_TENANT_INVALID');
+  });
+
   it('allows pending Flow dependency only for joint Flow+Route publish validation', async () => {
     const draftFlow = sampleFlow();
     const flows = new FakeRepository<FlowSpec>(new Map([[
@@ -211,7 +248,7 @@ describe('RegistryValidationService', () => {
       flow_id: 'sample_flow',
       version: 1,
       status: 'draft',
-      route: { keywords: ['joint'], examples: [], negative_examples: [], supported_channels: [], role_constraints: [], priority: 50, confidence_threshold: 0.7, ambiguous_threshold: 0.5 },
+      route: { keywords: ['joint'], examples: [], negative_examples: [], supported_channels: [], tenant_constraints: [], role_constraints: [], priority: 50, confidence_threshold: 0.7, ambiguous_threshold: 0.5 },
     };
     const blocked = await service({ flows }).validateRoute(route);
     expect(blocked.errors.map((error: RegistryValidationIssue) => error.code)).toContain('ROUTE_FLOW_NOT_PUBLISHABLE');

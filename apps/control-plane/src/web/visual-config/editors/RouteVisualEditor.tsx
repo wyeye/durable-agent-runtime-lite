@@ -1,7 +1,9 @@
 import type { RouteSpec } from '@dar/contracts';
 import type { ApiClient } from '../../api/client.js';
-import { Alert, Form, Input, InputNumber, Select, Slider, Space } from 'antd';
+import { useQuery } from '@tanstack/react-query';
+import { Alert, Form, Input, InputNumber, Select, Slider, Space, Switch } from 'antd';
 import { useTranslation } from 'react-i18next';
+import { fetchRoleCatalog, listTenants } from '../../api/iam-api.js';
 import { displayRole } from '../../utils/i18n-labels.js';
 import type { VisualEditorProps } from '../types.js';
 import { ExactVersionSelect } from '../components/ExactVersionSelect.js';
@@ -35,12 +37,35 @@ export function RouteVisualEditor({
 }: VisualEditorProps<RouteSpec> & { client: ApiClient }) {
   const { t } = useTranslation();
   const route = value.route;
+  const tenantsQuery = useQuery({
+    queryKey: ['iam-tenants-for-route-editor'],
+    queryFn: () => listTenants(client, { page_size: '100', status: 'active' }),
+  });
+  const rolesQuery = useQuery({
+    queryKey: ['iam-roles-for-route-editor'],
+    queryFn: () => fetchRoleCatalog(client),
+  });
   const channelSelectOptions = uniqueOptions([
     ...channelOptions,
     ...route.supported_channels.map((value) => ({ value, label: value })),
   ]);
+  const tenantOptions = uniqueOptions([
+    ...(tenantsQuery.data?.items ?? []).map((tenant) => ({
+      value: tenant.tenant_id,
+      label: tenant.display_name ? `${tenant.display_name} (${tenant.tenant_id})` : tenant.tenant_id,
+    })),
+    ...(route.tenant_constraints ?? []).map((value: string) => ({ value, label: value })),
+  ]);
+  const catalogRoles = [
+    ...(rolesQuery.data?.roles ?? []),
+    ...(rolesQuery.data?.membership_roles ?? []),
+  ];
   const roleOptions = uniqueOptions([
     ...commonRoleOptions,
+    ...catalogRoles.map((role) => ({
+      value: role.role,
+      label: displayRole(role.role),
+    })),
     ...route.role_constraints.map((value) => ({
       value,
       label: displayRole(value),
@@ -101,17 +126,33 @@ export function RouteVisualEditor({
             onChange={(supported_channels) => onChange({ ...value, route: { ...route, supported_channels } })}
           />
         </Form.Item>
+        <Form.Item label={t('visualConfig.route.tenants')}>
+          <Select
+            mode="tags"
+            data-testid="vc-route-tenants-select"
+            value={route.tenant_constraints ?? []}
+            disabled={readOnly}
+            options={tenantOptions}
+            placeholder="留空表示所有租户"
+            loading={tenantsQuery.isLoading}
+            onChange={(tenant_constraints) => onChange({ ...value, route: { ...route, tenant_constraints } })}
+          />
+        </Form.Item>
         <Form.Item label={t('visualConfig.route.roles')}>
           <Select
             mode="multiple"
             data-testid="vc-route-roles-select"
             value={route.role_constraints}
             disabled={readOnly}
-            showSearch={false}
+            showSearch
             options={roleOptions}
             placeholder="选择适用角色"
+            loading={rolesQuery.isLoading}
             onChange={(role_constraints) => onChange({ ...value, route: { ...route, role_constraints } })}
           />
+        </Form.Item>
+        <Form.Item label={t('visualConfig.route.fallbackEnabled')}>
+          <Switch checked={route.fallback_enabled === true} disabled={readOnly} onChange={(fallback_enabled) => onChange({ ...value, route: { ...route, fallback_enabled } })} />
         </Form.Item>
         <Form.Item label={t('visualConfig.route.fallbackAgentRef')}>
           <ExactVersionSelect

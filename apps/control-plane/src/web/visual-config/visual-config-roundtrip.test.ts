@@ -115,6 +115,7 @@ function routeFixture(): RouteSpec {
       examples: ['run roundtrip'],
       negative_examples: ['ignore'],
       supported_channels: ['api'],
+      tenant_constraints: [],
       role_constraints: ['operator'],
       confidence_threshold: 0.8,
       ambiguous_threshold: 0.4,

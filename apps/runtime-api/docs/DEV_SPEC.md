@@ -26,6 +26,12 @@ type RouteDecision =
   | { decision: 'reject'; reason: string };
 ```
 
+兜底路由必须由已发布或灰度 RouteSpec 显式配置 `route.fallback_enabled=true`
+和精确 `route.fallback_agent_ref=agent_id@version`。仅设置 `fallback_agent_ref`
+不会成为兜底路由。
+兜底路由与普通路由共享过滤边界：先按 channel、tenant、role 和 negative example
+过滤，再按 `route.priority` 选择最高优先级兜底。
+
 ## 缓存规范
 
 - Flow 路由缓存以 `flow_id + version` 为键。

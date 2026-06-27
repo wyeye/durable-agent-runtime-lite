@@ -90,6 +90,7 @@ const dbOnlyRoute: RouteSpec = {
     examples: [],
     negative_examples: [],
     supported_channels: [],
+    tenant_constraints: [],
     role_constraints: [],
     confidence_threshold: 0.5,
     ambiguous_threshold: 0.3,
@@ -107,6 +108,7 @@ const expenseRoute: RouteSpec = {
     examples: ['查询报销政策'],
     negative_examples: ['不要报销'],
     supported_channels: [],
+    tenant_constraints: [],
     role_constraints: [],
     confidence_threshold: 0.7,
     ambiguous_threshold: 0.5,
@@ -124,6 +126,7 @@ const ticketRoute: RouteSpec = {
     examples: ['提交故障单'],
     negative_examples: [],
     supported_channels: [],
+    tenant_constraints: [],
     role_constraints: [],
     confidence_threshold: 0.7,
     ambiguous_threshold: 0.5,
@@ -141,6 +144,7 @@ const restrictedRoute: RouteSpec = {
     examples: ['差旅费用规则'],
     negative_examples: [],
     supported_channels: ['admin-console'],
+    tenant_constraints: [],
     role_constraints: ['finance_admin'],
     confidence_threshold: 0.7,
     ambiguous_threshold: 0.5,
@@ -154,14 +158,55 @@ const fallbackAgentRoute: RouteSpec = {
   status: 'published',
   route: {
     priority: 40,
-    keywords: ['never-hit'],
+    keywords: [],
     examples: [],
     negative_examples: [],
     supported_channels: ['chat', 'api', 'web'],
+    tenant_constraints: [],
+    role_constraints: [],
+    confidence_threshold: 0.7,
+    ambiguous_threshold: 0.5,
+    fallback_enabled: true,
+    fallback_agent_ref: 'sample_agent@1',
+  },
+};
+
+const routeWithFallbackAgentRefOnly: RouteSpec = {
+  route_id: 'ref_only_route',
+  flow_id: 'ref_only_flow',
+  version: 1,
+  status: 'published',
+  route: {
+    priority: 100,
+    keywords: ['ref-only'],
+    examples: [],
+    negative_examples: [],
+    supported_channels: ['chat', 'api', 'web'],
+    tenant_constraints: [],
     role_constraints: [],
     confidence_threshold: 0.7,
     ambiguous_threshold: 0.5,
     fallback_agent_ref: 'sample_agent@1',
+  },
+};
+
+const tenantFallbackRoute: RouteSpec = {
+  route_id: 'tenant_fallback_route',
+  flow_id: 'tenant_fallback_flow',
+  version: 1,
+  status: 'published',
+  route: {
+    priority: 90,
+    keywords: [],
+    examples: [],
+    negative_examples: [],
+    supported_channels: ['chat'],
+    tenant_constraints: ['tenant_2'],
+    role_constraints: [],
+    confidence_threshold: 0.7,
+    ambiguous_threshold: 0.5,
+    fallback_enabled: true,
+    fallback_agent_ref: 'tenant_agent@2',
   },
 };
 
@@ -337,6 +382,7 @@ describe('runtime-api router and task endpoints', () => {
             examples: ['本地真实链路测试', '用 ollama 跑 pi 流程', '验证 route 到 pi'],
             negative_examples: ['不要走真实链路', '不要调用 ollama'],
             supported_channels: ['web', 'api', 'control-plane', 'chat'],
+            tenant_constraints: [],
             role_constraints: [],
             confidence_threshold: 0.7,
             ambiguous_threshold: 0.5,
@@ -519,6 +565,7 @@ describe('runtime-api router and task endpoints', () => {
       semanticOptions(new FixedSemanticAdapter({})),
     );
 
+    expect(result.decision_stage).toBe('fallback');
     expect(result.route_decision).toMatchObject({
       decision: 'agent_fallback',
       agent_id: 'sample_agent',
@@ -526,6 +573,66 @@ describe('runtime-api router and task endpoints', () => {
       reason: 'route_fallback:fallback_agent_route',
     });
     expect(result.candidates).toEqual([]);
+  });
+
+  it('filters fallback routes by tenant and then priority', async () => {
+    const wrongTenant = await routeWithSemanticRecall(
+      {
+        tenantId: 'tenant_1',
+        channel: 'chat',
+        input: { text: '你好' },
+        allowMockFallback: false,
+      },
+      [fallbackAgentRoute, tenantFallbackRoute],
+      semanticOptions(new FixedSemanticAdapter({})),
+    );
+
+    expect(wrongTenant.route_decision).toMatchObject({
+      decision: 'agent_fallback',
+      agent_id: 'sample_agent',
+      agent_version: 1,
+      reason: 'route_fallback:fallback_agent_route',
+    });
+
+    const matchingTenant = await routeWithSemanticRecall(
+      {
+        tenantId: 'tenant_2',
+        channel: 'chat',
+        input: { text: '你好' },
+        allowMockFallback: false,
+      },
+      [fallbackAgentRoute, tenantFallbackRoute],
+      semanticOptions(new FixedSemanticAdapter({})),
+    );
+
+    expect(matchingTenant.route_decision).toMatchObject({
+      decision: 'agent_fallback',
+      agent_id: 'tenant_agent',
+      agent_version: 2,
+      reason: 'route_fallback:tenant_fallback_route',
+    });
+  });
+
+  it('does not treat fallback_agent_ref alone as a fallback route', async () => {
+    const result = await routeWithSemanticRecall(
+      {
+        tenantId: 'tenant_1',
+        channel: 'chat',
+        input: { text: '你好' },
+        allowMockFallback: false,
+      },
+      [routeWithFallbackAgentRefOnly],
+      semanticOptions(new FixedSemanticAdapter({})),
+    );
+
+    expect(result).toMatchObject({
+      decision_stage: 'reject',
+      route_decision: {
+        decision: 'reject',
+        reason: 'semantic_recall_below_threshold',
+      },
+      candidates: [],
+    });
   });
 
   it('creates and queries a mock-started task run', async () => {

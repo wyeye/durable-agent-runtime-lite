@@ -4,6 +4,7 @@ export const navigation = {
   registry: '能力注册中心',
   flows: '流程',
   routes: '路由',
+  fallbackRoutes: '兜底路由',
   tools: '工具',
   agents: '智能体',
   modelPolicies: '模型策略',

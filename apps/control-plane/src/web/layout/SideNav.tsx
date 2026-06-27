@@ -21,6 +21,7 @@ const baseItems = [
     children: [
       { key: '/registry/flows', label: <Link to="/registry/flows">{navLabel('flows')}</Link> },
       { key: '/registry/routes', label: <Link to="/registry/routes">{navLabel('routes')}</Link> },
+      { key: '/registry/fallback-routes', label: <Link to="/registry/fallback-routes">{navLabel('fallbackRoutes')}</Link> },
       { key: '/registry/tools', label: <Link to="/registry/tools">{navLabel('tools')}</Link> },
       { key: '/registry/agents', label: <Link to="/registry/agents">{navLabel('agents')}</Link> },
       { key: '/registry/prompts', label: <Link to="/registry/prompts">{navLabel('prompts')}</Link> },
@@ -109,6 +110,7 @@ const leafKeys = [
   '/chat',
   '/dashboard',
   '/registry/flows',
+  '/registry/fallback-routes',
   '/registry/routes',
   '/registry/tools',
   '/registry/agents',

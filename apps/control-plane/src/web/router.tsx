@@ -4,6 +4,7 @@ import { AppLayout } from './layout/AppLayout.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { DashboardPage } from './pages/DashboardPage.js';
 import { ChatPage } from './pages/chat/ChatPage.js';
+import { FallbackRoutesPage } from './pages/routes/FallbackRoutesPage.js';
 import { FlowsPage } from './pages/flows/FlowsPage.js';
 import { RoutesPage } from './pages/routes/RoutesPage.js';
 import { ToolsPage } from './pages/tools/ToolsPage.js';
@@ -52,6 +53,7 @@ export const router = createBrowserRouter([
         { path: 'dashboard', element: <DashboardPage /> },
         { path: 'registry/flows', element: <FlowsPage /> },
         { path: 'registry/routes', element: <RoutesPage /> },
+        { path: 'registry/fallback-routes', element: <FallbackRoutesPage /> },
         { path: 'registry/tools', element: <ToolsPage /> },
         { path: 'registry/agents', element: <AgentsPage /> },
         { path: 'registry/model-policies', element: <ModelPoliciesPage /> },

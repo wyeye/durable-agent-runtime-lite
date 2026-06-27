@@ -13,7 +13,7 @@ export interface RuleRouterInput {
 export interface RuleRouterResult {
   route_decision: RouteDecision;
   candidates: CandidateFlow[];
-  decision_stage?: 'action' | 'rule' | 'semantic' | 'clarify' | 'reject';
+  decision_stage?: 'action' | 'rule' | 'semantic' | 'clarify' | 'fallback' | 'reject';
   semantic?: {
     model_ref?: ModelDefinitionRef;
     top_k?: number;
@@ -71,6 +71,11 @@ function isChannelAllowed(route: RouteSpec, channel: string | undefined): boolea
   return channels.length === 0 || !channel || channels.includes(channel);
 }
 
+function isTenantAllowed(route: RouteSpec, tenantId: string | undefined): boolean {
+  const tenants = route.route.tenant_constraints;
+  return tenants.length === 0 || Boolean(tenantId && tenants.includes(tenantId));
+}
+
 function isRoleAllowed(route: RouteSpec, roles: string[]): boolean {
   return hasRoleIntersection(route.route.role_constraints, roles);
 }
@@ -112,6 +117,7 @@ function allowedRoutes(input: RuleRouterInput, routes: RouteSpec[]): RouteSpec[]
   return routes
     .filter(isExecutableRoute)
     .filter((route) => isChannelAllowed(route, input.channel))
+    .filter((route) => isTenantAllowed(route, input.tenantId))
     .filter((route) => isRoleAllowed(route, roles))
     .filter((route) => !isNegativeExcluded(route, input.input));
 }
@@ -174,7 +180,7 @@ function fallbackAgentDecision(route: RouteSpec): RouteDecision | undefined {
 
 function selectFallbackRoute(routes: RouteSpec[]): RouteSpec | undefined {
   return routes
-    .filter((route) => Boolean(route.route.fallback_agent_ref))
+    .filter((route) => route.route.fallback_enabled && Boolean(route.route.fallback_agent_ref))
     .sort((left, right) => {
       if (right.route.priority !== left.route.priority) {
         return right.route.priority - left.route.priority;
@@ -211,7 +217,7 @@ export function routeByRules(input: RuleRouterInput, routes: RouteSpec[]): RuleR
       return {
         route_decision: fallbackDecision,
         candidates: [],
-        decision_stage: 'reject',
+        decision_stage: 'fallback',
       };
     }
   }
@@ -313,7 +319,7 @@ export async function routeWithSemanticRecall(
       return {
         route_decision: fallbackDecision,
         candidates: semanticDecision.candidates,
-        decision_stage: 'reject',
+        decision_stage: 'fallback',
         ...(semanticDecision.semantic ? { semantic: semanticDecision.semantic } : {}),
       };
     }
@@ -338,7 +344,7 @@ export async function routeWithSemanticRecall(
     return {
       route_decision: fallbackDecision,
       candidates: [],
-      decision_stage: 'reject',
+      decision_stage: 'fallback',
     };
   }
 

@@ -137,10 +137,14 @@ export class RegistryValidationService {
     if (parsed.route.confidence_threshold < parsed.route.ambiguous_threshold) {
       addError(context, 'ROUTE_THRESHOLD_ORDER_INVALID', 'confidence_threshold must be >= ambiguous_threshold', 'route.confidence_threshold');
     }
-    if (parsed.route.keywords.length === 0 && parsed.route.examples.length === 0) {
+    if (!parsed.route.fallback_enabled && parsed.route.keywords.length === 0 && parsed.route.examples.length === 0) {
       addError(context, 'ROUTE_EMPTY_MATCH_SIGNALS', 'keywords and examples cannot both be empty', 'route.keywords');
     }
+    if (parsed.route.fallback_enabled && !parsed.route.fallback_agent_ref) {
+      addError(context, 'ROUTE_FALLBACK_AGENT_REQUIRED', 'fallback_enabled requires fallback_agent_ref', 'route.fallback_agent_ref');
+    }
     validateSafeStringArray(parsed.route.supported_channels, context, 'ROUTE_CHANNEL_INVALID', 'route.supported_channels');
+    validateSafeStringArray(parsed.route.tenant_constraints, context, 'ROUTE_TENANT_INVALID', 'route.tenant_constraints');
     validateSafeStringArray(parsed.route.role_constraints, context, 'ROUTE_ROLE_INVALID', 'route.role_constraints');
     if (parsed.route.fallback_agent_ref) {
       const fallbackRef = parseVersionRef(parsed.route.fallback_agent_ref);

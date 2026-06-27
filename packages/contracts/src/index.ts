@@ -1056,9 +1056,11 @@ export const routeConfigSchema = z.object({
   examples: z.array(z.string()).default([]),
   negative_examples: z.array(z.string()).default([]),
   supported_channels: z.array(z.string()).default([]),
+  tenant_constraints: z.array(z.string()).default([]),
   role_constraints: z.array(z.string()).default([]),
   confidence_threshold: z.number().min(0).max(1).default(0.7),
   ambiguous_threshold: z.number().min(0).max(1).default(0.5),
+  fallback_enabled: z.boolean().optional(),
   fallback_agent_ref: z.string().regex(/^.+@[1-9]\d*$/u).optional(),
 });
 
@@ -1111,7 +1113,7 @@ export const routeDecisionSchema = z.discriminatedUnion('decision', [
   }),
 ]);
 
-export const routerDecisionStageSchema = z.enum(['action', 'rule', 'semantic', 'clarify', 'reject']);
+export const routerDecisionStageSchema = z.enum(['action', 'rule', 'semantic', 'clarify', 'fallback', 'reject']);
 
 export const routerSemanticSummarySchema = z.object({
   model_ref: modelDefinitionRefSchema.optional(),

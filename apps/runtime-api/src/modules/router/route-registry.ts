@@ -14,6 +14,7 @@ export const defaultRouteSpecs: RouteSpec[] = [
       examples: ['执行 mvp 示例流程', '搜索知识并写入记录'],
       negative_examples: [],
       supported_channels: [],
+      tenant_constraints: [],
       role_constraints: [],
       confidence_threshold: 0.72,
       ambiguous_threshold: 0.55,

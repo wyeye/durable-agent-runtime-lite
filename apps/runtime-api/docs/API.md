@@ -6,7 +6,12 @@
 
 `runtime-api` 固定从 PostgreSQL `flow_route_config` 表读取 `published` / `gray` RouteSpec。
 
-DB 模式不会回退到 `defaultRouteSpecs`。如果 DB 中没有可命中的 RouteSpec，Router 返回 `agent_fallback`，原因可能为 `no_published_route_match` 或 `low_confidence_rule_match`。
+DB 模式不会回退到 `defaultRouteSpecs`。只有已发布或灰度 RouteSpec 明确设置
+`route.fallback_enabled=true` 且配置 `route.fallback_agent_ref=agent_id@version`
+时，Router 才会在 action、rule 和 semantic 都未匹配后返回 `agent_fallback`。
+兜底路由仍会先经过 `supported_channels`、`tenant_constraints`、`role_constraints`
+和 `negative_examples` 过滤；多个可用兜底路由按 `priority` 从高到低选择。
+如果没有可用兜底路由，Router 返回 `reject` 或 `need_clarify`，不会启动默认 Agent workflow。
 
 TaskRun 在 DB 模式下写入 `task_run` 表，`GET /v1/tasks/:taskRunId` 也从 `task_run` 表读取。
 
@@ -94,7 +99,9 @@ DB 模式下只读取 DB 中已发布 RouteSpec，不使用 sample route fallbac
 - `execution_plan_ref`
 - `flow_sha256`
 
-DB source 未命中 Flow 时不会启动默认 Agent workflow；memory/mock 开发模式仍可使用本地 fallback。
+DB source 未命中 Flow 时不会启动默认 Agent workflow；仅显式发布的兜底 RouteSpec 可以启动
+`GenericAgentWorkflow`。兜底 RouteSpec 可以通过空 `tenant_constraints` 表示全部租户，
+也可以填入精确租户 ID 缩小适用范围。memory/mock 开发模式仍可使用本地 fallback。
 
 DB source 下的创建顺序：
 
