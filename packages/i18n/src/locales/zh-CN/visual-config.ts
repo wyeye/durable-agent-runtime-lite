@@ -75,6 +75,8 @@ export const visualConfig = {
     negativeExamples: '反例',
     channels: '渠道',
     roles: '角色约束',
+    fallbackAgentRef: '兜底智能体精确版本',
+    exactFallbackNotice: '兜底智能体必须指向精确版本，不使用 latest 或默认资源。',
   },
   tool: {
     name: '工具名称',

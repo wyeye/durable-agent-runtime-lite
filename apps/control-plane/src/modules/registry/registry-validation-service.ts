@@ -142,6 +142,22 @@ export class RegistryValidationService {
     }
     validateSafeStringArray(parsed.route.supported_channels, context, 'ROUTE_CHANNEL_INVALID', 'route.supported_channels');
     validateSafeStringArray(parsed.route.role_constraints, context, 'ROUTE_ROLE_INVALID', 'route.role_constraints');
+    if (parsed.route.fallback_agent_ref) {
+      const fallbackRef = parseVersionRef(parsed.route.fallback_agent_ref);
+      if (!fallbackRef) {
+        addError(context, 'ROUTE_FALLBACK_AGENT_REF_INVALID', 'fallback_agent_ref must use agent_id@version', 'route.fallback_agent_ref');
+      } else {
+        const agent = await this.repositories.agents.getByIdAndVersion(fallbackRef.id, fallbackRef.version, tenantOptions(options));
+        addDependency(context, 'route', routeId, parsed.version, 'agent', fallbackRef.id, fallbackRef.version, agent?.status, 'fallbacks_to_agent');
+        if (!agent) {
+          addError(context, 'ROUTE_FALLBACK_AGENT_NOT_FOUND', `AgentSpec not found: ${parsed.route.fallback_agent_ref}`, 'route.fallback_agent_ref');
+        } else if (!isDependencyPublishable(agent.status)) {
+          addError(context, 'ROUTE_FALLBACK_AGENT_NOT_PUBLISHABLE', `AgentSpec is not published or gray: ${parsed.route.fallback_agent_ref}`, 'route.fallback_agent_ref');
+        } else {
+          await this.validateAgentDependencies(agent.spec, context, parsed.flow_id, parsed.version, options);
+        }
+      }
+    }
 
     const publishedRoutes = await this.repositories.routes.list({ ...tenantOptions(options), status: ['published', 'gray'] });
     for (const existing of publishedRoutes) {

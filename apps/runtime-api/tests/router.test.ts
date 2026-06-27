@@ -64,6 +64,21 @@ const staticExecutionPlanResolver = {
   },
 };
 
+const staticAgentExecutionPlanResolver = {
+  async resolve(input: { executionPlanRef: string }) {
+    return {
+      executionPlanRef: input.executionPlanRef,
+      executionPlanHash: 'b'.repeat(64),
+    };
+  },
+  async resolveForAgent(input: { agentId: string; agentVersion: number }) {
+    return {
+      executionPlanRef: `db://agent-execution-plan/${input.agentId}_${input.agentVersion}`,
+      executionPlanHash: 'b'.repeat(64),
+    };
+  },
+};
+
 const dbOnlyRoute: RouteSpec = {
   route_id: 'db_only_route',
   flow_id: 'db_route_flow',
@@ -129,6 +144,24 @@ const restrictedRoute: RouteSpec = {
     role_constraints: ['finance_admin'],
     confidence_threshold: 0.7,
     ambiguous_threshold: 0.5,
+  },
+};
+
+const fallbackAgentRoute: RouteSpec = {
+  route_id: 'fallback_agent_route',
+  flow_id: 'fallback_flow',
+  version: 1,
+  status: 'published',
+  route: {
+    priority: 40,
+    keywords: ['never-hit'],
+    examples: [],
+    negative_examples: [],
+    supported_channels: ['chat', 'api', 'web'],
+    role_constraints: [],
+    confidence_threshold: 0.7,
+    ambiguous_threshold: 0.5,
+    fallback_agent_ref: 'sample_agent@1',
   },
 };
 
@@ -474,6 +507,27 @@ describe('runtime-api router and task endpoints', () => {
     });
   });
 
+  it('returns route-configured fallback agent when no route matches', async () => {
+    const result = await routeWithSemanticRecall(
+      {
+        tenantId: 'tenant_1',
+        channel: 'chat',
+        input: { text: '你好' },
+        allowMockFallback: false,
+      },
+      [fallbackAgentRoute],
+      semanticOptions(new FixedSemanticAdapter({})),
+    );
+
+    expect(result.route_decision).toMatchObject({
+      decision: 'agent_fallback',
+      agent_id: 'sample_agent',
+      agent_version: 1,
+      reason: 'route_fallback:fallback_agent_route',
+    });
+    expect(result.candidates).toEqual([]);
+  });
+
   it('creates and queries a mock-started task run', async () => {
     const server = buildServer();
     const response = await server.inject({
@@ -764,6 +818,52 @@ describe('runtime-api router and task endpoints', () => {
     });
 
     expect(response.workflow_start).toMatchObject({ mode: 'mock', started: true });
+    expect(taskStore.calls).toEqual(['create', 'updateWorkflowStart']);
+  });
+
+  it('starts fallback agent workflow with immutable agent execution plan ref', async () => {
+    const taskStore = new RecordingTaskRunStore();
+    const workflowStarts: WorkflowStartResponse[] = [];
+    const service = new TaskService({
+      routeSource: new StaticRouteSource([fallbackAgentRoute]),
+      taskStore,
+      allowMockRouteFallback: false,
+      agentExecutionPlanResolver: staticAgentExecutionPlanResolver,
+      workflowStarter: {
+        async start(request) {
+          workflowStarts.push({
+            workflow_id: request.workflow_id,
+            task_run_id: request.task_run_id,
+            started: true,
+            mode: 'mock',
+          });
+          expect(request).toMatchObject({
+            workflow_type: 'GenericAgentWorkflow',
+            agent_id: 'sample_agent',
+            agent_execution_plan_ref: 'db://agent-execution-plan/sample_agent_1',
+          });
+          return workflowStarts[workflowStarts.length - 1]!;
+        },
+      },
+    });
+
+    const response = await service.create({
+      tenant_id: 'tenant_1',
+      user_id: 'user_1',
+      request_id: 'req_fallback_agent',
+      channel: 'chat',
+      input: { text: '你好' },
+    });
+
+    expect(response).toMatchObject({
+      status: 'queued',
+      route_decision: {
+        decision: 'agent_fallback',
+        agent_id: 'sample_agent',
+        agent_version: 1,
+      },
+      agent_id: 'sample_agent',
+    });
     expect(taskStore.calls).toEqual(['create', 'updateWorkflowStart']);
   });
 

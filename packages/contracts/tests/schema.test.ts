@@ -169,9 +169,16 @@ describe('contracts schemas', () => {
       routeSpecSchema.parse({
         flow_id: 'sample_flow',
         version: 1,
-        route: { keywords: ['mvp'] },
+        route: { keywords: ['mvp'], fallback_agent_ref: 'sample_agent@1' },
       }).route.priority,
     ).toBe(50);
+    expect(
+      routeSpecSchema.parse({
+        flow_id: 'sample_flow',
+        version: 1,
+        route: { keywords: ['mvp'], fallback_agent_ref: 'sample_agent@1' },
+      }).route.fallback_agent_ref,
+    ).toBe('sample_agent@1');
 
     expect(
       toolManifestSchema.parse({

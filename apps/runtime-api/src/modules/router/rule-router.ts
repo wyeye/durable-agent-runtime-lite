@@ -155,6 +155,34 @@ function toCandidateFlows(candidates: Array<{ route: RouteSpec; score: number }>
   }));
 }
 
+function fallbackAgentDecision(route: RouteSpec): RouteDecision | undefined {
+  const ref = route.route.fallback_agent_ref;
+  if (!ref) {
+    return undefined;
+  }
+  const match = /^(.+)@([1-9]\d*)$/u.exec(ref);
+  if (!match) {
+    return undefined;
+  }
+  return {
+    decision: 'agent_fallback',
+    agent_id: match[1] ?? ref,
+    agent_version: Number(match[2]),
+    reason: `route_fallback:${routeId(route)}`,
+  };
+}
+
+function selectFallbackRoute(routes: RouteSpec[]): RouteSpec | undefined {
+  return routes
+    .filter((route) => Boolean(route.route.fallback_agent_ref))
+    .sort((left, right) => {
+      if (right.route.priority !== left.route.priority) {
+        return right.route.priority - left.route.priority;
+      }
+      return routeId(left).localeCompare(routeId(right));
+    })[0];
+}
+
 export function routeByRules(input: RuleRouterInput, routes: RouteSpec[]): RuleRouterResult {
   const filtered = allowedRoutes(input, routes);
   const action = actionCandidates(input, filtered).sort(compareRouteScore);
@@ -175,6 +203,18 @@ export function routeByRules(input: RuleRouterInput, routes: RouteSpec[]): RuleR
 
   const rules = ruleCandidates(input, filtered);
   const top = rules[0];
+
+  if (!top) {
+    const fallback = selectFallbackRoute(filtered);
+    const fallbackDecision = fallback ? fallbackAgentDecision(fallback) : undefined;
+    if (fallbackDecision) {
+      return {
+        route_decision: fallbackDecision,
+        candidates: [],
+        decision_stage: 'reject',
+      };
+    }
+  }
 
   if (!top && input.allowMockFallback === false) {
     return {
@@ -263,7 +303,21 @@ export async function routeWithSemanticRecall(
 
   if (semantic.enabled && semantic.adapter && filtered.length > 0) {
     const recall = await semantic.adapter.recall(input.input, filtered, input.tenantId ? { tenantId: input.tenantId } : {});
-    return decideSemantic(recall, semantic);
+    const semanticDecision = decideSemantic(recall, semantic);
+    if (semanticDecision.route_decision.decision !== 'reject') {
+      return semanticDecision;
+    }
+    const fallback = selectFallbackRoute(filtered);
+    const fallbackDecision = fallback ? fallbackAgentDecision(fallback) : undefined;
+    if (fallbackDecision) {
+      return {
+        route_decision: fallbackDecision,
+        candidates: semanticDecision.candidates,
+        decision_stage: 'reject',
+        semantic: semanticDecision.semantic,
+      };
+    }
+    return semanticDecision;
   }
 
   if (topRule) {
@@ -275,6 +329,16 @@ export async function routeWithSemanticRecall(
       },
       candidates: ruleFlows,
       decision_stage: 'clarify',
+    };
+  }
+
+  const fallback = selectFallbackRoute(filtered);
+  const fallbackDecision = fallback ? fallbackAgentDecision(fallback) : undefined;
+  if (fallbackDecision) {
+    return {
+      route_decision: fallbackDecision,
+      candidates: [],
+      decision_stage: 'reject',
     };
   }
 

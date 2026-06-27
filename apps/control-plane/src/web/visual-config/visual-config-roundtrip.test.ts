@@ -118,6 +118,7 @@ function routeFixture(): RouteSpec {
       role_constraints: ['operator'],
       confidence_threshold: 0.8,
       ambiguous_threshold: 0.4,
+      fallback_agent_ref: 'agent_roundtrip@1',
     },
   };
 }

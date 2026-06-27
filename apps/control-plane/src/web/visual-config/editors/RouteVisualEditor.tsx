@@ -14,6 +14,10 @@ export function RouteVisualEditor({
 }: VisualEditorProps<RouteSpec> & { client: ApiClient }) {
   const { t } = useTranslation();
   const route = value.route;
+  const fallbackAgentRef = parseVersionRef(route.fallback_agent_ref);
+  const fallbackAgentValue = fallbackAgentRef
+    ? { resource_id: fallbackAgentRef.id, version: fallbackAgentRef.version }
+    : undefined;
   return (
     <Space direction="vertical" style={{ width: '100%' }}>
       <Form layout="vertical">
@@ -59,7 +63,33 @@ export function RouteVisualEditor({
         <Form.Item label={t('visualConfig.route.roles')}>
           <StringListEditor value={route.role_constraints} readOnly={readOnly} onChange={(role_constraints) => onChange({ ...value, route: { ...route, role_constraints } })} />
         </Form.Item>
+        <Form.Item label={t('visualConfig.route.fallbackAgentRef')}>
+          <ExactVersionSelect
+            client={client}
+            resourceType="agent"
+            status="published"
+            testId="vc-route-fallback-agent-ref"
+            readOnly={readOnly}
+            value={fallbackAgentValue}
+            onChange={(next) => onChange({
+              ...value,
+              route: {
+                ...route,
+                fallback_agent_ref: next ? `${next.resource_id}@${next.version}` : undefined,
+              },
+            })}
+          />
+        </Form.Item>
+        <Alert type="info" showIcon message={t('visualConfig.route.exactFallbackNotice')} />
       </Form>
     </Space>
   );
+}
+
+function parseVersionRef(value: string | undefined): { id: string; version: number } | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const match = /^(.+)@([1-9]\d*)$/u.exec(value);
+  return match ? { id: match[1] ?? '', version: Number(match[2]) } : undefined;
 }

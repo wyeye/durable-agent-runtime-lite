@@ -166,6 +166,40 @@ describe('RegistryValidationService', () => {
     expect(result.warnings.map((warning: RegistryValidationIssue) => warning.code)).toContain('ROUTE_PUBLISHED_CONFLICT_WARNING');
   });
 
+  it('validates route fallback agent exact ref and publishability', async () => {
+    const route: RouteSpec = {
+      route_id: 'route_with_fallback',
+      flow_id: 'sample_flow',
+      version: 1,
+      status: 'draft',
+      route: {
+        keywords: ['fallback'],
+        examples: [],
+        negative_examples: [],
+        supported_channels: [],
+        role_constraints: [],
+        priority: 50,
+        confidence_threshold: 0.7,
+        ambiguous_threshold: 0.5,
+        fallback_agent_ref: 'sample_agent@1',
+      },
+    };
+    const valid = await service().validateRoute(route);
+    expect(valid.can_publish).toBe(true);
+
+    const invalidRef = await service().validateRoute({
+      ...route,
+      route: { ...route.route, fallback_agent_ref: 'sample_agent' },
+    });
+    expect(invalidRef.errors.map((error: RegistryValidationIssue) => error.code)).toContain('REGISTRY_SCHEMA_INVALID');
+
+    const missing = await service().validateRoute({
+      ...route,
+      route: { ...route.route, fallback_agent_ref: 'missing_agent@1' },
+    });
+    expect(missing.errors.map((error: RegistryValidationIssue) => error.code)).toContain('ROUTE_FALLBACK_AGENT_NOT_FOUND');
+  });
+
   it('allows pending Flow dependency only for joint Flow+Route publish validation', async () => {
     const draftFlow = sampleFlow();
     const flows = new FakeRepository<FlowSpec>(new Map([[

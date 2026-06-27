@@ -1059,6 +1059,7 @@ export const routeConfigSchema = z.object({
   role_constraints: z.array(z.string()).default([]),
   confidence_threshold: z.number().min(0).max(1).default(0.7),
   ambiguous_threshold: z.number().min(0).max(1).default(0.5),
+  fallback_agent_ref: z.string().regex(/^.+@[1-9]\d*$/u).optional(),
 });
 
 export const routeSpecSchema = z.object({
@@ -1100,6 +1101,8 @@ export const routeDecisionSchema = z.discriminatedUnion('decision', [
   z.object({
     decision: z.literal('agent_fallback'),
     agent_id: z.string().min(1),
+    agent_version: z.number().int().positive().optional(),
+    agent_execution_plan_ref: z.string().min(1).optional(),
     reason: z.string().min(1),
   }),
   z.object({

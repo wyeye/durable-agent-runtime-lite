@@ -73,6 +73,7 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
         role_constraints: [],
         confidence_threshold: 0.7,
         ambiguous_threshold: 0.5,
+        fallback_agent_ref: 'agent_id@1',
       },
     }),
     renderSummary: renderRouteSummary,
@@ -347,6 +348,9 @@ function renderRouteSummary(record: RegistryRecord) {
       </Descriptions.Item>
       <Descriptions.Item label="roles">
         {formatList(readStringArray(route.role_constraints))}
+      </Descriptions.Item>
+      <Descriptions.Item label="fallback_agent_ref">
+        {readString(route.fallback_agent_ref) ?? '-'}
       </Descriptions.Item>
       <Descriptions.Item label="gray tenant allowlist">
         {formatList(record.gray_policy.tenant_allowlist)}

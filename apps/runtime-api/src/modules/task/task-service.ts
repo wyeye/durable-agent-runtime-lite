@@ -83,6 +83,12 @@ export interface AgentExecutionPlanResolver {
     userId: string;
     executionPlanRef: string;
   }): Promise<{ executionPlanRef: string; executionPlanHash: string } | undefined>;
+  resolveForAgent?(input: {
+    tenantId: string;
+    userId: string;
+    agentId: string;
+    agentVersion: number;
+  }): Promise<{ executionPlanRef: string; executionPlanHash: string } | undefined>;
 }
 
 export interface RuntimeTenantPolicyResolver {
@@ -153,6 +159,9 @@ export class TaskService {
     const executionPlan = decision.decision === 'matched'
       ? await this.resolveExecutionPlan(normalized.tenant_id, normalized.user_id, decision.flow_id, decision.flow_version)
       : undefined;
+    const agentPlan = decision.decision === 'agent_fallback'
+      ? await this.resolveAgentExecutionPlanForDecision(normalized.tenant_id, normalized.user_id, decision)
+      : undefined;
     const policySnapshot = executionPlan
       ? await this.resolveTenantPolicySnapshot({
           tenantId: normalized.tenant_id,
@@ -162,8 +171,17 @@ export class TaskService {
           executionPlanType: 'flow',
           requestId: normalized.request_id,
         })
-      : undefined;
-    const admission = executionPlan?.hasAgentSteps && policySnapshot
+      : agentPlan
+        ? await this.resolveTenantPolicySnapshot({
+            tenantId: normalized.tenant_id,
+            userId: normalized.user_id,
+            executionPlanRef: agentPlan.executionPlanRef,
+            executionPlanHash: agentPlan.executionPlanHash,
+            executionPlanType: 'agent',
+            requestId: normalized.request_id,
+          })
+        : undefined;
+    const admission = ((executionPlan?.hasAgentSteps ?? false) || Boolean(agentPlan)) && policySnapshot
       ? await this.reserveAdmission({
           tenantId: normalized.tenant_id,
           taskRunId,
@@ -171,7 +189,7 @@ export class TaskService {
         })
       : undefined;
 
-    if (decision.decision !== 'matched' && !this.allowMockRouteFallback) {
+    if (decision.decision !== 'matched' && decision.decision !== 'agent_fallback' && !this.allowMockRouteFallback) {
       const blockedResponse = runTaskResponseSchema.parse({
         task_run_id: taskRunId,
         workflow_id: workflowId,
@@ -209,6 +227,10 @@ export class TaskService {
           workflow_type: 'GenericAgentWorkflow',
           workflow_id: workflowId,
           agent_id: decision.decision === 'agent_fallback' ? decision.agent_id : DEFAULT_AGENT_ID,
+          agent_execution_plan_ref: agentPlan?.executionPlanRef,
+          tenant_policy_snapshot_ref: policySnapshot?.snapshot_ref,
+          tenant_policy_hash: policySnapshot?.snapshot_hash,
+          tenant_admission_id: admission?.admission_id,
           input: normalized.input,
           request_locale: normalized.request_locale,
           request_id: normalized.request_id,
@@ -241,7 +263,7 @@ export class TaskService {
         flow_version: queuedResponse.flow_version,
         workflow_id: workflowId,
         status: queuedResponse.status,
-        execution_plan_ref: executionPlan?.executionPlanRef,
+        execution_plan_ref: executionPlan?.executionPlanRef ?? agentPlan?.executionPlanRef,
         tenant_policy_snapshot_ref: policySnapshot?.snapshot_ref,
         tenant_policy_hash: policySnapshot?.snapshot_hash,
         tenant_admission_id: admission?.admission_id,
@@ -250,7 +272,9 @@ export class TaskService {
       }),
       input: normalized.input,
       routeResult,
-      ...(executionPlan?.executionPlanRef ? { executionPlanRef: executionPlan.executionPlanRef } : {}),
+      ...((executionPlan?.executionPlanRef ?? agentPlan?.executionPlanRef)
+        ? { executionPlanRef: executionPlan?.executionPlanRef ?? agentPlan?.executionPlanRef }
+        : {}),
       ...(policySnapshot ? {
         tenantPolicySnapshotRef: policySnapshot.snapshot_ref,
         tenantPolicyHash: policySnapshot.snapshot_hash,
@@ -436,6 +460,38 @@ export class TaskService {
     const plan = await this.agentExecutionPlanResolver.resolve({ tenantId, userId, executionPlanRef });
     if (!plan) {
       throw new Error(`AgentExecutionPlan not found: ${executionPlanRef}`);
+    }
+    return plan;
+  }
+
+  private async resolveAgentExecutionPlanForDecision(
+    tenantId: string,
+    userId: string,
+    decision: Extract<RunTaskResponse['route_decision'], { decision: 'agent_fallback' }>,
+  ): Promise<{ executionPlanRef: string; executionPlanHash: string }> {
+    if (decision.agent_execution_plan_ref) {
+      return this.resolveAgentExecutionPlan(tenantId, userId, decision.agent_execution_plan_ref);
+    }
+    if (!decision.agent_version) {
+      throw new Error(`Route fallback agent_version is required for ${decision.agent_id}`);
+    }
+    if (!this.agentExecutionPlanResolver?.resolveForAgent) {
+      if (this.allowMockRouteFallback) {
+        return {
+          executionPlanRef: `memory://agent/${encodeURIComponent(decision.agent_id)}/versions/${decision.agent_version}`,
+          executionPlanHash: '0'.repeat(64),
+        };
+      }
+      throw new Error(`AgentExecutionPlan resolver cannot resolve fallback agent ${decision.agent_id}@${decision.agent_version}`);
+    }
+    const plan = await this.agentExecutionPlanResolver.resolveForAgent({
+      tenantId,
+      userId,
+      agentId: decision.agent_id,
+      agentVersion: decision.agent_version,
+    });
+    if (!plan) {
+      throw new Error(`AgentExecutionPlan not found for fallback agent ${decision.agent_id}@${decision.agent_version}`);
     }
     return plan;
   }
@@ -728,5 +784,26 @@ export class DbAgentExecutionPlanResolver implements AgentExecutionPlanResolver 
     return plan
       ? { executionPlanRef: plan.execution_plan_ref, executionPlanHash: plan.execution_plan_hash }
       : undefined;
+  }
+
+  async resolveForAgent(input: {
+    tenantId: string;
+    userId: string;
+    agentId: string;
+    agentVersion: number;
+  }): Promise<{ executionPlanRef: string; executionPlanHash: string } | undefined> {
+    void input.userId;
+    const existing = await this.repository.getByAgentVersion(input.agentId, input.agentVersion, {
+      tenantId: input.tenantId,
+    });
+    const plan = existing ?? await this.repository.createForAgent({
+      tenantId: input.tenantId,
+      agentId: input.agentId,
+      agentVersion: input.agentVersion,
+    });
+    return {
+      executionPlanRef: plan.execution_plan_ref,
+      executionPlanHash: plan.execution_plan_hash,
+    };
   }
 }
