@@ -67,8 +67,8 @@
 
 | 变量 | 默认值 | 主要使用方 | 用途 |
 | --- | --- | --- | --- |
-| `ROUTER_EMBEDDING_MODEL_ID` | 空 | `runtime-api`、`control-plane` | 路由 embedding 使用的模型 ID。 |
-| `ROUTER_EMBEDDING_MODEL_VERSION` | 空 | `runtime-api`、`control-plane` | 路由 embedding 使用的模型版本。 |
+| `ROUTER_EMBEDDING_MODEL_ID` | `mock-embedding-1536` | `runtime-api`、`control-plane` | 路由 embedding 使用的模型 ID。本地 Docker 开发栈默认指向 mock embedding 模型。 |
+| `ROUTER_EMBEDDING_MODEL_VERSION` | `1` | `runtime-api`、`control-plane` | 路由 embedding 使用的模型版本。本地 Docker 开发栈默认指向 mock embedding 模型版本。 |
 | `ROUTER_VECTOR_TOP_K` | `5` | `runtime-api`、`control-plane` | 语义召回 Top-K。 |
 | `ROUTER_SEMANTIC_MATCH_THRESHOLD` | `0.8` | `runtime-api`、`control-plane` | 语义命中阈值。 |
 | `ROUTER_SEMANTIC_CLARIFY_THRESHOLD` | `0.65` | `runtime-api`、`control-plane` | 进入 clarify 的阈值。 |
