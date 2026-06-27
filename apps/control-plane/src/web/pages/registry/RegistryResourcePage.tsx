@@ -258,11 +258,9 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
       render: (value: string, record) => (
         <Button
           type="link"
-            onClick={() => {
-              if (editorDirty && !globalThis.confirm('当前可视化配置有未保存改动，确认切换资源吗？')) {
-                return;
-              }
-              selectRecord(record);
+          onClick={(event) => {
+            event.stopPropagation();
+            requestSelectRecord(record);
           }}
         >
           {value}
@@ -275,7 +273,7 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
     { title: '摘要', key: 'extra', render: (_, record) => config.renderListExtra?.(record) ?? null },
     { title: '更新人', dataIndex: 'updated_by', key: 'updated_by', render: (value: string | undefined) => value ?? '-' },
     { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', render: formatDateTime },
-  ], [config, editorDirty, visualAdapter]);
+  ], [config, hasUnsavedEditorChanges, visualAdapter]);
 
   return (
     <div className="cp-page">
@@ -286,15 +284,15 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
         </div>
         <Can permission="registry:write">
           <Button
-              type="primary"
-              data-testid="registry-create"
-              onClick={() => {
-                setCreateState({ open: true, spec: visualAdapter.createDefault() });
-                setCreateDirty(false);
-              }}
-            >
-              创建 draft
-            </Button>
+            type="primary"
+            data-testid="registry-create"
+            onClick={() => {
+              setCreateState({ open: true, spec: visualAdapter.createDefault() });
+              setCreateDirty(false);
+            }}
+          >
+            创建 draft
+          </Button>
         </Can>
       </div>
       <ReadOnlyNotice />
@@ -318,183 +316,188 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
         </Form>
       </section>
       {listQuery.error ? <ErrorAlert error={listQuery.error} /> : null}
-      <div className="cp-split">
-        <section className="cp-section">
-          <Table
-            data-testid="registry-table"
-            rowKey={(record) => `${record.resource_id}:${record.version}`}
-            loading={listQuery.isLoading}
-            columns={columns}
-            dataSource={records}
-            pagination={{ pageSize: 10 }}
-            locale={{ emptyText: <EmptyState description="没有匹配的注册资源" /> }}
+      <section className="cp-section cp-registry-list-section">
+        <Table
+          data-testid="registry-table"
+          rowKey={(record) => `${record.resource_id}:${record.version}`}
+          loading={listQuery.isLoading}
+          columns={columns}
+          dataSource={records}
+          pagination={{ pageSize: 10 }}
+          rowClassName={(record) => isSameRecord(record, selected) ? 'cp-registry-row-selected' : ''}
+          onRow={(record) => ({
+            onClick: () => requestSelectRecord(record),
+          })}
+          scroll={{ x: 960 }}
+          locale={{ emptyText: <EmptyState description="没有匹配的注册资源" /> }}
+        />
+      </section>
+      <Drawer
+        title={selected ? (
+          <Space size="small" wrap>
+            <Typography.Text strong>{selected.resource_id}@{selected.version}</Typography.Text>
+            <StatusTag status={selected.status} />
+          </Space>
+        ) : config.title}
+        open={Boolean(selected)}
+        onClose={requestCloseDetailDrawer}
+        width="min(1040px, 100vw)"
+        className="cp-registry-detail-drawer"
+        extra={selected ? (
+          <ReleaseActionButtons
+            status={selected.status}
+            disabled={releaseMutation.isPending || validateMutation.isPending || updateMutation.isPending || cloneMutation.isPending}
+            {...(publishBlocked ? { publishDisabledReason: publishDisabledReason(selected.status) } : {})}
+            rollbackDisabled={selectedVersionOptions.length === 0}
+            onAction={(nextAction) => {
+              if (hasUnsavedEditorChanges && !globalThis.confirm('当前草稿有未保存改动，继续会基于已保存版本执行操作，确认继续吗？')) {
+                return;
+              }
+              if (nextAction === 'validate') {
+                validateMutation.mutate();
+                return;
+              }
+              if (nextAction === 'clone') {
+                cloneMutation.mutate();
+                return;
+              }
+              setAction(nextAction);
+            }}
           />
-        </section>
-        <section className="cp-section">
-          {selected ? (
-            <>
-              <Space direction="vertical" style={{ width: '100%' }} size="middle">
-                <div className="cp-page-header">
-                  <div>
-                    <Typography.Title level={3} style={{ margin: 0 }}>
-                      {selected.resource_id}@{selected.version} <StatusTag status={selected.status} />
-                    </Typography.Title>
-                    <Typography.Text type="secondary">revision {selected.revision} · sha256 {selected.sha256.slice(0, 12)}</Typography.Text>
+        ) : null}
+      >
+        {selected ? (
+          <Space direction="vertical" style={{ width: '100%' }} size="middle">
+            <Typography.Text type="secondary">revision {selected.revision} · sha256 {selected.sha256.slice(0, 12)}</Typography.Text>
+            <section className="cp-registry-context">
+              <div className="cp-registry-context-bar">
+                <div>
+                  <Typography.Text strong>当前查看版本</Typography.Text>
+                  <div className="cp-registry-context-meta">
+                    <Select
+                      className="cp-registry-version-select"
+                      value={versionValue}
+                      options={versionOptions.map((option) => ({
+                        value: option.value,
+                        label: (
+                          <span>
+                            {option.value} <StatusTag status={option.record.status} />
+                          </span>
+                        ),
+                      }))}
+                      onChange={(value) => {
+                        const next = versionOptions.find((option) => option.value === value)?.record;
+                        if (next) {
+                          requestSelectRecord(next);
+                        }
+                      }}
+                    />
                   </div>
-                  <ReleaseActionButtons
-                    status={selected.status}
-                    disabled={releaseMutation.isPending || validateMutation.isPending || updateMutation.isPending || cloneMutation.isPending}
-                    {...(publishBlocked ? { publishDisabledReason: publishDisabledReason(selected.status) } : {})}
-                    rollbackDisabled={selectedVersionOptions.length === 0}
-                    onAction={(nextAction) => {
-                      if (hasUnsavedEditorChanges && !globalThis.confirm('当前草稿有未保存改动，继续会基于已保存版本执行操作，确认继续吗？')) {
-                        return;
-                      }
-                      if (nextAction === 'validate') {
-                        validateMutation.mutate();
-                        return;
-                      }
-                      if (nextAction === 'clone') {
-                        cloneMutation.mutate();
-                        return;
-                      }
-                      setAction(nextAction);
-                    }}
-                  />
                 </div>
-                <section className="cp-registry-context">
-                  <div className="cp-registry-context-bar">
-                    <div>
-                      <Typography.Text strong>当前查看版本</Typography.Text>
-                      <div className="cp-registry-context-meta">
-                        <Select
-                          className="cp-registry-version-select"
-                          value={versionValue}
-                          options={versionOptions.map((option) => ({
-                            value: option.value,
-                            label: (
-                              <span>
-                                {option.value} <StatusTag status={option.record.status} />
-                              </span>
-                            ),
-                          }))}
-                          onChange={(value) => {
-                            const next = versionOptions.find((option) => option.value === value)?.record;
-                            if (next) {
-                              selectRecord(next);
-                            }
-                          }}
-                        />
+                <div className="cp-registry-context-tags">
+                  {editable ? <Tag color="processing">可直接编辑</Tag> : <Tag>只读版本</Tag>}
+                  {hasUnsavedEditorChanges ? <Tag color="warning">有未保存改动</Tag> : <Tag color="success">已与服务端同步</Tag>}
+                </div>
+              </div>
+              <Typography.Text type="secondary">
+                {editable
+                  ? '当前页签里的修改只会影响这个版本；保存后才会进入校验和发布流程。'
+                  : '当前版本是只读快照。如需继续修改，请先 clone 出新的 draft 版本。'}
+              </Typography.Text>
+            </section>
+            {hasUnsavedEditorChanges ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="当前存在未保存改动"
+                description="校验、发布、回滚、禁用等操作都会基于服务端已保存内容执行，不会自动带上当前表单里的临时修改。"
+              />
+            ) : null}
+            {validateMutation.error ? <ErrorAlert error={validateMutation.error} /> : null}
+            {updateMutation.error ? <ErrorAlert error={updateMutation.error} /> : null}
+            {releaseMutation.error ? <ErrorAlert error={releaseMutation.error} /> : null}
+            {cloneMutation.error ? <ErrorAlert error={cloneMutation.error} /> : null}
+            {config.renderSummary(selected)}
+            {isEvaluationGatedResource(resourceType) ? (
+              <EvaluationGateCard record={selected} onChange={setGatePublishMetadata} />
+            ) : null}
+            <Tabs
+              items={[
+                {
+                  key: 'editor',
+                  label: '可视化配置',
+                  children: (
+                    <Space direction="vertical" style={{ width: '100%' }}>
+                      <FormErrorSummary
+                        issues={editorValidation.success ? [] : editorValidation.error.issues}
+                        apiIssues={issuesFromError(updateMutation.error)}
+                      />
+                      <RegistryVisualEditor
+                        resourceType={resourceType}
+                        value={editorSpec}
+                        readOnly={!editable}
+                        onChange={(spec) => {
+                          setEditorSpec(spec);
+                          setEditorDirty(true);
+                        }}
+                        client={apiClient}
+                      />
+                      <Can permission="registry:write">
+                        <Button
+                          type="primary"
+                          disabled={!editable}
+                          loading={updateMutation.isPending}
+                          onClick={() => updateMutation.mutate()}
+                          data-testid="registry-save"
+                        >
+                          保存 draft
+                        </Button>
+                      </Can>
+                      {!editable ? <Typography.Text type="secondary">当前状态不可原地修改，需要 clone 新版本。</Typography.Text> : null}
+                    </Space>
+                  ),
+                },
+                {
+                  key: 'json',
+                  label: 'JSON 查看',
+                  children: <ReadonlyJsonPreview value={visualAdapter.getPreview(editorSpec)} filename={`${selected.resource_id}-${selected.version}.json`} />,
+                },
+                {
+                  key: 'validation',
+                  label: '校验结果',
+                  children: <ValidationResult result={validation} />,
+                },
+                {
+                  key: 'versions',
+                  label: '版本对比',
+                  children: (
+                    <Space direction="vertical" style={{ width: '100%' }}>
+                      <Space wrap>
+                        <VersionSelector versions={versions} value={compareLeft} onChange={setCompareLeft} placeholder="左侧版本" />
+                        <VersionSelector versions={versions} value={compareRight} onChange={setCompareRight} placeholder="右侧版本" />
+                      </Space>
+                      <div className="cp-json-compare">
+                        <pre className="cp-json-pre">{compareLeftQuery.data ? stringifyPretty(compareLeftQuery.data.spec) : '选择左侧版本'}</pre>
+                        <pre className="cp-json-pre">{compareRightQuery.data ? stringifyPretty(compareRightQuery.data.spec) : '选择右侧版本'}</pre>
                       </div>
-                    </div>
-                    <div className="cp-registry-context-tags">
-                      {editable ? <Tag color="processing">可直接编辑</Tag> : <Tag>只读版本</Tag>}
-                      {hasUnsavedEditorChanges ? <Tag color="warning">有未保存改动</Tag> : <Tag color="success">已与服务端同步</Tag>}
-                    </div>
-                  </div>
-                  <Typography.Text type="secondary">
-                    {editable
-                      ? '当前页签里的修改只会影响这个版本；保存后才会进入校验和发布流程。'
-                      : '当前版本是只读快照。如需继续修改，请先 clone 出新的 draft 版本。'}
-                  </Typography.Text>
-                </section>
-                {hasUnsavedEditorChanges ? (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    message="当前存在未保存改动"
-                    description="校验、发布、回滚、禁用等操作都会基于服务端已保存内容执行，不会自动带上当前表单里的临时修改。"
-                  />
-                ) : null}
-                {validateMutation.error ? <ErrorAlert error={validateMutation.error} /> : null}
-                {updateMutation.error ? <ErrorAlert error={updateMutation.error} /> : null}
-                {releaseMutation.error ? <ErrorAlert error={releaseMutation.error} /> : null}
-                {cloneMutation.error ? <ErrorAlert error={cloneMutation.error} /> : null}
-                {config.renderSummary(selected)}
-                {isEvaluationGatedResource(resourceType) ? (
-                  <EvaluationGateCard record={selected} onChange={setGatePublishMetadata} />
-                ) : null}
-                <Tabs
-                  items={[
-                    {
-                      key: 'editor',
-                      label: '可视化配置',
-                      children: (
-                        <Space direction="vertical" style={{ width: '100%' }}>
-                          <FormErrorSummary
-                            issues={editorValidation.success ? [] : editorValidation.error.issues}
-                            apiIssues={issuesFromError(updateMutation.error)}
-                          />
-                          <RegistryVisualEditor
-                            resourceType={resourceType}
-                            value={editorSpec}
-                            readOnly={!editable}
-                            onChange={(spec) => {
-                              setEditorSpec(spec);
-                              setEditorDirty(true);
-                            }}
-                            client={apiClient}
-                          />
-                          <Can permission="registry:write">
-                            <Button
-                              type="primary"
-                              disabled={!editable}
-                              loading={updateMutation.isPending}
-                              onClick={() => updateMutation.mutate()}
-                              data-testid="registry-save"
-                            >
-                              保存 draft
-                            </Button>
-                          </Can>
-                          {!editable ? <Typography.Text type="secondary">当前状态不可原地修改，需要 clone 新版本。</Typography.Text> : null}
-                        </Space>
-                      ),
-                    },
-                    {
-                      key: 'json',
-                      label: 'JSON 查看',
-                      children: <ReadonlyJsonPreview value={visualAdapter.getPreview(editorSpec)} filename={`${selected.resource_id}-${selected.version}.json`} />,
-                    },
-                    {
-                      key: 'validation',
-                      label: '校验结果',
-                      children: <ValidationResult result={validation} />,
-                    },
-                    {
-                      key: 'versions',
-                      label: '版本对比',
-                      children: (
-                        <Space direction="vertical" style={{ width: '100%' }}>
-                          <Space wrap>
-                            <VersionSelector versions={versions} value={compareLeft} onChange={setCompareLeft} placeholder="左侧版本" />
-                            <VersionSelector versions={versions} value={compareRight} onChange={setCompareRight} placeholder="右侧版本" />
-                          </Space>
-                          <div className="cp-json-compare">
-                            <pre className="cp-json-pre">{compareLeftQuery.data ? stringifyPretty(compareLeftQuery.data.spec) : '选择左侧版本'}</pre>
-                            <pre className="cp-json-pre">{compareRightQuery.data ? stringifyPretty(compareRightQuery.data.spec) : '选择右侧版本'}</pre>
-                          </div>
-                        </Space>
-                      ),
-                    },
-                    {
-                      key: 'releases',
-                      label: '发布历史',
-                      children: <ReleaseHistoryTable releases={releaseQuery.data ?? []} />,
-                    },
-                  ]}
-                />
-                <Divider />
-                <Space wrap>
-                  <InputNumber min={1} placeholder="克隆目标版本" value={cloneTarget ?? null} onChange={(value) => setCloneTarget(typeof value === 'number' ? value : undefined)} />
-                  <Typography.Text type="secondary">不填写时后端自动生成下一可用版本。</Typography.Text>
-                </Space>
-              </Space>
-            </>
-          ) : (
-            <EmptyState description="请选择一个资源版本" />
-          )}
-        </section>
-      </div>
+                    </Space>
+                  ),
+                },
+                {
+                  key: 'releases',
+                  label: '发布历史',
+                  children: <ReleaseHistoryTable releases={releaseQuery.data ?? []} />,
+                },
+              ]}
+            />
+            <Divider />
+            <Space wrap>
+              <InputNumber min={1} placeholder="克隆目标版本" value={cloneTarget ?? null} onChange={(value) => setCloneTarget(typeof value === 'number' ? value : undefined)} />
+              <Typography.Text type="secondary">不填写时后端自动生成下一可用版本。</Typography.Text>
+            </Space>
+          </Space>
+        ) : null}
+      </Drawer>
       <Drawer
         title={`创建 ${config.title} draft`}
         open={createState.open}
@@ -557,6 +560,30 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
     setCompareLeft(undefined);
     setCompareRight(undefined);
   }
+
+  function requestSelectRecord(record: RegistryRecord) {
+    if (hasUnsavedEditorChanges && !globalThis.confirm('当前可视化配置有未保存改动，确认切换资源吗？')) {
+      return;
+    }
+    selectRecord(record);
+  }
+
+  function requestCloseDetailDrawer() {
+    if (hasUnsavedEditorChanges && !globalThis.confirm('当前草稿有未保存改动，确认关闭详情吗？')) {
+      return;
+    }
+    setSelected(undefined);
+    setEditorDirty(false);
+    setValidation(undefined);
+    setCompareLeft(undefined);
+    setCompareRight(undefined);
+    setCloneTarget(undefined);
+    setAction(undefined);
+  }
+}
+
+function isSameRecord(left: RegistryRecord, right: RegistryRecord | undefined): boolean {
+  return Boolean(right && left.resource_id === right.resource_id && left.version === right.version);
 }
 
 function ReleaseHistoryTable({ releases }: { releases: CapabilityRelease[] }) {

@@ -744,8 +744,7 @@ async function createRouteThroughUi(
   await page.keyboard.press('Enter');
   await page.getByTestId('vc-route-examples-input').fill(`run ${keyword}`);
   await page.keyboard.press('Enter');
-  await page.getByTestId('vc-route-channels-input').fill('api');
-  await page.keyboard.press('Enter');
+  await selectByTestId(page, 'vc-route-channels-input', 'api');
   await submitDraftAndWait<RouteSpec>(page, 'routes');
   const record = await waitForRegistryVersion<RouteSpec>(page, 'routes', ids.route, 1);
   assert.equal(record.spec.flow_id, ids.flow);

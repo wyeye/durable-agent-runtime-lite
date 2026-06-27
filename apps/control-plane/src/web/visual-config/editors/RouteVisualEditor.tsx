@@ -1,10 +1,31 @@
 import type { RouteSpec } from '@dar/contracts';
 import type { ApiClient } from '../../api/client.js';
-import { Alert, Form, Input, InputNumber, Slider, Space } from 'antd';
+import { Alert, Form, Input, InputNumber, Select, Slider, Space } from 'antd';
 import { useTranslation } from 'react-i18next';
+import { displayRole } from '../../utils/i18n-labels.js';
 import type { VisualEditorProps } from '../types.js';
 import { ExactVersionSelect } from '../components/ExactVersionSelect.js';
 import { StringListEditor } from '../components/StringListEditor.js';
+
+const channelOptions = [
+  { value: 'web', label: 'Web' },
+  { value: 'api', label: 'API' },
+  { value: 'chat', label: 'Chat' },
+  { value: 'control-plane', label: 'Control Plane' },
+  { value: 'admin-console', label: 'Admin Console' },
+];
+
+const commonRoleOptions = [
+  'platform_admin',
+  'capability_operator',
+  'auditor',
+  'operator',
+  'employee',
+  'finance_admin',
+].map((value) => ({
+  value,
+  label: displayRole(value),
+}));
 
 export function RouteVisualEditor({
   value,
@@ -14,6 +35,17 @@ export function RouteVisualEditor({
 }: VisualEditorProps<RouteSpec> & { client: ApiClient }) {
   const { t } = useTranslation();
   const route = value.route;
+  const channelSelectOptions = uniqueOptions([
+    ...channelOptions,
+    ...route.supported_channels.map((value) => ({ value, label: value })),
+  ]);
+  const roleOptions = uniqueOptions([
+    ...commonRoleOptions,
+    ...route.role_constraints.map((value) => ({
+      value,
+      label: displayRole(value),
+    })),
+  ]);
   const fallbackAgentRef = parseVersionRef(route.fallback_agent_ref);
   const fallbackAgentValue = fallbackAgentRef
     ? { resource_id: fallbackAgentRef.id, version: fallbackAgentRef.version }
@@ -58,10 +90,28 @@ export function RouteVisualEditor({
           <StringListEditor value={route.negative_examples} readOnly={readOnly} onChange={(negative_examples) => onChange({ ...value, route: { ...route, negative_examples } })} />
         </Form.Item>
         <Form.Item label={t('visualConfig.route.channels')}>
-          <StringListEditor testId="vc-route-channels-input" value={route.supported_channels} readOnly={readOnly} onChange={(supported_channels) => onChange({ ...value, route: { ...route, supported_channels } })} />
+          <Select
+            mode="multiple"
+            data-testid="vc-route-channels-input"
+            value={route.supported_channels}
+            disabled={readOnly}
+            showSearch={false}
+            options={channelSelectOptions}
+            placeholder="选择适用渠道"
+            onChange={(supported_channels) => onChange({ ...value, route: { ...route, supported_channels } })}
+          />
         </Form.Item>
         <Form.Item label={t('visualConfig.route.roles')}>
-          <StringListEditor value={route.role_constraints} readOnly={readOnly} onChange={(role_constraints) => onChange({ ...value, route: { ...route, role_constraints } })} />
+          <Select
+            mode="multiple"
+            data-testid="vc-route-roles-select"
+            value={route.role_constraints}
+            disabled={readOnly}
+            showSearch={false}
+            options={roleOptions}
+            placeholder="选择适用角色"
+            onChange={(role_constraints) => onChange({ ...value, route: { ...route, role_constraints } })}
+          />
         </Form.Item>
         <Form.Item label={t('visualConfig.route.fallbackAgentRef')}>
           <ExactVersionSelect
@@ -92,4 +142,15 @@ function parseVersionRef(value: string | undefined): { id: string; version: numb
   }
   const match = /^(.+)@([1-9]\d*)$/u.exec(value);
   return match ? { id: match[1] ?? '', version: Number(match[2]) } : undefined;
+}
+
+function uniqueOptions(options: Array<{ value: string; label: string }>): Array<{ value: string; label: string }> {
+  const seen = new Set<string>();
+  return options.filter((option) => {
+    if (seen.has(option.value)) {
+      return false;
+    }
+    seen.add(option.value);
+    return true;
+  });
 }

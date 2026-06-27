@@ -237,6 +237,27 @@ body {
   gap: 12px;
 }
 
+.cp-registry-list-section .ant-table-row {
+  cursor: pointer;
+}
+
+.cp-registry-list-section .ant-table-row:hover > td {
+  background: #f5f8ff;
+}
+
+.cp-registry-row-selected > td,
+.cp-registry-row-selected:hover > td {
+  background: #eef4ff !important;
+}
+
+.cp-registry-detail-drawer .ant-drawer-body {
+  background: #f7f9fc;
+}
+
+.cp-registry-detail-drawer .cp-section {
+  background: #ffffff;
+}
+
 .cp-registry-context {
   display: flex;
   flex-direction: column;
@@ -370,5 +391,14 @@ body {
   .cp-registry-version-select {
     width: 100%;
     min-width: 0;
+  }
+
+  .cp-registry-detail-drawer .ant-drawer-header {
+    align-items: flex-start;
+  }
+
+  .cp-registry-detail-drawer .ant-drawer-extra {
+    margin-inline-start: 0;
+    width: 100%;
   }
 }
