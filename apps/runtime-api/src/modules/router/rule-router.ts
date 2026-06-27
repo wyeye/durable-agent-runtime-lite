@@ -314,7 +314,7 @@ export async function routeWithSemanticRecall(
         route_decision: fallbackDecision,
         candidates: semanticDecision.candidates,
         decision_stage: 'reject',
-        semantic: semanticDecision.semantic,
+        ...(semanticDecision.semantic ? { semantic: semanticDecision.semantic } : {}),
       };
     }
     return semanticDecision;

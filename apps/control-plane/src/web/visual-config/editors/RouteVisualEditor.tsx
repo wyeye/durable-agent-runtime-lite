@@ -70,7 +70,7 @@ export function RouteVisualEditor({
             status="published"
             testId="vc-route-fallback-agent-ref"
             readOnly={readOnly}
-            value={fallbackAgentValue}
+            {...(fallbackAgentValue ? { value: fallbackAgentValue } : {})}
             onChange={(next) => onChange({
               ...value,
               route: {

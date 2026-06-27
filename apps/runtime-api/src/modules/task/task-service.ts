@@ -250,6 +250,8 @@ export class TaskService {
       tenant_admission_id: admission?.admission_id,
     });
 
+    const resolvedExecutionPlanRef = executionPlan?.executionPlanRef ?? agentPlan?.executionPlanRef;
+
     await this.taskStore.create({
       taskRun: taskRunSchema.parse({
         task_run_id: taskRunId,
@@ -272,9 +274,7 @@ export class TaskService {
       }),
       input: normalized.input,
       routeResult,
-      ...((executionPlan?.executionPlanRef ?? agentPlan?.executionPlanRef)
-        ? { executionPlanRef: executionPlan?.executionPlanRef ?? agentPlan?.executionPlanRef }
-        : {}),
+      ...(resolvedExecutionPlanRef ? { executionPlanRef: resolvedExecutionPlanRef } : {}),
       ...(policySnapshot ? {
         tenantPolicySnapshotRef: policySnapshot.snapshot_ref,
         tenantPolicyHash: policySnapshot.snapshot_hash,
