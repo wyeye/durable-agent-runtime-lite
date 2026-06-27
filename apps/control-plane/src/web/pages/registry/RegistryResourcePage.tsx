@@ -1,6 +1,6 @@
 import type { CapabilityRelease, RegistryResourceType, RegistryValidationResult, SpecStatus } from '@dar/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Divider, Drawer, Form, Input, InputNumber, Select, Space, Table, Tabs, Typography } from 'antd';
+import { Alert, App, Button, Divider, Drawer, Form, Input, InputNumber, Select, Space, Table, Tabs, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
@@ -41,6 +41,7 @@ import { useUnsavedChangeGuard } from '../../visual-config/useUnsavedChangeGuard
 import { EvaluationGateCard, type GatePublishMetadata } from '../evaluation/EvaluationGateCard.js';
 import { resourceConfigs } from './resource-config.js';
 import type { RegistrySpec } from '../../api/registry-api.js';
+import { actionHelperText, canPublishFromStatus, isRollbackEligible, publishDisabledReason } from './registry-page-helpers.js';
 
 interface Filters {
   status?: SpecStatus;
@@ -209,11 +210,14 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
       }
       throw new Error('不支持的操作');
     },
-    onSuccess: async () => {
+    onSuccess: async (_release, values) => {
       message.success('发布操作已完成');
       setAction(undefined);
       if (selected) {
-        const next = await getVersion(apiClient, resourceType, selected.resource_id, selected.version);
+        const versionToLoad = action === 'rollback' && values.target_version
+          ? values.target_version
+          : selected.version;
+        const next = await getVersion(apiClient, resourceType, selected.resource_id, versionToLoad);
         await refreshSelected(next);
       }
     },
@@ -222,10 +226,24 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
   const records = listQuery.data?.items ?? [];
   const versions = versionsQuery.data ?? [];
   const editable = selected ? ['draft', 'validated'].includes(selected.status) : false;
-  const selectedVersionOptions = versions.map((record) => record.version).sort((a, b) => a - b);
+  const selectedVersionOptions = versions
+    .filter((record) => isRollbackEligible(record.status, resourceType))
+    .map((record) => record.version)
+    .sort((a, b) => a - b);
   const editorValidation = visualAdapter.schema.safeParse(editorSpec);
   const [editorDirty, setEditorDirty] = useState(false);
   const [createDirty, setCreateDirty] = useState(false);
+  const versionValue = selected ? `${selected.resource_id}@${selected.version}` : undefined;
+  const publishBlocked = selected ? !canPublishFromStatus(selected.status) : true;
+  const hasUnsavedEditorChanges = editable && editorDirty;
+  const versionOptions = useMemo(
+    () => versions.map((record) => ({
+      value: `${record.resource_id}@${record.version}`,
+      label: `${record.resource_id}@${record.version}`,
+      record,
+    })),
+    [versions],
+  );
 
   useUnsavedChangeGuard(
     (editable && editorDirty) || (createState.open && createDirty),
@@ -244,12 +262,7 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
               if (editorDirty && !globalThis.confirm('当前可视化配置有未保存改动，确认切换资源吗？')) {
                 return;
               }
-              setSelected(record);
-              setEditorSpec(visualAdapter.specToForm(record.spec) as RegistrySpec);
-              setEditorDirty(false);
-              setValidation(undefined);
-              setCompareLeft(undefined);
-              setCompareRight(undefined);
+              selectRecord(record);
           }}
         >
           {value}
@@ -330,8 +343,13 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
                   </div>
                   <ReleaseActionButtons
                     status={selected.status}
-                    disabled={releaseMutation.isPending || validateMutation.isPending}
+                    disabled={releaseMutation.isPending || validateMutation.isPending || updateMutation.isPending || cloneMutation.isPending}
+                    {...(publishBlocked ? { publishDisabledReason: publishDisabledReason(selected.status) } : {})}
+                    rollbackDisabled={selectedVersionOptions.length === 0}
                     onAction={(nextAction) => {
+                      if (hasUnsavedEditorChanges && !globalThis.confirm('当前草稿有未保存改动，继续会基于已保存版本执行操作，确认继续吗？')) {
+                        return;
+                      }
                       if (nextAction === 'validate') {
                         validateMutation.mutate();
                         return;
@@ -344,6 +362,50 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
                     }}
                   />
                 </div>
+                <section className="cp-registry-context">
+                  <div className="cp-registry-context-bar">
+                    <div>
+                      <Typography.Text strong>当前查看版本</Typography.Text>
+                      <div className="cp-registry-context-meta">
+                        <Select
+                          className="cp-registry-version-select"
+                          value={versionValue}
+                          options={versionOptions.map((option) => ({
+                            value: option.value,
+                            label: (
+                              <span>
+                                {option.value} <StatusTag status={option.record.status} />
+                              </span>
+                            ),
+                          }))}
+                          onChange={(value) => {
+                            const next = versionOptions.find((option) => option.value === value)?.record;
+                            if (next) {
+                              selectRecord(next);
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div className="cp-registry-context-tags">
+                      {editable ? <Tag color="processing">可直接编辑</Tag> : <Tag>只读版本</Tag>}
+                      {hasUnsavedEditorChanges ? <Tag color="warning">有未保存改动</Tag> : <Tag color="success">已与服务端同步</Tag>}
+                    </div>
+                  </div>
+                  <Typography.Text type="secondary">
+                    {editable
+                      ? '当前页签里的修改只会影响这个版本；保存后才会进入校验和发布流程。'
+                      : '当前版本是只读快照。如需继续修改，请先 clone 出新的 draft 版本。'}
+                  </Typography.Text>
+                </section>
+                {hasUnsavedEditorChanges ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="当前存在未保存改动"
+                    description="校验、发布、回滚、禁用等操作都会基于服务端已保存内容执行，不会自动带上当前表单里的临时修改。"
+                  />
+                ) : null}
                 {validateMutation.error ? <ErrorAlert error={validateMutation.error} /> : null}
                 {updateMutation.error ? <ErrorAlert error={updateMutation.error} /> : null}
                 {releaseMutation.error ? <ErrorAlert error={releaseMutation.error} /> : null}
@@ -477,10 +539,24 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
         requireGrayPolicy={action === 'gray'}
         versionOptions={action === 'rollback' ? selectedVersionOptions : []}
         onCancel={() => setAction(undefined)}
+        {...(action === 'publish' && selected?.status === 'draft' ? { noteLabel: '发布说明（将先自动校验）' } : {})}
+        {...(action ? (() => {
+          const helperText = actionHelperText(action, selected?.status, selectedVersionOptions.length);
+          return helperText ? { helperText } : {};
+        })() : {})}
         onConfirm={(values) => releaseMutation.mutate(values)}
       />
     </div>
   );
+
+  function selectRecord(record: RegistryRecord) {
+    setSelected(record);
+    setEditorSpec(visualAdapter.specToForm(record.spec) as RegistrySpec);
+    setEditorDirty(false);
+    setValidation(undefined);
+    setCompareLeft(undefined);
+    setCompareRight(undefined);
+  }
 }
 
 function ReleaseHistoryTable({ releases }: { releases: CapabilityRelease[] }) {

@@ -15,6 +15,7 @@ export function ConfirmActionModal({
   requireGrayPolicy = false,
   versionOptions = [],
   noteLabel = '发布说明',
+  helperText,
   onCancel,
   onConfirm,
 }: {
@@ -24,6 +25,7 @@ export function ConfirmActionModal({
   requireGrayPolicy?: boolean;
   versionOptions?: number[];
   noteLabel?: string;
+  helperText?: string;
   onCancel(): void;
   onConfirm(values: ConfirmActionValues): void;
 }) {
@@ -47,6 +49,7 @@ export function ConfirmActionModal({
         layout="vertical"
         onFinish={onConfirm}
       >
+        {helperText ? <p style={{ marginTop: 0, color: '#667085' }}>{helperText}</p> : null}
         {versionOptions.length > 0 ? (
           <Form.Item
             label="目标版本"

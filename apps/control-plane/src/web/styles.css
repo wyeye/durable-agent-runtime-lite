@@ -237,6 +237,39 @@ body {
   gap: 12px;
 }
 
+.cp-registry-context {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #d6dbe5;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.cp-registry-context-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cp-registry-context-meta {
+  margin-top: 8px;
+}
+
+.cp-registry-context-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cp-registry-version-select {
+  min-width: 260px;
+}
+
 .cp-metadata-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -332,5 +365,10 @@ body {
   .cp-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .cp-registry-version-select {
+    width: 100%;
+    min-width: 0;
   }
 }

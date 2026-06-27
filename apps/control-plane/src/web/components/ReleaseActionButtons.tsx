@@ -9,11 +9,17 @@ export function ReleaseActionButtons({
   status,
   onAction,
   disabled = false,
+  publishDisabledReason,
+  rollbackDisabled = false,
 }: {
   status: SpecStatus;
   onAction(action: ReleaseAction): void;
   disabled?: boolean;
+  publishDisabledReason?: string;
+  rollbackDisabled?: boolean;
 }) {
+  const publishEnabled = ['draft', 'validated', 'published', 'gray'].includes(status);
+  const deprecateEnabled = ['published', 'gray'].includes(status);
   return (
     <Space wrap>
       <Can permission="registry:validate">
@@ -23,19 +29,27 @@ export function ReleaseActionButtons({
         <Button onClick={() => onAction('clone')} disabled={disabled}>{displayAction('clone')}</Button>
       </Can>
       <Can permission="registry:publish">
-        <Button type="primary" onClick={() => onAction('publish')} disabled={disabled || !['validated', 'published', 'gray'].includes(status)} data-testid="registry-publish">{displayAction('publish')}</Button>
+        <Button
+          type="primary"
+          onClick={() => onAction('publish')}
+          disabled={disabled || !publishEnabled}
+          title={!publishEnabled ? publishDisabledReason : undefined}
+          data-testid="registry-publish"
+        >
+          {status === 'draft' ? '校验并发布' : displayAction('publish')}
+        </Button>
       </Can>
       <Can permission="registry:gray">
         <Button onClick={() => onAction('gray')} disabled={disabled || status !== 'published'}>灰度</Button>
       </Can>
       <Can permission="registry:deprecate">
-        <Button onClick={() => onAction('deprecate')} disabled={disabled || !['published', 'gray'].includes(status)}>废弃</Button>
+        <Button onClick={() => onAction('deprecate')} disabled={disabled || !deprecateEnabled}>废弃</Button>
       </Can>
       <Can permission="registry:disable">
         <Button danger onClick={() => onAction('disable')} disabled={disabled || status === 'disabled'}>{displayAction('disable')}</Button>
       </Can>
       <Can permission="registry:rollback">
-        <Button onClick={() => onAction('rollback')} disabled={disabled}>{displayAction('rollback')}</Button>
+        <Button onClick={() => onAction('rollback')} disabled={disabled || rollbackDisabled}>{displayAction('rollback')}</Button>
       </Can>
     </Space>
   );
