@@ -4,17 +4,17 @@ import { useQuery } from '@tanstack/react-query';
 import { Alert, Form, Input, InputNumber, Select, Slider, Space, Switch } from 'antd';
 import { useTranslation } from 'react-i18next';
 import { fetchRoleCatalog, listTenants } from '../../api/iam-api.js';
-import { displayRole } from '../../utils/i18n-labels.js';
+import { displayRole, displayRouteChannel } from '../../utils/i18n-labels.js';
 import type { VisualEditorProps } from '../types.js';
 import { ExactVersionSelect } from '../components/ExactVersionSelect.js';
 import { StringListEditor } from '../components/StringListEditor.js';
 
 const channelOptions = [
-  { value: 'web', label: 'Web' },
-  { value: 'api', label: 'API' },
-  { value: 'chat', label: 'Chat' },
-  { value: 'control-plane', label: 'Control Plane' },
-  { value: 'admin-console', label: 'Admin Console' },
+  { value: 'web', label: displayRouteChannel('web') },
+  { value: 'api', label: displayRouteChannel('api') },
+  { value: 'chat', label: displayRouteChannel('chat') },
+  { value: 'control-plane', label: displayRouteChannel('control-plane') },
+  { value: 'admin-console', label: displayRouteChannel('admin-console') },
 ];
 
 const commonRoleOptions = [
@@ -47,7 +47,7 @@ export function RouteVisualEditor({
   });
   const channelSelectOptions = uniqueOptions([
     ...channelOptions,
-    ...route.supported_channels.map((value) => ({ value, label: value })),
+    ...route.supported_channels.map((value) => ({ value, label: displayRouteChannel(value) })),
   ]);
   const tenantOptions = uniqueOptions([
     ...(tenantsQuery.data?.items ?? []).map((tenant) => ({

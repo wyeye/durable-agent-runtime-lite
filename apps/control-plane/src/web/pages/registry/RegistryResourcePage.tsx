@@ -1,8 +1,10 @@
-import type { CapabilityRelease, RegistryResourceType, RegistryValidationResult, SpecStatus } from '@dar/contracts';
+import type { CapabilityRelease, FlowSpec, RegistryResourceType, RegistryValidationResult, SpecStatus } from '@dar/contracts';
+import type { ZodIssue } from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Button, Divider, Drawer, Form, Input, InputNumber, Select, Space, Table, Tabs, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import { Can, ReadOnlyNotice } from '../../auth/role-guard.js';
 import { ConfirmActionModal, type ConfirmActionValues } from '../../components/ConfirmActionModal.js';
@@ -30,7 +32,7 @@ import {
   type RegistryRecord,
 } from '../../api/registry-api.js';
 import { formatDateTime } from '../../utils/format.js';
-import { displayAction, displayStatus } from '../../utils/i18n-labels.js';
+import { displayAction, displayStatus, displayWorkflowType } from '../../utils/i18n-labels.js';
 import { stringifyPretty } from '../../utils/json.js';
 import { FormErrorSummary } from '../../visual-config/components/FormErrorSummary.js';
 import { ReadonlyJsonPreview } from '../../visual-config/components/ReadonlyJsonPreview.js';
@@ -62,6 +64,7 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
   const apiClient = useApiClient();
   const queryClient = useQueryClient();
   const { message } = App.useApp();
+  const { t } = useTranslation();
   const [filters, setFilters] = useState<Filters>({});
   const [selected, setSelected] = useState<RegistryRecord | undefined>();
   const [editorSpec, setEditorSpec] = useState<RegistrySpec>(() => visualAdapter.createDefault());
@@ -124,7 +127,7 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
       return createDraft(apiClient, resourceType, parsed.data);
     },
     onSuccess: async (record) => {
-      message.success('draft 已创建');
+      message.success('草稿已创建');
       setCreateState({ open: false, spec: visualAdapter.createDefault() });
       setCreateDirty(false);
       await refreshSelected(record);
@@ -144,7 +147,7 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
       return updateDraft(apiClient, resourceType, selected.resource_id, selected.version, parsed.data, selected.revision);
     },
     onSuccess: async (record) => {
-      message.success('draft 已更新，revision 已刷新');
+      message.success('草稿已更新，修订号已刷新');
       setEditorDirty(false);
       await refreshSelected(record);
     },
@@ -159,7 +162,7 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
     },
     onSuccess: ({ validation: next }) => {
       setValidation(next);
-      message.success(next.can_publish ? 'validate 通过' : 'validate 完成但暂不可发布');
+      message.success(next.can_publish ? '校验通过' : '校验完成，但暂不可发布');
     },
   });
 
@@ -172,7 +175,7 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
     },
     onSuccess: async (record) => {
       setCloneTarget(undefined);
-      message.success('已 clone 新 draft 版本');
+      message.success('已克隆出新的草稿版本');
       await refreshSelected(record);
     },
   });
@@ -230,7 +233,10 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
     .filter((record) => isRollbackEligible(record.status, resourceType))
     .map((record) => record.version)
     .sort((a, b) => a - b);
-  const editorValidation = visualAdapter.schema.safeParse(editorSpec);
+  const editorValidation = visualAdapter.schema.safeParse(visualAdapter.formToSpec(editorSpec));
+  const createDraftSpec = visualAdapter.formToSpec(createState.spec);
+  const createValidation = visualAdapter.schema.safeParse(createDraftSpec);
+  const createIssues = createValidation.success ? [] : createValidation.error.issues;
   const [editorDirty, setEditorDirty] = useState(false);
   const [createDirty, setCreateDirty] = useState(false);
   const versionValue = selected ? `${selected.resource_id}@${selected.version}` : undefined;
@@ -291,7 +297,7 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
               setCreateDirty(false);
             }}
           >
-            创建 draft
+            创建草稿
           </Button>
         </Can>
       </div>
@@ -402,7 +408,7 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
               <Typography.Text type="secondary">
                 {editable
                   ? '当前页签里的修改只会影响这个版本；保存后才会进入校验和发布流程。'
-                  : '当前版本是只读快照。如需继续修改，请先 clone 出新的 draft 版本。'}
+                  : '当前版本是只读快照。如需继续修改，请先克隆出新的草稿版本。'}
               </Typography.Text>
             </section>
             {hasUnsavedEditorChanges ? (
@@ -450,10 +456,10 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
                           onClick={() => updateMutation.mutate()}
                           data-testid="registry-save"
                         >
-                          保存 draft
+                          保存草稿
                         </Button>
                       </Can>
-                      {!editable ? <Typography.Text type="secondary">当前状态不可原地修改，需要 clone 新版本。</Typography.Text> : null}
+                      {!editable ? <Typography.Text type="secondary">当前状态不可原地修改，需要克隆新版本。</Typography.Text> : null}
                     </Space>
                   ),
                 },
@@ -499,7 +505,7 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
         ) : null}
       </Drawer>
       <Drawer
-        title={`创建 ${config.title} draft`}
+        title={`创建${config.title}草稿`}
         open={createState.open}
         onClose={() => {
           if (createDirty && !globalThis.confirm('当前创建表单有未保存改动，确认关闭吗？')) {
@@ -508,31 +514,60 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
           setCreateState((current) => ({ ...current, open: false }));
           setCreateDirty(false);
         }}
-        width={720}
+        width="min(1120px, 100vw)"
+        className="cp-registry-create-drawer"
       >
         {createMutation.error ? <ErrorAlert error={createMutation.error} /> : null}
-        <Space direction="vertical" style={{ width: '100%' }}>
-          <FormErrorSummary apiIssues={issuesFromError(createMutation.error)} />
-          <RegistryVisualEditor
-            resourceType={resourceType}
-            value={createState.spec}
-            readOnly={false}
-            onChange={(spec) => {
-              setCreateState((current) => ({ ...current, spec }));
-              setCreateDirty(true);
-            }}
-            client={apiClient}
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <section className="cp-registry-create-overview">
+            <div>
+              <Typography.Text strong>{t('visualConfig.create.precheckTitle')}</Typography.Text>
+              <Typography.Paragraph type="secondary">
+                {t('visualConfig.create.precheckDescription')}
+              </Typography.Paragraph>
+            </div>
+            <DraftCreateSummary resourceType={resourceType} spec={createDraftSpec} issues={createIssues} />
+          </section>
+          <FormErrorSummary issues={createIssues} apiIssues={issuesFromError(createMutation.error)} />
+          <Tabs
+            items={[
+              {
+                key: 'visual',
+                label: t('visualConfig.create.visualTab'),
+                children: (
+                  <RegistryVisualEditor
+                    resourceType={resourceType}
+                    value={createState.spec}
+                    readOnly={false}
+                    onChange={(spec) => {
+                      setCreateState((current) => ({ ...current, spec }));
+                      setCreateDirty(true);
+                    }}
+                    client={apiClient}
+                  />
+                ),
+              },
+              {
+                key: 'preview',
+                label: t('visualConfig.create.previewTab'),
+                children: <ReadonlyJsonPreview value={visualAdapter.getPreview(createDraftSpec)} filename={`${resourceType}-draft-preview.json`} maxHeight={360} />,
+              },
+            ]}
           />
-          <ReadonlyJsonPreview value={visualAdapter.getPreview(createState.spec)} filename={`${resourceType}-draft-preview.json`} maxHeight={260} />
-          <Button
-            type="primary"
-            loading={createMutation.isPending}
-            onClick={() => createMutation.mutate()}
-            data-testid="draft-submit"
-            style={{ marginTop: 12 }}
-          >
-            提交 draft
-          </Button>
+          <Space className="cp-registry-create-actions" wrap>
+            <Button
+              type="primary"
+              loading={createMutation.isPending}
+              disabled={!createValidation.success}
+              onClick={() => createMutation.mutate()}
+              data-testid="draft-submit"
+            >
+              提交草稿
+            </Button>
+            <Typography.Text type={createValidation.success ? 'secondary' : 'danger'}>
+              {createValidation.success ? t('visualConfig.create.ready') : t('visualConfig.create.blocked')}
+            </Typography.Text>
+          </Space>
         </Space>
       </Drawer>
       <ConfirmActionModal
@@ -599,6 +634,48 @@ function ReleaseHistoryTable({ releases }: { releases: CapabilityRelease[] }) {
   return <Table size="small" rowKey="release_id" columns={columns} dataSource={releases} pagination={{ pageSize: 6 }} />;
 }
 
+function DraftCreateSummary({
+  resourceType,
+  spec,
+  issues,
+}: {
+  resourceType: RegistryResourceType;
+  spec: RegistrySpec;
+  issues: ZodIssue[];
+}) {
+  const { t } = useTranslation();
+  const id = resourceConfigs[resourceType].getIdFromSpec(spec) ?? '-';
+  const version = readVersion(spec);
+  const status = issues.length === 0
+    ? t('visualConfig.create.readyMetric')
+    : t('visualConfig.create.errorCount', { count: issues.length });
+  const flow = resourceType === 'flow' ? (spec as FlowSpec) : undefined;
+  return (
+    <div className="cp-registry-create-summary">
+      <SummaryMetric label={resourceConfigs[resourceType].idLabel} value={id} />
+      <SummaryMetric label={t('visualConfig.common.version')} value={version === undefined ? '-' : String(version)} />
+      {flow ? (
+        <>
+          <SummaryMetric label={t('visualConfig.flow.workflowType')} value={displayWorkflowType(flow.runtime.workflow_type)} />
+          <SummaryMetric label={t('visualConfig.flow.stepsMetric')} value={String(flow.steps.length)} />
+        </>
+      ) : (
+        <SummaryMetric label={t('visualConfig.create.status')} value={status} />
+      )}
+      {flow ? <SummaryMetric label={t('visualConfig.create.status')} value={status} /> : null}
+    </div>
+  );
+}
+
+function SummaryMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="cp-registry-create-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
 function splitCsv(value: string | undefined): string[] {
   return value?.split(',').map((item) => item.trim()).filter(Boolean) ?? [];
 }
@@ -638,4 +715,11 @@ function actionTitle(action: ReleaseAction | undefined): string {
 
 function isEvaluationGatedResource(resourceType: RegistryResourceType): boolean {
   return resourceType === 'prompt' || resourceType === 'agent' || resourceType === 'model_policy';
+}
+
+function readVersion(spec: RegistrySpec): number | string | undefined {
+  if ('version' in spec) {
+    return spec.version;
+  }
+  return undefined;
 }

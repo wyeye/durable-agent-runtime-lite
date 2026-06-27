@@ -714,6 +714,7 @@ async function createFlowThroughUi(
   const spec = flowSpec(ids, 1);
   await openCreateDraft(page, 'flows');
   await page.getByTestId('vc-flow-id').fill(spec.flow_id);
+  await page.getByRole('tab', { name: '步骤编排', exact: true }).click();
   await page.getByTestId('vc-flow-add-step-tool').click();
   await page.getByTestId('vc-flow-step-edit-1').click();
   await selectByTestId(page, 'vc-flow-step-tool-ref', `${ids.tool}@1.0.0`);

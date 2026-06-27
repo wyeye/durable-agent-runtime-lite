@@ -3,6 +3,11 @@ import type { FlowStep, RegistryResourceType, ToolRiskLevel } from '@dar/contrac
 import { Alert, Descriptions, Table, Tag, Typography } from 'antd';
 import { RiskNotice, RiskTag } from '../../components/RiskTag.js';
 import { formatList } from '../../utils/format.js';
+import {
+  displayFlowStepType,
+  displayRouteChannel,
+  displayWorkflowType,
+} from '../../utils/i18n-labels.js';
 import { isRecord, readNumber, readString, readStringArray } from '../../utils/json.js';
 import type { RegistryRecord } from '../../api/registry-api.js';
 
@@ -22,7 +27,7 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
   flow: {
     type: 'flow',
     plural: 'flows',
-    idLabel: 'flow_id',
+    idLabel: '流程 ID',
     title: '流程注册',
     description: '管理 FlowSpec 生命周期、依赖校验和发布版本。',
     getIdFromSpec: (spec) => readStringField(spec, 'flow_id'),
@@ -56,7 +61,7 @@ export const resourceConfigs: Record<RegistryResourceType, ResourceConfig> = {
   route: {
     type: 'route',
     plural: 'routes',
-    idLabel: 'route_id',
+    idLabel: '路由 ID',
     title: '路由注册',
     description: '管理 RouteSpec 匹配信号、阈值、灰度策略和发布版本。',
     getIdFromSpec: (spec) => readStringField(spec, 'route_id') ?? routeIdFromSpec(spec),
@@ -243,7 +248,7 @@ function renderFlowSummary(record: RegistryRecord) {
   const steps = Array.isArray(spec.steps) ? (spec.steps.filter(isRecord) as FlowStep[]) : [];
   const columns: ColumnsType<FlowStep> = [
     { title: '步骤 ID', dataIndex: 'id', key: 'id' },
-    { title: '类型', dataIndex: 'type', key: 'type' },
+    { title: '类型', dataIndex: 'type', key: 'type', render: (value: string) => displayFlowStepType(value) },
     {
       title: '工具',
       dataIndex: 'tool',
@@ -257,7 +262,7 @@ function renderFlowSummary(record: RegistryRecord) {
       render: (value: string | undefined) => value ?? '-',
     },
     {
-      title: 'activity',
+      title: '活动',
       dataIndex: 'activity',
       key: 'activity',
       render: (value: string | undefined) => value ?? '-',
@@ -284,14 +289,14 @@ function renderFlowSummary(record: RegistryRecord) {
   return (
     <>
       <Descriptions bordered size="small" column={2}>
-        <Descriptions.Item label="flow_id">
+        <Descriptions.Item label="流程 ID">
           {readString(spec.flow_id) ?? record.resource_id}
         </Descriptions.Item>
-        <Descriptions.Item label="version">{record.version}</Descriptions.Item>
-        <Descriptions.Item label="workflow_type">
-          {readString(asRecord(spec.runtime).workflow_type) ?? '-'}
+        <Descriptions.Item label="版本">{record.version}</Descriptions.Item>
+        <Descriptions.Item label="工作流类型">
+          {displayWorkflowType(readString(asRecord(spec.runtime).workflow_type) ?? '-')}
         </Descriptions.Item>
-        <Descriptions.Item label="steps">{steps.length}</Descriptions.Item>
+        <Descriptions.Item label="步骤数">{steps.length}</Descriptions.Item>
       </Descriptions>
       <Alert
         style={{ marginTop: 12 }}
@@ -301,7 +306,7 @@ function renderFlowSummary(record: RegistryRecord) {
         description={
           hasL3PreviewCommit
             ? 'Flow 中存在 preview_commit 路径。'
-            : '如 Flow 引用 L3 Tool，validate 会强制检查 preview_commit。'
+            : '如 Flow 引用了 L3 工具，校验会强制检查 preview_commit 路径。'
         }
       />
       <Table
@@ -319,47 +324,48 @@ function renderFlowSummary(record: RegistryRecord) {
 function renderRouteSummary(record: RegistryRecord) {
   const spec = asRecord(record.spec);
   const route = asRecord(spec.route);
+  const channels = readStringArray(route.supported_channels).map((value) => displayRouteChannel(value));
   return (
     <Descriptions bordered size="small" column={2}>
-      <Descriptions.Item label="route_id">
+      <Descriptions.Item label="路由 ID">
         {readString(spec.route_id) ?? record.resource_id}
       </Descriptions.Item>
-      <Descriptions.Item label="flow_id">{readString(spec.flow_id) ?? '-'}</Descriptions.Item>
-      <Descriptions.Item label="flow_version">
+      <Descriptions.Item label="流程 ID">{readString(spec.flow_id) ?? '-'}</Descriptions.Item>
+      <Descriptions.Item label="流程版本">
         {readNumber(spec.version) ?? record.version}
       </Descriptions.Item>
-      <Descriptions.Item label="priority">{readNumber(route.priority) ?? '-'}</Descriptions.Item>
-      <Descriptions.Item label="confidence_threshold">
+      <Descriptions.Item label="优先级">{readNumber(route.priority) ?? '-'}</Descriptions.Item>
+      <Descriptions.Item label="置信阈值">
         {readNumber(route.confidence_threshold) ?? '-'}
       </Descriptions.Item>
-      <Descriptions.Item label="ambiguous_threshold">
+      <Descriptions.Item label="歧义阈值">
         {readNumber(route.ambiguous_threshold) ?? '-'}
       </Descriptions.Item>
-      <Descriptions.Item label="keywords">
+      <Descriptions.Item label="关键词">
         {formatList(readStringArray(route.keywords))}
       </Descriptions.Item>
-      <Descriptions.Item label="examples">
+      <Descriptions.Item label="正例">
         {formatList(readStringArray(route.examples))}
       </Descriptions.Item>
-      <Descriptions.Item label="negative_examples">
+      <Descriptions.Item label="反例">
         {formatList(readStringArray(route.negative_examples))}
       </Descriptions.Item>
-      <Descriptions.Item label="channels">
-        {formatList(readStringArray(route.supported_channels))}
+      <Descriptions.Item label="渠道">
+        {formatList(channels)}
       </Descriptions.Item>
-      <Descriptions.Item label="tenants">
+      <Descriptions.Item label="租户约束">
         {formatList(readStringArray(route.tenant_constraints))}
       </Descriptions.Item>
-      <Descriptions.Item label="roles">
+      <Descriptions.Item label="角色约束">
         {formatList(readStringArray(route.role_constraints))}
       </Descriptions.Item>
-      <Descriptions.Item label="fallback_enabled">
-        {route.fallback_enabled === true ? 'true' : 'false'}
+      <Descriptions.Item label="启用兜底路由">
+        {route.fallback_enabled === true ? '是' : '否'}
       </Descriptions.Item>
-      <Descriptions.Item label="fallback_agent_ref">
+      <Descriptions.Item label="兜底智能体精确版本">
         {readString(route.fallback_agent_ref) ?? '-'}
       </Descriptions.Item>
-      <Descriptions.Item label="gray tenant allowlist">
+      <Descriptions.Item label="灰度租户白名单">
         {formatList(record.gray_policy.tenant_allowlist)}
       </Descriptions.Item>
     </Descriptions>

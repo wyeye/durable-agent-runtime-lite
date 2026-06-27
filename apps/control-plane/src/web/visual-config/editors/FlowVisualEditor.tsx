@@ -1,10 +1,11 @@
 import type { FlowSpec, FlowStep } from '@dar/contracts';
 import type { ApiClient } from '../../api/client.js';
-import { Alert, Button, Drawer, Form, Input, InputNumber, Select, Space, Table, Tag } from 'antd';
+import { Alert, Button, Drawer, Form, Input, InputNumber, Select, Space, Table, Tabs, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { lazy, Suspense, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import '@xyflow/react/dist/style.css';
+import { displayFlowStepType, displayRisk, displayWorkflowType } from '../../utils/i18n-labels.js';
 import type { VisualEditorProps } from '../types.js';
 import { JsonSchemaBuilder } from '../components/JsonSchemaBuilder.js';
 import { StructuredValueEditor, jsonObjectFromUnknown, toJsonValue } from '../components/StructuredValueEditor.js';
@@ -22,7 +23,7 @@ const LazyFlowSequenceGraph = lazy(async () => {
       const nodes = graphSteps.map((step, index) => ({
         id: step.id,
         position: { x: index * 220, y: 40 },
-        data: { label: `${step.label}\n${step.type}` },
+        data: { label: `${step.label}\n${displayFlowStepType(step.type)}` },
         draggable: false,
       }));
       const edges = graphSteps.slice(0, -1).map((step, index) => ({
@@ -59,13 +60,14 @@ export function FlowVisualEditor({
   const { t } = useTranslation();
   const [editingIndex, setEditingIndex] = useState<number | undefined>();
   const editingStep = editingIndex === undefined ? undefined : value.steps[editingIndex];
+  const stepTypes = summarizeStepTypes(value.steps);
   const columns: ColumnsType<FlowStep> = [
     { title: '#', key: 'order', render: (_, _row, index) => index + 1, width: 60 },
     { title: t('visualConfig.flow.stepId'), dataIndex: 'id', key: 'id' },
-    { title: t('visualConfig.flow.stepType'), dataIndex: 'type', key: 'type', render: (type: string) => <Tag>{type}</Tag> },
-    { title: 'tool', dataIndex: 'tool', key: 'tool', render: (value?: string) => value ?? '-' },
-    { title: 'agent', dataIndex: 'agent_id', key: 'agent', render: (value?: string) => value ?? '-' },
-    { title: 'activity', dataIndex: 'activity', key: 'activity', render: (value?: string) => value ?? '-' },
+    { title: t('visualConfig.flow.stepType'), dataIndex: 'type', key: 'type', render: (type: string) => <Tag>{displayFlowStepType(type)}</Tag> },
+    { title: displayFlowStepType('tool'), dataIndex: 'tool', key: 'tool', render: (value?: string) => value ?? '-' },
+    { title: displayFlowStepType('agent'), dataIndex: 'agent_id', key: 'agent', render: (value?: string) => value ?? '-' },
+    { title: displayFlowStepType('activity'), dataIndex: 'activity', key: 'activity', render: (value?: string) => value ?? '-' },
     {
       title: t('visualConfig.actions.actions'),
       key: 'actions',
@@ -84,28 +86,64 @@ export function FlowVisualEditor({
   return (
     <Space direction="vertical" style={{ width: '100%' }}>
       <Alert type="info" showIcon message={t('visualConfig.flow.sequenceOnly')} />
-      <Form layout="vertical">
-        <Form.Item label="flow_id"><Input data-testid="vc-flow-id" value={value.flow_id} disabled={readOnly} onChange={(event) => onChange({ ...value, flow_id: event.target.value })} /></Form.Item>
-        <Form.Item label={t('visualConfig.common.version')}><InputNumber min={1} value={value.version} disabled={readOnly} onChange={(next) => onChange({ ...value, version: typeof next === 'number' ? next : value.version })} /></Form.Item>
-        <Form.Item label={t('visualConfig.flow.name')}><Input value={value.name ?? ''} disabled={readOnly} onChange={(event) => onChange({ ...value, name: event.target.value || undefined })} /></Form.Item>
-        <Form.Item label={t('visualConfig.flow.description')}><Input.TextArea value={value.description ?? ''} disabled={readOnly} autoSize onChange={(event) => onChange({ ...value, description: event.target.value || undefined })} /></Form.Item>
-        <Form.Item label="workflow_type"><Select value={value.runtime.workflow_type} disabled={readOnly} options={['ConfigDrivenWorkflow', 'GenericAgentWorkflow'].map((item) => ({ value: item, label: item }))} onChange={(workflow_type) => onChange({ ...value, runtime: { ...value.runtime, workflow_type } })} /></Form.Item>
-        <Form.Item label="task_queue"><Input value={value.runtime.task_queue} disabled={readOnly} onChange={(event) => onChange({ ...value, runtime: { ...value.runtime, task_queue: event.target.value } })} /></Form.Item>
-        <Form.Item label={t('visualConfig.flow.inputSchema')}><JsonSchemaBuilder value={jsonObjectFromUnknown(value.input_schema ?? { type: 'object' })} readOnly={readOnly} onChange={(input_schema) => onChange({ ...value, input_schema })} /></Form.Item>
-        <Form.Item label={t('visualConfig.flow.outputSchema')}><JsonSchemaBuilder value={jsonObjectFromUnknown(value.output_schema ?? { type: 'object' })} readOnly={readOnly} onChange={(output_schema) => onChange({ ...value, output_schema })} /></Form.Item>
-        <Form.Item label="metadata"><StructuredValueEditor value={toJsonValue(value.metadata ?? {})} readOnly={readOnly} onChange={(metadata) => onChange({ ...value, metadata: jsonObjectFromUnknown(metadata) })} /></Form.Item>
-      </Form>
-      <FlowSequenceCanvas steps={value.steps} />
-      <Space wrap>
-        {(['activity', 'tool', 'agent', 'human_task', 'condition'] as const).map((type) => (
-          <Button key={type} data-testid={`vc-flow-add-step-${type}`} disabled={readOnly} onClick={() => onChange({ ...value, steps: [...value.steps, defaultStep(type, value.steps.length + 1)] })}>
-            {t('visualConfig.flow.addStep', { type })}
-          </Button>
-        ))}
-      </Space>
-      <Table rowKey="id" size="small" dataSource={value.steps} columns={columns} pagination={{ pageSize: 20 }} />
+      <div className="vc-flow-summary-grid">
+        <FlowSummaryItem label={t('visualConfig.flow.flowId')} value={value.flow_id || '-'} />
+        <FlowSummaryItem label={t('visualConfig.common.version')} value={String(value.version)} />
+        <FlowSummaryItem label={t('visualConfig.flow.workflowType')} value={displayWorkflowType(value.runtime.workflow_type)} />
+        <FlowSummaryItem label={t('visualConfig.flow.stepCount')} value={String(value.steps.length)} />
+      </div>
+      <Tabs
+        className="vc-flow-tabs"
+        items={[
+          {
+            key: 'basic',
+            label: t('visualConfig.flow.tabs.basic'),
+            children: (
+              <Form layout="vertical">
+                <Form.Item label={t('visualConfig.flow.flowId')}><Input data-testid="vc-flow-id" value={value.flow_id} disabled={readOnly} onChange={(event) => onChange({ ...value, flow_id: event.target.value })} /></Form.Item>
+                <Form.Item label={t('visualConfig.common.version')}><InputNumber min={1} value={value.version} disabled={readOnly} onChange={(next) => onChange({ ...value, version: typeof next === 'number' ? next : value.version })} /></Form.Item>
+                <Form.Item label={t('visualConfig.flow.name')}><Input value={value.name ?? ''} disabled={readOnly} onChange={(event) => onChange({ ...value, name: event.target.value || undefined })} /></Form.Item>
+                <Form.Item label={t('visualConfig.flow.description')}><Input.TextArea value={value.description ?? ''} disabled={readOnly} autoSize onChange={(event) => onChange({ ...value, description: event.target.value || undefined })} /></Form.Item>
+                <Form.Item label={t('visualConfig.flow.workflowType')}><Select value={value.runtime.workflow_type} disabled={readOnly} options={['ConfigDrivenWorkflow', 'GenericAgentWorkflow'].map((item) => ({ value: item, label: displayWorkflowType(item) }))} onChange={(workflow_type) => onChange({ ...value, runtime: { ...value.runtime, workflow_type } })} /></Form.Item>
+                <Form.Item label={t('visualConfig.flow.taskQueue')}><Input value={value.runtime.task_queue} disabled={readOnly} onChange={(event) => onChange({ ...value, runtime: { ...value.runtime, task_queue: event.target.value } })} /></Form.Item>
+              </Form>
+            ),
+          },
+          {
+            key: 'steps',
+            label: t('visualConfig.flow.tabs.steps'),
+            children: (
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <div className="vc-flow-step-toolbar">
+                  <Space wrap>
+                    {(['activity', 'tool', 'agent', 'human_task', 'condition'] as const).map((type) => (
+                      <Button key={type} data-testid={`vc-flow-add-step-${type}`} disabled={readOnly} onClick={() => onChange({ ...value, steps: [...value.steps, defaultStep(type, value.steps.length + 1)] })}>
+                        {t('visualConfig.flow.addStep', { type: displayFlowStepType(type) })}
+                      </Button>
+                    ))}
+                  </Space>
+                  <Typography.Text type="secondary">{t('visualConfig.flow.stepTypeSummary', { summary: stepTypes || '-' })}</Typography.Text>
+                </div>
+                <FlowSequenceCanvas steps={value.steps} />
+                <Table rowKey="id" size="small" dataSource={value.steps} columns={columns} pagination={{ pageSize: 20 }} scroll={{ x: 760 }} />
+              </Space>
+            ),
+          },
+          {
+            key: 'schema',
+            label: t('visualConfig.flow.tabs.schema'),
+            children: (
+              <Form layout="vertical">
+                <Form.Item label={t('visualConfig.flow.inputSchema')}><JsonSchemaBuilder value={jsonObjectFromUnknown(value.input_schema ?? { type: 'object' })} readOnly={readOnly} onChange={(input_schema) => onChange({ ...value, input_schema })} /></Form.Item>
+                <Form.Item label={t('visualConfig.flow.outputSchema')}><JsonSchemaBuilder value={jsonObjectFromUnknown(value.output_schema ?? { type: 'object' })} readOnly={readOnly} onChange={(output_schema) => onChange({ ...value, output_schema })} /></Form.Item>
+                <Form.Item label={t('visualConfig.flow.metadata')}><StructuredValueEditor value={toJsonValue(value.metadata ?? {})} readOnly={readOnly} onChange={(metadata) => onChange({ ...value, metadata: jsonObjectFromUnknown(metadata) })} /></Form.Item>
+              </Form>
+            ),
+          },
+        ]}
+      />
       <Drawer
-        title={editingStep ? `${editingStep.id} · ${editingStep.type}` : t('visualConfig.flow.stepDrawer')}
+        title={editingStep ? `${editingStep.id} · ${displayFlowStepType(editingStep.type)}` : t('visualConfig.flow.stepDrawer')}
         open={Boolean(editingStep)}
         onClose={() => setEditingIndex(undefined)}
         extra={<Button data-testid="vc-flow-step-done" onClick={() => setEditingIndex(undefined)}>{t('visualConfig.actions.done')}</Button>}
@@ -121,6 +159,15 @@ export function FlowVisualEditor({
         ) : null}
       </Drawer>
     </Space>
+  );
+}
+
+function FlowSummaryItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="vc-flow-summary-item">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
@@ -153,19 +200,20 @@ function FlowStepPropertyDrawer({
   client: ApiClient;
   onChange(step: FlowStep): void;
 }) {
+  const { t } = useTranslation();
   const toolValue = step.tool ? { resource_id: step.tool, version: step.tool_version ?? '' } : undefined;
   const agentVersion = numberFromInput(step.input?.agent_version);
   const agentValue = step.agent_id ? { resource_id: step.agent_id, version: agentVersion ?? '' } : undefined;
   return (
     <Form layout="vertical">
-      <Form.Item label="id"><Input value={step.id} disabled={readOnly} onChange={(event) => onChange({ ...step, id: event.target.value })} /></Form.Item>
-      <Form.Item label="name"><Input value={step.name ?? ''} disabled={readOnly} onChange={(event) => onChange({ ...step, name: event.target.value || undefined })} /></Form.Item>
-      <Form.Item label="type"><Select value={step.type} disabled={readOnly} options={['activity', 'tool', 'agent', 'human_task', 'condition'].map((item) => ({ value: item, label: item }))} onChange={(type) => onChange({ ...step, type })} /></Form.Item>
-      <Form.Item label="when"><Input value={step.when ?? ''} disabled={readOnly} onChange={(event) => onChange({ ...step, when: event.target.value || undefined })} /></Form.Item>
-      {step.type === 'activity' ? <Form.Item label="activity"><Input value={step.activity ?? ''} disabled={readOnly} onChange={(event) => onChange({ ...step, activity: event.target.value || undefined })} /></Form.Item> : null}
+      <Form.Item label={t('visualConfig.flow.stepId')}><Input value={step.id} disabled={readOnly} onChange={(event) => onChange({ ...step, id: event.target.value })} /></Form.Item>
+      <Form.Item label={t('visualConfig.flow.stepName')}><Input value={step.name ?? ''} disabled={readOnly} onChange={(event) => onChange({ ...step, name: event.target.value || undefined })} /></Form.Item>
+      <Form.Item label={t('visualConfig.flow.stepType')}><Select value={step.type} disabled={readOnly} options={['activity', 'tool', 'agent', 'human_task', 'condition'].map((item) => ({ value: item, label: displayFlowStepType(item) }))} onChange={(type) => onChange({ ...step, type })} /></Form.Item>
+      <Form.Item label={t('visualConfig.flow.stepWhen')}><Input value={step.when ?? ''} disabled={readOnly} onChange={(event) => onChange({ ...step, when: event.target.value || undefined })} /></Form.Item>
+      {step.type === 'activity' ? <Form.Item label={displayFlowStepType('activity')}><Input value={step.activity ?? ''} disabled={readOnly} onChange={(event) => onChange({ ...step, activity: event.target.value || undefined })} /></Form.Item> : null}
       {step.type === 'tool' ? (
         <>
-          <Form.Item label="tool">
+          <Form.Item label={t('visualConfig.flow.toolRef')}>
             <ExactVersionSelect
               client={client}
               resourceType="tool"
@@ -180,12 +228,12 @@ function FlowStepPropertyDrawer({
               }}
             />
           </Form.Item>
-          <Form.Item label="mode"><Input data-testid="vc-flow-step-tool-mode" value={step.mode ?? ''} disabled={readOnly} onChange={(event) => onChange({ ...step, mode: event.target.value || undefined })} /></Form.Item>
-          <Form.Item label="risk_level"><Select allowClear value={step.risk_level} disabled={readOnly} options={['L0', 'L1', 'L2', 'L3', 'L4'].map((item) => ({ value: item, label: item }))} onChange={(risk_level) => onChange({ ...step, risk_level })} /></Form.Item>
+          <Form.Item label={t('visualConfig.flow.stepMode')}><Input data-testid="vc-flow-step-tool-mode" value={step.mode ?? ''} disabled={readOnly} onChange={(event) => onChange({ ...step, mode: event.target.value || undefined })} /></Form.Item>
+          <Form.Item label={t('visualConfig.flow.stepRiskLevel')}><Select allowClear value={step.risk_level} disabled={readOnly} options={['L0', 'L1', 'L2', 'L3', 'L4'].map((item) => ({ value: item, label: displayRisk(item) }))} onChange={(risk_level) => onChange({ ...step, risk_level })} /></Form.Item>
         </>
       ) : null}
       {step.type === 'agent' ? (
-        <Form.Item label="agent">
+        <Form.Item label={t('visualConfig.flow.agentRef')}>
           <ExactVersionSelect
             client={client}
             resourceType="agent"
@@ -201,9 +249,9 @@ function FlowStepPropertyDrawer({
           />
         </Form.Item>
       ) : null}
-      <Form.Item label="input"><StructuredValueEditor value={toJsonValue(step.input ?? {})} readOnly={readOnly} onChange={(input) => onChange({ ...step, input: jsonObjectFromUnknown(input) })} /></Form.Item>
-      <Form.Item label="output_ref"><Input value={step.output_ref ?? ''} disabled={readOnly} onChange={(event) => onChange({ ...step, output_ref: event.target.value || undefined })} /></Form.Item>
-      <Form.Item label="on_failure"><StructuredValueEditor value={toJsonValue(step.on_failure ?? {})} readOnly={readOnly} onChange={(on_failure) => onChange({ ...step, on_failure: jsonObjectFromUnknown(on_failure) })} /></Form.Item>
+      <Form.Item label={t('visualConfig.flow.stepInput')}><StructuredValueEditor value={toJsonValue(step.input ?? {})} readOnly={readOnly} onChange={(input) => onChange({ ...step, input: jsonObjectFromUnknown(input) })} /></Form.Item>
+      <Form.Item label={t('visualConfig.flow.stepOutputRef')}><Input value={step.output_ref ?? ''} disabled={readOnly} onChange={(event) => onChange({ ...step, output_ref: event.target.value || undefined })} /></Form.Item>
+      <Form.Item label={t('visualConfig.flow.stepOnFailure')}><StructuredValueEditor value={toJsonValue(step.on_failure ?? {})} readOnly={readOnly} onChange={(on_failure) => onChange({ ...step, on_failure: jsonObjectFromUnknown(on_failure) })} /></Form.Item>
     </Form>
   );
 }
@@ -244,4 +292,12 @@ function move<T>(values: T[], from: number, to: number): T[] {
 
 function numberFromInput(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) ? value : undefined;
+}
+
+function summarizeStepTypes(steps: FlowStep[]): string {
+  const counts = new Map<FlowStep['type'], number>();
+  for (const step of steps) {
+    counts.set(step.type, (counts.get(step.type) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([type, count]) => `${displayFlowStepType(type)} ${count}`).join(' / ');
 }

@@ -254,6 +254,10 @@ body {
   background: #f7f9fc;
 }
 
+.cp-registry-create-drawer .ant-drawer-body {
+  background: #f7f9fc;
+}
+
 .cp-registry-detail-drawer .cp-section {
   background: #ffffff;
 }
@@ -289,6 +293,57 @@ body {
 
 .cp-registry-version-select {
   min-width: 260px;
+}
+
+.cp-registry-create-overview {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(320px, 1.4fr);
+  gap: 16px;
+  align-items: start;
+  padding: 14px 16px;
+  border: 1px solid #d6dbe5;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.cp-registry-create-overview .ant-typography {
+  margin-bottom: 0;
+}
+
+.cp-registry-create-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.cp-registry-create-metric,
+.vc-flow-summary-item {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #e6e8ec;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.cp-registry-create-metric span,
+.vc-flow-summary-item span {
+  display: block;
+  margin-bottom: 4px;
+  color: #667085;
+  font-size: 12px;
+}
+
+.cp-registry-create-metric strong,
+.vc-flow-summary-item strong {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #1f2937;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cp-registry-create-actions {
+  padding-top: 4px;
 }
 
 .cp-metadata-grid {
@@ -350,6 +405,24 @@ body {
   align-items: stretch;
 }
 
+.vc-flow-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.vc-flow-tabs .ant-tabs-content-holder {
+  padding-top: 4px;
+}
+
+.vc-flow-step-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .vc-flow-reactflow {
   width: 100%;
   height: 280px;
@@ -375,7 +448,8 @@ body {
 @media (max-width: 960px) {
   .cp-chat-layout,
   .cp-split,
-  .cp-json-compare {
+  .cp-json-compare,
+  .cp-registry-create-overview {
     grid-template-columns: 1fr;
   }
 
