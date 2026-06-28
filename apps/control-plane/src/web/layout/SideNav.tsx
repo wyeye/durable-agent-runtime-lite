@@ -31,6 +31,7 @@ const baseItems = [
     key: 'evaluation',
     label: navLabel('evaluation'),
     children: [
+      { key: '/evaluation', label: <Link to="/evaluation">{navLabel('overview')}</Link> },
       { key: '/evaluation/datasets', label: <Link to="/evaluation/datasets">{navLabel('datasets')}</Link> },
       { key: '/evaluation/runs', label: <Link to="/evaluation/runs">{navLabel('runs')}</Link> },
       { key: '/evaluation/gates', label: <Link to="/evaluation/gates">{navLabel('gates')}</Link> },
@@ -97,7 +98,9 @@ export function SideNav() {
         ...(showIam ? iamItems : []),
       ];
 
-  const selected = leafKeys.find((key) => location.pathname.startsWith(key)) ?? '/chat';
+  const selected = [...leafKeys]
+    .sort((left, right) => right.length - left.length)
+    .find((key) => location.pathname.startsWith(key)) ?? '/chat';
   const openKeys = selected === '/model-gateways' || selected === '/models' || selected === '/model-policies' ? ['ability']
     : selected.startsWith('/registry') ? ['registry']
     : selected.startsWith('/evaluation') ? ['evaluation']
@@ -119,6 +122,7 @@ const leafKeys = [
   '/model-gateways',
   '/models',
   '/registry/prompts',
+  '/evaluation',
   '/evaluation/datasets',
   '/evaluation/runs',
   '/evaluation/gates',

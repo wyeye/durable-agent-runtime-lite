@@ -14,10 +14,12 @@ import {
   cancelRun,
   createCase,
   createDataset,
+  createGatePolicy,
   createOverride,
   createRun,
   listDatasets,
   listGateDecisions,
+  listGatePolicies,
   updateDataset,
 } from './api/evaluation-api.js';
 import { parseJson, stringifyPretty } from './utils/json.js';
@@ -154,6 +156,41 @@ describe('control-plane web api client', () => {
       trigger_type: 'manual',
     });
     await cancelRun(client, 'run-a');
+    await listGatePolicies(client, { status: 'published', page_size: 8 });
+    await createGatePolicy(client, {
+      policy: {
+        gate_policy_id: 'gate-a',
+        version: 1,
+        status: 'draft',
+        resource_types: ['prompt'],
+        required_dataset_refs: [],
+        thresholds: {
+          minimum_pass_rate: 0.8,
+          minimum_weighted_score: 0.8,
+          minimum_tool_selection_score: 0.8,
+          maximum_forbidden_tool_calls: 0,
+          maximum_policy_violations: 0,
+          maximum_side_effect_without_approval: 0,
+          maximum_secret_leaks: 0,
+          maximum_hidden_reasoning_leaks: 0,
+          maximum_cross_tenant_violations: 0,
+          maximum_system_error_rate: 0,
+        },
+        regression_rules: {
+          maximum_score_regression: 0.05,
+          maximum_pass_rate_regression: 0.05,
+          maximum_latency_regression_percent: 0,
+          maximum_token_regression_percent: 0,
+          maximum_cost_regression_percent: 0,
+          block_newly_failed_cases: true,
+          block_safety_regression: true,
+          block_tool_regression: true,
+          require_same_dataset: true,
+        },
+        required_case_tags: [],
+        allow_override: false,
+      },
+    });
     await listGateDecisions(client, {
       resource_type: 'prompt',
       resource_id: 'prompt-a',
@@ -172,9 +209,11 @@ describe('control-plane web api client', () => {
     expect(urls).toContain('/api/v1/evaluation-datasets/dataset-a/versions/1/cases');
     expect(urls).toContain('/api/v1/evaluation-runs');
     expect(urls).toContain('/api/v1/evaluation-runs/run-a/cancel');
+    expect(urls).toContain('/api/v1/evaluation-gate-policies?status=published&page_size=8');
+    expect(urls).toContain('/api/v1/evaluation-gate-policies');
     expect(urls).toContain('/api/v1/evaluation-gate-decisions?resource_type=prompt&resource_id=prompt-a&current_resource_hash=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd');
     expect(urls).toContain('/api/v1/evaluation-gate-decisions/decision-a/override');
-    expect(methods).toEqual(['GET', 'POST', 'PUT', 'POST', 'POST', 'POST', 'GET', 'POST']);
+    expect(methods).toEqual(['GET', 'POST', 'PUT', 'POST', 'POST', 'POST', 'GET', 'POST', 'GET', 'POST']);
     expect(roles.every((role) => role === 'capability_operator')).toBe(true);
     expect(bodies.join('\n')).toContain('"evaluation_execution_plan_ref"');
     expect(bodies.join('\n')).not.toContain('"latest"');

@@ -26,6 +26,7 @@ import { EvaluationDatasetsPage } from './pages/evaluation/EvaluationDatasetsPag
 import { EvaluationDecisionDetailPage } from './pages/evaluation/EvaluationDecisionDetailPage.js';
 import { EvaluationGateDetailPage } from './pages/evaluation/EvaluationGateDetailPage.js';
 import { EvaluationGatesPage } from './pages/evaluation/EvaluationGatesPage.js';
+import { EvaluationOverviewPage } from './pages/evaluation/EvaluationOverviewPage.js';
 import { EvaluationRunDetailPage } from './pages/evaluation/EvaluationRunDetailPage.js';
 import { EvaluationRunsPage } from './pages/evaluation/EvaluationRunsPage.js';
 import { TenantsPage } from './pages/iam/TenantsPage.js';
@@ -69,6 +70,7 @@ export const router = createBrowserRouter([
         { path: 'tool-calls', element: <ToolCallsPage /> },
         { path: 'policy-snapshots', element: <PolicySnapshotsPage /> },
         { path: 'tenant-admissions', element: <TenantAdmissionsPage /> },
+        { path: 'evaluation', element: <EvaluationOverviewPage /> },
         { path: 'evaluation/datasets', element: <EvaluationDatasetsPage /> },
         { path: 'evaluation/datasets/:datasetId/versions/:version', element: <EvaluationDatasetDetailPage /> },
         { path: 'evaluation/runs', element: <EvaluationRunsPage /> },

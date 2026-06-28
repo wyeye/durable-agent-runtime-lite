@@ -10,6 +10,7 @@ export const navigation = {
   modelPolicies: '模型策略',
   prompts: '提示词',
   evaluation: '评测中心',
+  overview: '总览',
   datasets: '评测数据集',
   runs: '评测任务',
   gates: '发布门禁',
