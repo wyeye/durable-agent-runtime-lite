@@ -35,6 +35,27 @@ export interface RegistryReleaseServiceOptions {
   evaluationGateOverrideId?: string;
 }
 
+export class RegistryValidationError extends Error {
+  readonly code = 'REGISTRY_VALIDATION_FAILED';
+  readonly details: Record<string, unknown>;
+
+  constructor(
+    readonly resourceType: RegistryResourceType,
+    readonly resourceId: string,
+    readonly version: number,
+    readonly validation: RegistryValidationResult,
+  ) {
+    super(`Registry validation failed for ${resourceType}:${resourceId}@${version}`);
+    this.name = 'RegistryValidationError';
+    this.details = {
+      resource_type: resourceType,
+      resource_id: resourceId,
+      version,
+      validation,
+    };
+  }
+}
+
 interface PublishGateResult {
   decision?: EvaluationGateDecision;
   override?: EvaluationGateOverride;
@@ -84,7 +105,7 @@ export class RegistryReleaseService {
     try {
       const validation = await this.validate(resourceType, resourceId, version, tenant(options));
       if (!validation.can_publish) {
-        throw new Error(`Registry validation failed for ${resourceType}:${resourceId}@${version}`);
+        throw new RegistryValidationError(resourceType, resourceId, version, validation);
       }
       const preparedRouteIndex = resourceType === 'route'
         ? await this.prepareRouteIndex(resourceId, version, options)
@@ -171,7 +192,7 @@ export class RegistryReleaseService {
   ): Promise<{ flow_release: CapabilityRelease; route_release: CapabilityRelease }> {
     const flowValidation = await this.validate('flow', flowId, flowVersion, tenant(options));
     if (!flowValidation.can_publish) {
-      throw new Error('Flow validation failed');
+      throw new RegistryValidationError('flow', flowId, flowVersion, flowValidation);
     }
     const routeRecord = await this.repositories.routes.getByIdAndVersion(routeId, routeVersion, { tenantId: tenant(options) });
     const routeValidation = routeRecord
@@ -187,7 +208,7 @@ export class RegistryReleaseService {
           dependency_graph: { nodes: [], edges: [] },
         };
     if (!routeValidation.can_publish) {
-      throw new Error('Route validation failed');
+      throw new RegistryValidationError('route', routeId, routeVersion, routeValidation);
     }
     const preparedRouteIndex = await this.prepareRouteIndex(routeId, routeVersion, options);
     return withTransaction(this.db, async (trx) => {

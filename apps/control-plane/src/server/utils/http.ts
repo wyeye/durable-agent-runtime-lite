@@ -14,6 +14,7 @@ import type {
 import { EvaluationGateError, EvaluationRepositoryError, RegistryRepositoryError } from '@dar/db';
 import { IamRepositoryError } from '@dar/db';
 import { AuthError } from '@dar/security';
+import { RegistryValidationError } from '../../modules/registry/registry-release-service.js';
 import { IamServiceError } from '../services/iam/user-directory-service.js';
 import { mapIamError } from '../routes/iam.js';
 
@@ -90,6 +91,17 @@ export function mapError(error: unknown, request?: FastifyRequest): { statusCode
   if (error instanceof RegistryRepositoryError) {
     return {
       statusCode: statusForRegistryError(error.code),
+      body: fail({
+        code: error.code,
+        message: error.message,
+        details: scrubDetails(error.details),
+      }, requestId, locale),
+    };
+  }
+
+  if (error instanceof RegistryValidationError) {
+    return {
+      statusCode: 422,
       body: fail({
         code: error.code,
         message: error.message,

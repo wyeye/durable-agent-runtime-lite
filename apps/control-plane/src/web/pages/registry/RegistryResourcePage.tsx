@@ -34,6 +34,7 @@ import {
 import { formatDateTime } from '../../utils/format.js';
 import { displayAction, displayStatus, displayWorkflowType } from '../../utils/i18n-labels.js';
 import { stringifyPretty } from '../../utils/json.js';
+import { validationFeedback } from '../../utils/errors.js';
 import { FormErrorSummary } from '../../visual-config/components/FormErrorSummary.js';
 import { ReadonlyJsonPreview } from '../../visual-config/components/ReadonlyJsonPreview.js';
 import { issuesFromError } from '../../visual-config/form-error-mapper.js';
@@ -162,7 +163,8 @@ export function RegistryResourcePage({ resourceType }: { resourceType: RegistryR
     },
     onSuccess: ({ validation: next }) => {
       setValidation(next);
-      message.success(next.can_publish ? '校验通过' : '校验完成，但暂不可发布');
+      const feedback = validationFeedback(next);
+      message[feedback.type](feedback.content);
     },
   });
 

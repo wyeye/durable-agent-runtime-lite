@@ -23,7 +23,7 @@ import {
   updateDataset,
 } from './api/evaluation-api.js';
 import { parseJson, stringifyPretty } from './utils/json.js';
-import { toFriendlyError } from './utils/errors.js';
+import { toFriendlyError, validationFeedback } from './utils/errors.js';
 import { resourceConfigs } from './pages/registry/resource-config.js';
 
 describe('control-plane web api client', () => {
@@ -75,6 +75,51 @@ describe('control-plane web api client', () => {
   it('returns friendly optimistic lock and validation messages', () => {
     expect(toFriendlyError(new ApiError(409, 'REGISTRY_OPTIMISTIC_LOCK_CONFLICT', 'revision conflict', {}, 'r1')).title).toBe('版本冲突');
     expect(toFriendlyError(new ApiError(422, 'REGISTRY_VALIDATION_FAILED', 'can_publish=false', {}, 'r2')).title).toBe('校验未通过');
+    expect(toFriendlyError(new ApiError(422, 'REGISTRY_VALIDATION_FAILED', 'can_publish=false', {
+      validation: {
+        errors: [{ code: 'ROUTE_FALLBACK_AGENT_REQUIRED', path: 'route.fallback_agent_ref', message: 'fallback_enabled requires fallback_agent_ref' }],
+      },
+    }, 'r3')).validationIssues).toEqual([
+      'ROUTE_FALLBACK_AGENT_REQUIRED route.fallback_agent_ref：fallback_enabled requires fallback_agent_ref',
+    ]);
+    expect(toFriendlyError(new ApiError(422, 'REGISTRY_VALIDATION_FAILED', 'can_publish=false', {
+      validation: {
+        errors: [{ code: 'ROUTE_FALLBACK_AGENT_REQUIRED', path: 'route.fallback_agent_ref', message: 'fallback_enabled requires fallback_agent_ref' }],
+      },
+    }, 'r3')).validationModal).toEqual({
+      title: '校验未通过',
+      description: 'can_publish=false',
+      issues: ['ROUTE_FALLBACK_AGENT_REQUIRED route.fallback_agent_ref：fallback_enabled requires fallback_agent_ref'],
+    });
+  });
+
+  it('maps validation feedback to success or warning messages', () => {
+    expect(validationFeedback({
+      can_publish: true,
+      errors: [],
+      warnings: [],
+    })).toEqual({
+      type: 'success',
+      content: '校验通过',
+    });
+
+    expect(validationFeedback({
+      can_publish: true,
+      errors: [],
+      warnings: [{}],
+    })).toEqual({
+      type: 'success',
+      content: '校验通过，存在警告',
+    });
+
+    expect(validationFeedback({
+      can_publish: false,
+      errors: [{}],
+      warnings: [],
+    })).toEqual({
+      type: 'warning',
+      content: '校验完成，但暂不可发布',
+    });
   });
 
   it('builds registry and operations URLs under /api/v1 only', async () => {

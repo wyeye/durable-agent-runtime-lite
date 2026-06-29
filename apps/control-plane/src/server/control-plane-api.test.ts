@@ -42,6 +42,7 @@ import { ControlPlaneHttpError } from './utils/http.js';
 import { createApp, shouldServeStaticFiles } from './app.js';
 import type { EvaluationApi } from './services/evaluation-api-service.js';
 import type { ModelCatalogActor, ModelCatalogApi } from './services/model-catalog-service.js';
+import { RegistryValidationError } from '../modules/registry/registry-release-service.js';
 import { RegistryApiService, type RegistryApi, type ActorOptions } from './services/registry-api-service.js';
 import { EvaluationGateError, type RegistryResourceRecord } from '@dar/db';
 
@@ -400,6 +401,9 @@ describe('control-plane API', () => {
     });
     expect(validation.statusCode).toBe(422);
     expect(validation.json().error.code).toBe('REGISTRY_VALIDATION_FAILED');
+    expect(validation.json().error.details.validation.errors).toEqual([
+      { code: 'INVALID', message: 'invalid', severity: 'error' },
+    ]);
 
     await close();
   });
@@ -840,7 +844,7 @@ class FakeRegistryApi implements RegistryApi {
       );
     }
     if (!this.validationCanPublish) {
-      throw new Error('Registry validation failed');
+      throw new RegistryValidationError(resourceType, 'flow_api', 1, validationResult(false));
     }
     return release('publish', resourceType);
   }

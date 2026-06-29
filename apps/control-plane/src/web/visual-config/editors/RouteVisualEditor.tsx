@@ -96,7 +96,23 @@ export function RouteVisualEditor({
           />
         </Form.Item>
         <Form.Item label={t('visualConfig.route.priority')}>
-          <Slider min={0} max={100} value={route.priority} disabled={readOnly} onChange={(priority) => onChange({ ...value, route: { ...route, priority } })} />
+          <Space.Compact style={{ width: '100%' }}>
+            <Slider
+              min={0}
+              max={100}
+              style={{ flex: 1, marginInlineEnd: 12 }}
+              value={route.priority}
+              disabled={readOnly}
+              onChange={(priority) => onChange({ ...value, route: { ...route, priority } })}
+            />
+            <InputNumber
+              min={0}
+              max={100}
+              value={route.priority}
+              disabled={readOnly}
+              onChange={(priority) => onChange({ ...value, route: { ...route, priority: typeof priority === 'number' ? priority : route.priority } })}
+            />
+          </Space.Compact>
         </Form.Item>
         <Form.Item label={t('visualConfig.route.confidence')}>
           <InputNumber min={0} max={1} step={0.01} value={route.confidence_threshold} disabled={readOnly} onChange={(next) => onChange({ ...value, route: { ...route, confidence_threshold: typeof next === 'number' ? next : route.confidence_threshold } })} />

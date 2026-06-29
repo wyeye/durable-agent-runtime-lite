@@ -31,6 +31,7 @@ import {
 } from '../../api/registry-api.js';
 import { formatDateTime, formatList } from '../../utils/format.js';
 import { displayRole } from '../../utils/i18n-labels.js';
+import { validationFeedback } from '../../utils/errors.js';
 import { stripServerManagedFields } from '../../visual-config/canonicalize.js';
 import { FormErrorSummary } from '../../visual-config/components/FormErrorSummary.js';
 import { ReadonlyJsonPreview } from '../../visual-config/components/ReadonlyJsonPreview.js';
@@ -111,6 +112,7 @@ export function FallbackRoutesPage() {
       if (!parsed.success) {
         throw new Error(parsed.error.issues.map((issue) => issue.message).join('；'));
       }
+      assertPublishableFallbackDraft(parsed.data);
       return createDraft(apiClient, 'route', parsed.data) as Promise<RouteRegistryRecord>;
     },
     onSuccess: async (record) => {
@@ -131,6 +133,7 @@ export function FallbackRoutesPage() {
       if (!parsed.success) {
         throw new Error(parsed.error.issues.map((issue) => issue.message).join('；'));
       }
+      assertPublishableFallbackDraft(parsed.data);
       return updateDraft(apiClient, 'route', selected.resource_id, selected.version, parsed.data, selected.revision) as Promise<RouteRegistryRecord>;
     },
     onSuccess: async (record) => {
@@ -148,7 +151,8 @@ export function FallbackRoutesPage() {
     },
     onSuccess: ({ validation: next }) => {
       setValidation(next);
-      message.success(next.can_publish ? 'validate 通过' : 'validate 完成但暂不可发布');
+      const feedback = validationFeedback(next);
+      message[feedback.type](feedback.content);
     },
   });
 
@@ -242,6 +246,10 @@ export function FallbackRoutesPage() {
     ];
     return uniqueOptions(roles.map((role) => ({ value: role.role, label: displayRole(role.role) })));
   }, [rolesQuery.data?.membership_roles, rolesQuery.data?.roles]);
+  const selectedConflictRecords = selected
+    ? records.filter((record) => isConflictingFallback(record, selected) && record.version !== selected.version)
+    : [];
+  const createConflictRecords = records.filter((record) => isConflictingWithSpec(record.spec, createState.spec));
 
   useUnsavedChangeGuard(
     hasUnsavedEditorChanges || (createState.open && createDirty),
@@ -371,6 +379,20 @@ export function FallbackRoutesPage() {
                 description="校验、发布、灰度、禁用等操作都会基于服务端已保存内容执行。"
               />
             ) : null}
+            <Alert
+              type="info"
+              showIcon
+              message={`当前优先级：${editorSpec.route.priority}`}
+              description="同一租户和角色范围内允许存在多个兜底路由，但运行时只会选择优先级最高的一条。"
+            />
+            {selectedConflictRecords.length > 0 ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="检测到同范围的其他兜底路由"
+                description={`可能与当前配置同时命中：${selectedConflictRecords.map((record) => `${record.resource_id}@${record.version}（优先级 ${record.spec.route.priority}）`).join('、')}`}
+              />
+            ) : null}
             {updateMutation.error ? <ErrorAlert error={updateMutation.error} /> : null}
             {validateMutation.error ? <ErrorAlert error={validateMutation.error} /> : null}
             {releaseMutation.error ? <ErrorAlert error={releaseMutation.error} /> : null}
@@ -443,6 +465,20 @@ export function FallbackRoutesPage() {
       >
         {createMutation.error ? <ErrorAlert error={createMutation.error} /> : null}
         <Space direction="vertical" style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message={`当前优先级：${createState.spec.route.priority}`}
+            description="建议在同一租户和角色范围内只保留一条主要兜底路由。"
+          />
+          {createConflictRecords.length > 0 ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="已存在同范围兜底路由"
+              description={`提交后运行时会按优先级挑选：${createConflictRecords.map((record) => `${record.resource_id}@${record.version}（优先级 ${record.spec.route.priority}）`).join('、')}`}
+            />
+          ) : null}
           <FormErrorSummary apiIssues={issuesFromError(createMutation.error)} />
           <RouteVisualEditor
             value={createState.spec}
@@ -526,6 +562,19 @@ function createFallbackDraft(): RouteSpec {
   });
 }
 
+function assertPublishableFallbackDraft(spec: RouteSpec): void {
+  const errors: string[] = [];
+  if (spec.flow_id === 'flow_id_here') {
+    errors.push('请选择已发布或灰度 Flow 精确版本');
+  }
+  if (!spec.route.fallback_agent_ref) {
+    errors.push('请选择已发布兜底智能体精确版本');
+  }
+  if (errors.length > 0) {
+    throw new Error(errors.join('；'));
+  }
+}
+
 function ensureFallbackRoute(spec: RouteSpec): RouteSpec {
   return {
     ...spec,
@@ -591,6 +640,25 @@ function uniqueOptions(options: Array<{ value: string; label: string }>): Array<
     seen.add(option.value);
     return true;
   });
+}
+
+function isConflictingFallback(record: RouteRegistryRecord, selectedRecord: RouteRegistryRecord): boolean {
+  if (record.resource_id === selectedRecord.resource_id) {
+    return false;
+  }
+  return isConflictingWithSpec(record.spec, selectedRecord.spec);
+}
+
+function isConflictingWithSpec(existing: RouteSpec, candidate: RouteSpec): boolean {
+  return scopesOverlap(existing.route.tenant_constraints, candidate.route.tenant_constraints)
+    && scopesOverlap(existing.route.role_constraints, candidate.route.role_constraints);
+}
+
+function scopesOverlap(left: string[], right: string[]): boolean {
+  if (left.length === 0 || right.length === 0) {
+    return true;
+  }
+  return left.some((value) => right.includes(value));
 }
 
 function actionTitle(action: ReleaseAction | undefined): string {
